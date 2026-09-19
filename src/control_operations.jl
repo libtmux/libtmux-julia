@@ -13,17 +13,20 @@ function _control_operation_context(
     (; connection, started, budget, cancel)
 end
 
-function _control_creation_name(name)
-    text = _argument(name)
+function _control_singleline(value, operation)
+    text = _argument(value)
     isvalid(text) || decode_text(codeunits(text))
     all(byte -> byte >= 0x20 && byte != 0x7f, codeunits(text)) || throw(
         UnsupportedCapability(
-            :new_window,
-            "control creation names cannot contain control bytes: tmux may emit them unescaped in notifications",
+            operation,
+            "control names and layout text cannot contain control bytes: tmux may reflect them unescaped in replies or notifications",
         ),
     )
-    replace(text, "#" => "##")
+    text
 end
+
+_control_creation_name(name, operation=:new_window) =
+    replace(_control_singleline(name, operation), "#" => "##")
 
 function _control_creation_reference(
     ::Type{R},
