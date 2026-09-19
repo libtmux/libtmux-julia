@@ -373,7 +373,10 @@ def run_sample(command, options, deadline, *, backpressure):
             client.call("concurrent", "list_panes", label="unrelated_list_during_wait")
             cancelled_ns = time.perf_counter_ns()
             client.send(None, "notifications/cancelled", {"requestId": "waiting"})
-            client.request("after-cancel", "ping", label="reader_ping_after_cancel")
+            discovered, _ = client.request("after-cancel", "server/discover",
+                                           label="reader_discovery_after_cancel")
+            if checked_result(discovered)["supportedVersions"] != result["supported_versions"]:
+                raise MeasurementError("discovery profile changed after cancellation")
             eof_ns, exit_ns = client.eof_and_join()
             result.update({"cancel_to_exit_ns": exit_ns - cancelled_ns,
                            "eof_to_exit_ns": exit_ns - eof_ns,

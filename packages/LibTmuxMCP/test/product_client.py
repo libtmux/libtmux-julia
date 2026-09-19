@@ -100,8 +100,11 @@ def main():
         send(None, 'notifications/cancelled', {'requestId': 'waiting'})
         created = call(7, 'create_session', {'name': 'client-owned', 'command': ['/bin/cat']})
         assert not created.get('isError', False), created
-        send(8, 'ping')
-        assert receive()['id'] == 8
+        send(8, 'server/discover' if profile == '2026-07-28' else 'ping')
+        alive = receive()
+        assert alive['id'] == 8 and 'result' in alive and 'error' not in alive, alive
+        if profile == '2026-07-28':
+            assert alive['result']['supportedVersions'] == ['2026-07-28', '2025-11-25']
         child.stdin.close()
         child.wait(timeout=10)
         assert child.returncode == 0, diagnostics.decode(errors='replace')
