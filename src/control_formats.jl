@@ -14,7 +14,8 @@ function _read_control_formats(
     template = prefix * _format_template(String[field.name for field in fields])
     context = _control_operation_context(connection; kwargs...)
     _control_exact_target(connection, target)
-    predicate = target isa PaneRef ? "#{==:#{pane_id},$(target.id)}" : "#{pane_active}"
+    predicate =
+        target isa PaneRef ? "#{==:#{pane_id},$(string(target.id))}" : "#{pane_active}"
     result = _control_request(
         connection,
         ["list-panes", "-t", key, "-f", predicate, "-F", template],

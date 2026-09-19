@@ -56,6 +56,11 @@
                     max_output_bytes=1,
                 )
                 @test isopen(connection)
+                other = split_window(connection, pane; command=["/bin/cat"])
+                for target in (pane, other)
+                    @test only(read_formats(connection, target, FormatField("pane_id"))).value ==
+                          string(target.id)
+                end
                 for missing in (
                     SessionRef(session.server, "\$999999"),
                     WindowRef(session.server, "@999999"),

@@ -22,6 +22,12 @@
         @test observed[3].value === true
         @test observed[4].value === false
         @test all(o -> o.availability === :present, observed)
+        other = split_window(server, pane_ref; command=["/bin/cat"])
+        for target in (pane_ref, other)
+            @test only(
+                LibTmux.read_formats(server, target, LibTmux.FormatField("pane_id")),
+            ).value == string(target.id)
+        end
         @test only(
             LibTmux.read_formats(server, session_ref, LibTmux.FormatField("session_id")),
         ).value == string(session_ref.id)

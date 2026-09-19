@@ -60,7 +60,8 @@ end
 
 function _target_format_command(context, target, template; kwargs...)
     key = _format_target(target)
-    predicate = target isa PaneRef ? "#{==:#{pane_id},$(target.id)}" : "#{pane_active}"
+    predicate =
+        target isa PaneRef ? "#{==:#{pane_id},$(string(target.id))}" : "#{pane_active}"
     # list-panes resolves its target strictly and filters before expansion.
     # display-message permits target failure, even with an exact numeric ID.
     _operation_command(
