@@ -1,0 +1,161 @@
+typescript_revision = "ee5a0312620b4b001b8f0d1144f7ad16193cc933"
+rust_revision = "07d86c59e3f88cecf8da0f46410a29db0496b2dc"
+
+[[panes]]
+pane_id = "%1"
+pane_active = true
+pane_dead = false
+pane_index = 0
+pane_width = 120
+pane_height = 30
+pane_current_command = "nvim"
+pane_current_path = "/srv/app"
+pane_title = "Editor 雪;#{literal}"
+
+[[panes]]
+pane_id = "%2"
+pane_active = false
+pane_dead = true
+pane_index = 1
+pane_width = 120
+pane_height = 24
+pane_current_command = "vim"
+pane_current_path = "/srv/apple"
+pane_title = "é"
+
+[[panes]]
+pane_id = "%3"
+pane_active = true
+pane_dead = false
+pane_index = 2
+pane_width = 80
+pane_height = 24
+pane_current_command = "julia"
+pane_current_path = "/work/app"
+pane_title = "é"
+
+[[valid]]
+id = "boolean"
+expected = ["%1", "%3"]
+typescript = { version = 1, model = "pane", where = { pane_active = "1" } }
+rust = { version = 1, target = "pane", expr = { op = "eq", field = "pane_active", value = true } }
+
+[[valid]]
+id = "integer"
+expected = ["%3"]
+typescript = { version = 1, model = "pane", where = { pane_width = "80", pane_dead = "0" } }
+rust = { version = 1, target = "pane", expr = { op = "and", args = [{ op = "eq", field = "pane_width", value = "80" }, { op = "eq", field = "pane_dead", value = false }] } }
+
+[[valid]]
+id = "identity"
+expected = ["%2"]
+typescript = { version = 1, model = "pane", where = { pane_id = "%2" } }
+rust = { version = 1, target = "pane", expr = { op = "eq", field = "pane_id", value = "%2" } }
+
+[[valid]]
+id = "integer_membership"
+expected = ["%1", "%3"]
+typescript = { version = 1, model = "pane", where = { pane_index = { in = ["0", "2"] } } }
+rust = { version = 1, target = "pane", expr = { op = "in", field = "pane_index", value = ["0", "2"] } }
+
+[[valid]]
+id = "height"
+expected = ["%1"]
+typescript = { version = 1, model = "pane", where = { pane_height = "30" } }
+rust = { version = 1, target = "pane", expr = { op = "eq", field = "pane_height", value = "30" } }
+
+[[valid]]
+id = "text_membership"
+expected = ["%1", "%2"]
+typescript = { version = 1, model = "pane", where = { pane_current_command = { in = ["nvim", "vim"] } } }
+rust = { version = 1, target = "pane", expr = { op = "in", field = "pane_current_command", value = ["nvim", "vim"] } }
+
+[[valid]]
+id = "literal_substring"
+expected = ["%1"]
+typescript = { version = 1, model = "pane", where = { pane_title = { contains = "雪;#{literal}" } } }
+rust = { version = 1, target = "pane", expr = { op = "contains", field = "pane_title", value = "雪;#{literal}" } }
+
+[[valid]]
+id = "prefix"
+expected = ["%1"]
+typescript = { version = 1, model = "pane", where = { pane_current_command = { startsWith = "nv" } } }
+rust = { version = 1, target = "pane", expr = { op = "starts_with", field = "pane_current_command", value = "nv" } }
+
+[[valid]]
+id = "suffix"
+expected = ["%1", "%3"]
+typescript = { version = 1, model = "pane", where = { pane_current_path = { endsWith = "/app" } } }
+rust = { version = 1, target = "pane", expr = { op = "ends_with", field = "pane_current_path", value = "/app" } }
+
+[[valid]]
+id = "no_normalization"
+expected = ["%2"]
+typescript = { version = 1, model = "pane", where = { pane_title = "é" } }
+rust = { version = 1, target = "pane", expr = { op = "eq", field = "pane_title", value = "é" } }
+
+[[valid]]
+id = "not"
+expected = ["%2"]
+typescript = { version = 1, model = "pane", where = { NOT = [{ pane_active = "1" }] } }
+rust = { version = 1, target = "pane", expr = { op = "not", expr = { op = "eq", field = "pane_active", value = true } } }
+
+[[valid]]
+id = "nested_boolean"
+expected = ["%3"]
+typescript = { version = 1, model = "pane", where = { AND = [{ pane_active = "1" }, { OR = [{ pane_dead = "1" }, { pane_width = "80" }] }] } }
+rust = { version = 1, target = "pane", expr = { op = "and", args = [{ op = "eq", field = "pane_active", value = true }, { op = "or", args = [{ op = "eq", field = "pane_dead", value = true }, { op = "eq", field = "pane_width", value = "80" }] }] } }
+
+[[valid]]
+id = "not_array_means_none"
+expected = []
+typescript = { version = 1, model = "pane", where = { NOT = [{ pane_active = "1" }, { pane_dead = "1" }] } }
+rust = { version = 1, target = "pane", expr = { op = "and", args = [{ op = "not", expr = { op = "eq", field = "pane_active", value = true } }, { op = "not", expr = { op = "eq", field = "pane_dead", value = true } }] } }
+
+[[valid]]
+id = "empty_membership"
+expected = []
+typescript = { version = 1, model = "pane", where = { pane_title = { in = [] } } }
+rust = { version = 1, target = "pane", expr = { op = "in", field = "pane_title", value = [] } }
+
+[[valid]]
+id = "boolean_membership"
+expected = ["%2"]
+typescript = { version = 1, model = "pane", where = { pane_active = { in = ["0"] } } }
+rust = { version = 1, target = "pane", expr = { op = "in", field = "pane_active", value = [false] } }
+
+[[valid]]
+id = "unsigned_boundary"
+expected = []
+typescript = { version = 1, model = "pane", where = { pane_width = "4294967295" } }
+rust = { version = 1, target = "pane", expr = { op = "eq", field = "pane_width", value = "4294967295" } }
+
+[[invalid]]
+id = "unknown_field"
+typescript = { version = 1, model = "pane", where = { transport = "ssh" } }
+rust = { version = 1, target = "pane", expr = { op = "eq", field = "transport", value = "ssh" } }
+
+[[invalid]]
+id = "unknown_operator"
+typescript = { version = 1, model = "pane", where = { pane_title = { execute = "code" } } }
+rust = { version = 1, target = "pane", expr = { op = "execute", field = "pane_title", value = "code" } }
+
+[[invalid]]
+id = "unknown_version"
+typescript = { version = 2, model = "pane", where = { pane_active = "1" } }
+rust = { version = 2, target = "pane", expr = { op = "eq", field = "pane_active", value = true } }
+
+[[invalid]]
+id = "extra_envelope_key"
+typescript = { version = 1, model = "pane", extra = true, where = { pane_active = "1" } }
+rust = { version = 1, target = "pane", extra = true, expr = { op = "eq", field = "pane_active", value = true } }
+
+[[invalid]]
+id = "wrong_boolean"
+typescript = { version = 1, model = "pane", where = { pane_active = "yes" } }
+rust = { version = 1, target = "pane", expr = { op = "eq", field = "pane_active", value = "yes" } }
+
+[[invalid]]
+id = "wrong_text"
+typescript = { version = 1, model = "pane", where = { pane_title = true } }
+rust = { version = 1, target = "pane", expr = { op = "eq", field = "pane_title", value = true } }

@@ -1,0 +1,61 @@
+version = 1
+
+[entities.pane]
+constructor = "PaneWhere"
+observation = "PaneSnapshot"
+fields = [
+  { name = "id", wire = "tmux.pane.id", type = "PaneID", tmux = "pane_id", summary = "Physical pane identity." },
+  { name = "index", wire = "tmux.pane.index", type = "Integer", tmux = "pane_index", summary = "Pane index within its window; not a Julia collection position." },
+  { name = "active", wire = "tmux.pane.active", type = "Bool", tmux = "pane_active", summary = "Active pane of its window; not client visibility." },
+  { name = "dead", wire = "tmux.pane.dead", type = "Bool", tmux = "pane_dead", summary = "Whether tmux retains an exited pane." },
+  { name = "width", wire = "tmux.pane.width", type = "Integer", tmux = "pane_width", summary = "Pane width in cells." },
+  { name = "height", wire = "tmux.pane.height", type = "Integer", tmux = "pane_height", summary = "Pane height in cells." },
+  { name = "current_command", wire = "tmux.pane.current_command", type = "String", nullable = true, tmux = "pane_current_command", availability = "May be uncaptured; nonempty dead-pane fallback is retained.", summary = "Command name observed by tmux." },
+  { name = "current_path", wire = "tmux.pane.current_path", type = "String", nullable = true, tmux = "pane_current_path", availability = "May be uncaptured when tmux cannot resolve cwd.", summary = "Path observed on the tmux host; text matching is lexical." },
+  { name = "title", wire = "tmux.pane.title", type = "String", tmux = "pane_title", summary = "Pane title, including literal format-like text." },
+  { name = "window", wire = "tmux.pane.window", type = "relation", relation = "one", target = "window", tmux = "window_id", summary = "Physical containing window." },
+]
+
+[entities.window]
+constructor = "WindowWhere"
+observation = "WindowSnapshot"
+fields = [
+  { name = "id", wire = "tmux.window.id", type = "WindowID", tmux = "window_id", summary = "Physical window identity, independent of session links." },
+  { name = "name", wire = "tmux.window.name", type = "String", tmux = "window_name", summary = "Window name." },
+  { name = "width", wire = "tmux.window.width", type = "Integer", tmux = "window_width", summary = "Window width in cells." },
+  { name = "height", wire = "tmux.window.height", type = "Integer", tmux = "window_height", summary = "Window height in cells." },
+  { name = "panes", wire = "tmux.window.panes", type = "relation", relation = "many", target = "pane", tmux = "pane_id", summary = "Complete captured physical pane membership." },
+  { name = "windowlinks", wire = "tmux.window.windowlinks", type = "relation", relation = "many", target = "windowlink", tmux = "session_id/window_index", summary = "Complete captured links to sessions." },
+]
+
+[entities.session]
+constructor = "SessionWhere"
+observation = "SessionSnapshot"
+fields = [
+  { name = "id", wire = "tmux.session.id", type = "SessionID", tmux = "session_id", summary = "Session identity." },
+  { name = "name", wire = "tmux.session.name", type = "String", tmux = "session_name", summary = "Session name." },
+  { name = "attached_clients", wire = "tmux.session.attached_clients", type = "Integer", tmux = "session_attached", summary = "Attached client count observed by tmux." },
+  { name = "windows", wire = "tmux.session.windows", type = "relation", relation = "many", target = "window", tmux = "window_id", summary = "Unique windows reached through complete captured session links." },
+  { name = "windowlinks", wire = "tmux.session.windowlinks", type = "relation", relation = "many", target = "windowlink", tmux = "window_index", summary = "Complete captured links including session-specific indices." },
+]
+
+[entities.client]
+constructor = "ClientWhere"
+observation = "ClientSnapshot"
+fields = [
+  { name = "id", wire = "tmux.client.id", type = "ClientID", tmux = "client_name/client_pid/client_created", summary = "Exact name plus observed connection incarnation." },
+  { name = "name", wire = "tmux.client.name", type = "String", tmux = "client_name", summary = "Exact tmux client name." },
+  { name = "pid", wire = "tmux.client.pid", type = "Integer", tmux = "client_pid", summary = "Observed client process ID." },
+  { name = "created", wire = "tmux.client.created", type = "Integer", tmux = "client_created", summary = "Observed creation time; not a strict identity guard." },
+  { name = "session", wire = "tmux.client.session", type = "relation", nullable = true, relation = "one", target = "session", tmux = "session_id", summary = "Captured session or known absence; normal acquisition lists attached clients." },
+]
+
+[entities.windowlink]
+constructor = "WindowLinkWhere"
+observation = "WindowLink"
+fields = [
+  { name = "index", wire = "tmux.windowlink.index", type = "Integer", tmux = "window_index", summary = "Window index in this session." },
+  { name = "active", wire = "tmux.windowlink.active", type = "Bool", tmux = "window_active", summary = "Selected window in this session." },
+  { name = "session", wire = "tmux.windowlink.session", type = "relation", relation = "one", target = "session", tmux = "session_id", summary = "Session containing this link." },
+  { name = "window", wire = "tmux.windowlink.window", type = "relation", relation = "one", target = "window", tmux = "window_id", summary = "Physical linked window." },
+]

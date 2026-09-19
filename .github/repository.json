@@ -1,6 +1,6 @@
 {
-  "description": "libtmux for Julia: repository scaffold for a Julia tmux client.",
-  "private": true,
+  "description": "Julia tmux library with captured queries, MCP tools and workspace loading.",
+  "private": false,
   "default_branch": "master",
   "topics": [
     "julia",

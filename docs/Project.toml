@@ -1,0 +1,17 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+LibTmux = "1a5dcb9e-7968-44df-ad70-bf0a17628f09"
+LibTmuxMCP = "6ec2004f-18ba-4da6-9e55-6cdc607d109e"
+LibTmuxWorkspace = "dc7c1d2a-fec3-4b55-92f0-7133c728c990"
+
+[sources]
+LibTmux = {path = ".."}
+LibTmuxMCP = {path = "../packages/LibTmuxMCP"}
+LibTmuxWorkspace = {path = "../packages/LibTmuxWorkspace"}
+
+[compat]
+Documenter = "1"
+LibTmux = "0.1"
+LibTmuxMCP = "0.1"
+LibTmuxWorkspace = "0.1"
+julia = "1.10"
