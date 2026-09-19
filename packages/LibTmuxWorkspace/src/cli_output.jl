@@ -22,6 +22,18 @@ mutable struct _CLIOwnedOutput
     worker::Union{Nothing,Task}
 end
 
+struct _CLIOutputDeadline
+    owner::_CLIOwnedOutput
+    active::Threads.Atomic{Bool}
+    reason::Symbol
+end
+_CLIOutputDeadline(owner, reason) =
+    _CLIOutputDeadline(owner, Threads.Atomic{Bool}(true), reason)
+function (deadline::_CLIOutputDeadline)()
+    Threads.atomic_xchg!(deadline.active, false) || return nothing
+    _cli_output_abort(deadline.owner, _CLIOutputError(deadline.reason))
+end
+
 _cli_forceclose(stream::IO) = close(stream)
 _cli_forceclose(stream::IOContext) = _cli_forceclose(stream.io)
 function _cli_forceclose(stream::Base.Pipe)
@@ -107,9 +119,8 @@ function _cli_output_worker(owner)
         end
         item === nothing && return
         destination, text = item
-        timer, timer_task = _owned_timer(owner.timeout) do
-            _cli_output_abort(owner, _CLIOutputError(:write_deadline))
-        end
+        deadline = _CLIOutputDeadline(owner, :write_deadline)
+        timer, timer_task = _owned_timer(deadline, owner.timeout)
         try
             stream = destination === :out ? owner.out : owner.err
             write(stream, text)
@@ -117,6 +128,7 @@ function _cli_output_worker(owner)
         catch error
             _cli_output_abort(owner, _CLIOutputError(:write, error))
         finally
+            deadline.active[] = false
             close(timer)
             wait(timer_task)
         end
@@ -173,12 +185,12 @@ function Base.close(owner::_CLIOwnedOutput)
         owner.closing = true
         notify(owner.changed; all=true)
     end
-    timer, timer_task = _owned_timer(0.9) do
-        _cli_output_abort(owner, _CLIOutputError(:drain_deadline))
-    end
+    deadline = _CLIOutputDeadline(owner, :drain_deadline)
+    timer, timer_task = _owned_timer(deadline, 0.9)
     try
         wait(owner.worker)
     finally
+        deadline.active[] = false
         close(timer)
         wait(timer_task)
         _cli_output_close_io(owner)
@@ -199,4 +211,5 @@ if ccall(:jl_generating_output, Cint, ()) == 1
     precompile(_cli_forceclose, (Base.PipeEndpoint,))
     precompile(_cli_forceclose, (Base.Pipe,))
     precompile(_cli_forceclose, (IOContext{Base.PipeEndpoint},))
+    precompile(Tuple{_CLIOutputDeadline})
 end

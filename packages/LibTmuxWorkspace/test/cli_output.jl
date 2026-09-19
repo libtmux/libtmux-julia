@@ -17,6 +17,20 @@ end
 Base.flush(::_BlockedCLIOutput) = nothing
 Base.close(io::_BlockedCLIOutput) = (io.closed[]=true; notify(io.release); nothing)
 
+@testset "completed output ignores an already-ready deadline callback" begin
+    owner = LibTmuxWorkspace._CLIOwnedOutput(IOBuffer(), IOBuffer())
+    deadline = LibTmuxWorkspace._CLIOutputDeadline(owner, :write_deadline)
+    try
+        deadline.active[] = false
+        deadline()
+        @test !LibTmux.iscancelled(owner.cancel)
+        @test owner.failure === nothing
+        @test isopen(owner.out)
+    finally
+        close(owner)
+    end
+end
+
 @testset "CLI output ownership and blocked writer retirement" begin
     out, err = IOBuffer(), IOBuffer()
     @test main(["--help"]; out, err) == 0 && isopen(out) && isopen(err)
