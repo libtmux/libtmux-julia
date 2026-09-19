@@ -218,6 +218,34 @@ def environment(stage, *, offline):
     return env
 
 
+def seed_registry_cache(source_depot, consumer_depot):
+    """Copy registry bytes without sharing writable files or extending DEPOT_PATH."""
+    source = source_depot / "registries"
+    destination = consumer_depot / "registries"
+    if not source.is_dir() or source.is_symlink():
+        raise ValueError("quality preparation did not produce an owned registry cache")
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("consumer registry seeding requires an empty destination")
+    entries = sorted(source.rglob("*"))
+    if not entries or any(path.is_symlink() or not (path.is_file() or path.is_dir())
+                          for path in entries):
+        raise ValueError("registry cache must contain only regular files and directories")
+    records = []
+    for path in entries:
+        relative = path.relative_to(source)
+        copied = destination / relative
+        if path.is_dir():
+            copied.mkdir(parents=True, exist_ok=True)
+            continue
+        expected = hashlib.sha256(path.read_bytes()).hexdigest()
+        copied.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, copied)
+        if copied.samefile(path) or hashlib.sha256(copied.read_bytes()).hexdigest() != expected:
+            raise ValueError("consumer registry copy failed independent-byte verification")
+        records.append(dict(file=str(relative), sha256=expected, bytes=copied.stat().st_size))
+    return records
+
+
 def prepare(args):
     stage = checked_stage(args.stage, create=True)
     initial_digest = source_digest()
@@ -233,13 +261,16 @@ def prepare(args):
                     "using Aqua, LibTmux, LibTmuxWorkspace, LibTmuxMCP, ModelContextProtocol, JSON, Tables"],
                    cwd=ROOT, env=env, check=True)
     consumers = stage / ("consumers-" + uuid.uuid4().hex)
-    subprocess.run([args.julia, "--startup-file=no", "--compile=min", "-O0",
+    started = time.monotonic()
+    registry_files = seed_registry_cache(stage / "depot", consumers / "depot")
+    registry_seed = dict(seconds=time.monotonic() - started, files=registry_files)
+    subprocess.run([args.julia, "--startup-file=no", "--compile=yes", "-O2",
                     str(ROOT / "dev/check-consumers.jl"), "prepare", str(consumers)],
                    cwd=ROOT, env=env, check=True)
     if initial_digest != source_digest():
         raise ValueError("source changed during preparation; rerun with stable source (dependency cache retained)")
     metadata = dict(schema_version=1, source_digest=initial_digest, tools=PINNED_TOOLS,
-                    consumers=str(consumers), project=str(project))
+                    consumers=str(consumers), project=str(project), registry_seed=registry_seed)
     (stage / "prepared.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print("PASS prepared dependencies and immutable external consumers; no timed checks run")
 
@@ -334,6 +365,33 @@ println("PASS admitted version arguments construct real Pkg specifications")
                        check=True)
     with tempfile.TemporaryDirectory(prefix="libtmux-julia-matrix-test-") as directory:
         base = Path(directory)
+        registry = base / "quality-depot" / "registries"
+        registry.mkdir(parents=True)
+        (registry / "General.toml").write_bytes(b"registry metadata")
+        (registry / "General.tar.gz").write_bytes(b"registry archive")
+        consumer_depot = base / "consumer-depot"
+        copies = seed_registry_cache(registry.parent, consumer_depot)
+        assert [item["file"] for item in copies] == ["General.tar.gz", "General.toml"]
+        for item in copies:
+            copied = consumer_depot / "registries" / item["file"]
+            assert copied.read_bytes() == (registry / item["file"]).read_bytes()
+            assert item["sha256"] == hashlib.sha256(copied.read_bytes()).hexdigest()
+            assert not copied.is_symlink()
+        (consumer_depot / "registries" / "General.toml").write_bytes(b"changed copy")
+        assert (registry / "General.toml").read_bytes() == b"registry metadata"
+        try:
+            seed_registry_cache(registry.parent, consumer_depot)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("registry seeding overwrote an existing owned cache")
+        (registry / "linked.toml").symlink_to(registry / "General.toml")
+        try:
+            seed_registry_cache(registry.parent, base / "linked-consumer")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("registry seeding accepted a shared symbolic link")
         assert tmux_configure_command(base, "3.7c", "Darwin") == [
             "./configure", f"--prefix={base}", "--enable-utf8proc", "--enable-jemalloc"]
         assert tmux_configure_command(base, "3.2a", "Darwin") == [
@@ -357,7 +415,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         cells = support_cells()
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
-    print("PASS argv boundaries, failed/missing/deadline status, owned reaping and planned-cell identity")
+    print("PASS independent registry copies, argv boundaries, failed/missing/deadline status, owned reaping and planned-cell identity")
 
 
 def main():

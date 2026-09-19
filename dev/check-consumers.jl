@@ -115,7 +115,7 @@ function prepare(stage)
     end
     """
     program *= workspace_test_setup(stage)
-    command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=min -O0 -e $program`
+    command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 -e $program`
     # Dependency acquisition is an explicit setup phase, outside timed checks.
     run(
         addenv(
