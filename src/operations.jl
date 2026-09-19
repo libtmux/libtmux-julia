@@ -292,22 +292,73 @@ for (operation, command, Ref) in (
     """) $operation
 end
 
-"""Apply a named or explicit tmux layout to an exact window."""
+const _NAMED_LAYOUTS = (
+    "even-horizontal",
+    "even-vertical",
+    "main-horizontal",
+    "main-vertical",
+    "tiled",
+    "main-horizontal-mirrored",
+    "main-vertical-mirrored",
+)
+
+function _layout_argument(layout::Union{Symbol,AbstractString})
+    text = layout isa Symbol ? replace(string(layout), '_' => '-') : _argument(layout)
+    isvalid(text) || throw(ArgumentError("layout must be valid UTF-8"))
+    text in _NAMED_LAYOUTS && return text
+    if !isempty(text)
+        matches = filter(name -> startswith(name, text), _NAMED_LAYOUTS)
+        length(matches) == 1 && return only(matches)
+    end
+    if occursin(r"\A[0-9A-Fa-f]{4},[0-9][0-9x,{}\[\]]*\z", text)
+        # tmux cell parsers may dereference a missing cell at a bracket boundary.
+        body = SubString(text, 6)
+        occursin(r"[,\[{](?![0-9])", body) || return text
+    end
+    throw(
+        ArgumentError(
+            "layout must be a named layout, unambiguous alias or serialized layout",
+        ),
+    )
+end
+
+function _check_layout_version(layout, version)
+    parsed = match(r"\A([0-9]+)\.([0-9]+)[a-z]?\z", version)
+    if parsed !== nothing
+        major, minor = tryparse.(Int, parsed.captures)
+        major !== nothing && minor !== nothing && (major, minor) >= (3, 5) && return
+    end
+    throw(
+        UnsupportedCapability(
+            :select_layout,
+            "layout $(repr(layout)) requires tmux 3.5 or later; observed $(repr(version))",
+        ),
+    )
+end
+
+"""
+Apply a named or serialized tmux layout to an exact window. Aliases must be
+unambiguous among known layout names; mirrored layouts require observed tmux
+3.5 or later. Malformed headers are rejected before I/O. tmux validates a
+serialized layout's checksum and structure and retains its ordinary errors.
+"""
 function select_layout(
     server::Server,
     target::WindowRef,
     layout::Union{Symbol,AbstractString};
     kwargs...,
 )
-    text =
-        layout isa Symbol ? replace(string(layout), '_' => '-') :
-        _literal_tmux_argument(layout)
-    if layout isa Symbol
-        text in
-        ("even-horizontal", "even-vertical", "main-horizontal", "main-vertical", "tiled") ||
-            throw(ArgumentError("unknown named layout"))
-    end
+    text = _layout_argument(layout)
     context = _target_context(server, target; kwargs...)
+    if endswith(text, "-mirrored")
+        result = _operation_command(
+            context,
+            "display-message",
+            "-p",
+            _format_template(["version"]),
+        )
+        _check_layout_version(text, only(only(_decode_format_rows(result.stdout, 1))))
+    end
     _operation_command(context, "select-layout", "-t", string(target.id), "--", text)
 end
 

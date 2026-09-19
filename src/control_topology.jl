@@ -115,8 +115,9 @@ end
 """
     select_layout(connection::ControlConnection, window::WindowRef, layout; kwargs...)
 
-Apply a named layout symbol or explicit tmux layout string. Explicit strings
-must be valid UTF-8 without control bytes because errors reflect layout text.
+Apply a named layout symbol, unambiguous alias or serialized tmux layout.
+Malformed headers are rejected before I/O; tmux validates checksums and layout
+structure. Mirrored layouts require an observed tmux version of 3.5 or later.
 Return `ControlResult` after the completion fence on the pinned daemon.
 """
 function select_layout(
@@ -125,15 +126,18 @@ function select_layout(
     layout::Union{Symbol,AbstractString};
     kwargs...,
 )
-    text =
-        layout isa Symbol ? replace(string(layout), '_' => '-') :
-        _control_singleline(layout, :select_layout)
-    if layout isa Symbol
-        text in
-        ("even-horizontal", "even-vertical", "main-horizontal", "main-vertical", "tiled") ||
-            throw(ArgumentError("unknown named layout"))
-    end
+    text = _layout_argument(layout)
     context = _control_topology_context(connection, target; kwargs...)
+    if endswith(text, "-mirrored")
+        rows = _control_rows(
+            connection,
+            "display-message",
+            ["version"];
+            timeout=_snapshot_remaining(context.started, context.budget),
+            cancel=context.cancel,
+        )
+        _check_layout_version(text, only(only(rows)))
+    end
     _control_topology_effect(
         context,
         ["select-layout", "-t", string(target.id), "--", text],

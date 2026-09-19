@@ -24,6 +24,17 @@
             @test extra isa WindowRef
             @test any(w -> w.name == "#{literal}", windows(snapshot(server)))
             LibTmux.select_layout(server, extra, :even_horizontal)
+            version = only(read_formats(server, extra, FormatField("version"))).value
+            if version in ("3.2a", "3.3", "3.3a", "3.4")
+                @test_throws UnsupportedCapability select_layout(
+                    server,
+                    extra,
+                    "main-vertical-mirrored",
+                )
+            else
+                @test select_layout(server, extra, "main-vertical-mirrored") isa
+                      CommandResult
+            end
             wrong =
                 Server(socket_path=joinpath(fixture.directory, "other"), tmux=fixture.tmux)
             @test_throws LibTmux.CrossServerReference LibTmux.kill_pane(wrong, second)
@@ -127,6 +138,10 @@ esac
         )
 
         rm(executable * ".calls")
+        window_ref = WindowRef(identity, "@0")
+        for layout in ("invalid-layout", "f", "ffff", "f,1x1,0,0,0", "ffff,", "007b,{")
+            @test_throws ArgumentError select_layout(server, window_ref, layout)
+        end
         for argv in (["-name"], ["-name", "argument"])
             @test_throws ArgumentError LibTmux.new_session(
                 server;

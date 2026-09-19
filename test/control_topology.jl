@@ -19,7 +19,7 @@
                     connection;
                     name="bad\n%end 1 2 1",
                 )
-                @test_throws UnsupportedCapability select_layout(
+                @test_throws ArgumentError select_layout(
                     connection,
                     alpha.window,
                     "bad\n%end 1 2 1",
@@ -76,16 +76,37 @@
                 @test field(sibling, "pane_active") == "1"
                 @test select_layout(connection, alpha.window, :even_horizontal) isa
                       ControlResult
-                @test select_layout(
-                    connection,
-                    alpha.window,
-                    field(alpha.window, "window_layout"),
-                ) isa ControlResult
-                @test_throws ControlCommandError select_layout(
+                custom_layout = field(alpha.window, "window_layout")
+                @test select_layout(connection, alpha.window, custom_layout) isa
+                      ControlResult
+                before = connection.submitted
+                @test_throws ArgumentError select_layout(
                     connection,
                     alpha.window,
                     "invalid-layout",
                 )
+                @test connection.submitted == before
+                invalid_checksum =
+                    (first(custom_layout) == '0' ? "1" : "0") * custom_layout[2:end]
+                @test_throws ControlCommandError select_layout(
+                    connection,
+                    alpha.window,
+                    invalid_checksum,
+                )
+                @test select_layout(connection, alpha.window, "even-h") isa ControlResult
+                if field(alpha.window, "version") in ("3.2a", "3.3", "3.3a", "3.4")
+                    @test_throws UnsupportedCapability select_layout(
+                        connection,
+                        alpha.window,
+                        :main_horizontal_mirrored,
+                    )
+                else
+                    @test select_layout(
+                        connection,
+                        alpha.window,
+                        :main_horizontal_mirrored,
+                    ) isa ControlResult
+                end
 
                 link_window(connection, alpha, beta_session; index=4)
                 shared = WindowLinkRef(beta_session, alpha.window, 4)
