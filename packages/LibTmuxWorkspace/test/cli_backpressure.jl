@@ -7,7 +7,11 @@ import JSON
         flags =
             get(ENV, "LIBTMUX_TEST_CLI_COMPILE", "minimal") == "normal" ? String[] :
             ["--compile=min", "-O0"]
-        launcher = install_cli(joinpath(directory, "bin"); julia_flags=flags)
+        launcher = install_cli(
+            joinpath(directory, "bin");
+            project=get(ENV, "LIBTMUX_TEST_CLI_PROJECT", Base.active_project()),
+            julia_flags=flags,
+        )
         path = joinpath(directory, "large.json")
         write(
             path,

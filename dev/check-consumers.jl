@@ -56,6 +56,27 @@ function isolated_environment(stage)
     )
 end
 
+function workspace_test_setup(stage)
+    """
+    Pkg.activate($(repr(joinpath(stage, "test-environments", "LibTmuxWorkspace"))))
+    Pkg.develop([
+        Pkg.PackageSpec(path=$(repr(joinpath(stage, "source", "LibTmux")))),
+        Pkg.PackageSpec(path=$(repr(joinpath(stage, "source", "LibTmuxWorkspace")))),
+    ])
+    Pkg.add(Pkg.PackageSpec(name="JSON", version=v"1.9.0"))
+    """
+end
+
+function check_manifest(stage, project)
+    manifest = TOML.parsefile(joinpath(project, "Manifest.toml"))
+    for entries in values(manifest["deps"]), entry in entries
+        haskey(entry, "path") || continue
+        path = realpath(joinpath(project, entry["path"]))
+        startswith(path, joinpath(stage, "source") * "/") ||
+            error("Manifest depends on a source outside the export")
+    end
+end
+
 function prepare(stage)
     ispath(stage) &&
         any(entry -> entry != "depot", readdir(stage)) &&
@@ -93,6 +114,7 @@ function prepare(stage)
         Pkg.develop(packages)
     end
     """
+    program *= workspace_test_setup(stage)
     command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=min -O0 -e $program`
     # Dependency acquisition is an explicit setup phase, outside timed checks.
     run(
@@ -108,6 +130,10 @@ function prepare(stage)
         command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$project -e $warmup`
         run(addenv(Cmd(command; dir=stage), isolated_environment(stage)...))
     end
+    test_project = joinpath(stage, "test-environments", "LibTmuxWorkspace")
+    warmup = "using LibTmuxWorkspace, JSON"
+    command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$test_project -e $warmup`
+    run(addenv(Cmd(command; dir=stage), isolated_environment(stage)...))
     open(joinpath(stage, "exports.toml"), "w") do io
         TOML.print(io, exports; sorted=true)
     end
@@ -132,13 +158,7 @@ function check(stage; imports=true)
                 error("Prepared source is writable")
         end
         project = joinpath(stage, "environments", name)
-        manifest = TOML.parsefile(joinpath(project, "Manifest.toml"))
-        for entries in values(manifest["deps"]), entry in entries
-            haskey(entry, "path") || continue
-            path = realpath(joinpath(project, entry["path"]))
-            startswith(path, joinpath(stage, "source") * "/") ||
-                error("Manifest depends on a source outside the export")
-        end
+        check_manifest(stage, project)
         imports || continue
         program = """
         using LibTmux
@@ -160,6 +180,7 @@ function check(stage; imports=true)
         command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$project -e $program`
         run(addenv(Cmd(command; dir=stage), isolated_environment(stage)...))
     end
+    check_manifest(stage, joinpath(stage, "test-environments", "LibTmuxWorkspace"))
     metadata = TOML.parsefile(joinpath(stage, "source", "LibTmux", "Project.toml"))
     dependencies = keys(get(metadata, "deps", Dict()))
     forbidden = ("LibTmuxMCP", "LibTmuxWorkspace", "HTTP", "YAML", "DataFrames")
@@ -205,7 +226,12 @@ function check_launchers(stage)
     check(stage; imports=false)
     for (name, script) in
         (("LibTmuxMCP", "product.jl"), ("LibTmuxWorkspace", "cli_integration.jl"))
-        project = joinpath(stage, "environments", name)
+        application_project = joinpath(stage, "environments", name)
+        project = joinpath(
+            stage,
+            name == "LibTmuxWorkspace" ? "test-environments" : "environments",
+            name,
+        )
         program = joinpath(stage, "source", name, "test", script)
         command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$project $program`
         started = time_ns()
@@ -215,6 +241,7 @@ function check_launchers(stage)
                 isolated_environment(stage)...,
                 "LIBTMUX_TEST_MINIMAL_CHILD"=>"0",
                 "LIBTMUX_TEST_CLI_COMPILE"=>"normal",
+                "LIBTMUX_TEST_CLI_PROJECT"=>application_project,
             ),
         )
         println(
@@ -248,4 +275,4 @@ function main(args)
     operation(stage)
 end
 
-main(ARGS)
+abspath(PROGRAM_FILE) == (@__FILE__) && main(ARGS)

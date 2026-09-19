@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PINNED_TOOLS = {
     "Aqua": "0.8.18", "JuliaFormatter": "2.14.0", "Documenter": "1.17.0",
     "Tables": "1.14.0", "JSON": "1.9.0", "YAML": "0.4.17",
+    "ModelContextProtocol": "0.7.0",
 }
 
 TMUX_SHA256 = {
@@ -229,7 +230,7 @@ def prepare(args):
     subprocess.run(argv, cwd=ROOT, env=env, check=True)
     subprocess.run([args.julia, "--startup-file=no", "--compile=min", "-O0",
                     f"--project={project}", "-e",
-                    "using Aqua, LibTmux, LibTmuxWorkspace, LibTmuxMCP, JSON, Tables"],
+                    "using Aqua, LibTmux, LibTmuxWorkspace, LibTmuxMCP, ModelContextProtocol, JSON, Tables"],
                    cwd=ROOT, env=env, check=True)
     consumers = stage / ("consumers-" + uuid.uuid4().hex)
     subprocess.run([args.julia, "--startup-file=no", "--compile=min", "-O0",

@@ -220,6 +220,10 @@ Those two commands are outer checks. Children use normal optimized
 compilation and one thread; the matrix's direct library suites separately
 cover one and four threads.
 
+The workspace launcher harness has a separate test project with JSON for
+reading protocol responses. Its installed launcher uses the production
+consumer project. Import checks and examples use only the production projects.
+
 Remove only the stage created above when finished:
 
 ```console

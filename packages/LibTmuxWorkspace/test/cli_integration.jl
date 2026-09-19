@@ -9,6 +9,7 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
     with_workspace_server() do fixture
         launcher = install_cli(
             joinpath(fixture.directory, "bin");
+            project=get(ENV, "LIBTMUX_TEST_CLI_PROJECT", Base.active_project()),
             julia_flags=get(ENV, "LIBTMUX_TEST_CLI_COMPILE", "minimal") == "normal" ?
                         String[] : ["--compile=min", "-O0"],
         )
@@ -66,6 +67,7 @@ end
     with_workspace_server() do fixture
         launcher = install_cli(
             joinpath(fixture.directory, "bin");
+            project=get(ENV, "LIBTMUX_TEST_CLI_PROJECT", Base.active_project()),
             julia_flags=get(ENV, "LIBTMUX_TEST_CLI_COMPILE", "minimal") == "normal" ?
                         String[] : ["--compile=min", "-O0"],
         )
