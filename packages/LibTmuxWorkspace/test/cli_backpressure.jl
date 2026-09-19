@@ -7,6 +7,7 @@ import JSON
         flags =
             get(ENV, "LIBTMUX_TEST_CLI_COMPILE", "minimal") == "normal" ? String[] :
             ["--compile=min", "-O0"]
+        pushfirst!(flags, "--threads=$(Threads.nthreads())")
         launcher = install_cli(
             joinpath(directory, "bin");
             project=get(ENV, "LIBTMUX_TEST_CLI_PROJECT", Base.active_project()),

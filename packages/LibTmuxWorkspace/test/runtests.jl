@@ -7,6 +7,7 @@ if suite in ("unit", "all")
     include("script.jl")
     include("readiness.jl")
     include("cli.jl")
+    include("cli_signal.jl")
 end
 if suite in ("integration", "all")
     include("apply.jl")

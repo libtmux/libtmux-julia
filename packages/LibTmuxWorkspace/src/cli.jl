@@ -396,14 +396,21 @@ end
 
 function _main_owned(arguments=ARGS; out::IO=stdout, err::IO=stderr)
     owner = _CLIOwnedOutput(out, err)
+    signals = nothing
     code = 3
     try
+        signals = _CLISignalWatcher(owner.cancel)
         code = _main(arguments; out, err, owner)
     catch error
         _cli_output_abort(owner, error)
     finally
         try
             close(owner)
+        catch
+            code = 3
+        end
+        try
+            signals === nothing || close(signals)
         catch
             code = 3
         end

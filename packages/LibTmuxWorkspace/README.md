@@ -265,6 +265,8 @@ stdout document. `--output ndjson` writes ordered progress followed by one
 terminal `result` or `error`, each with a sequence number; script bytes are
 base64. Ctrl-C returns cancellation evidence and applies requested cleanup.
 The installed-launcher test verifies this with a blocked owned script.
+The installed process owns Ctrl-C handling until exit. Calling library `main`
+leaves the embedding application's signal handlers unchanged.
 
 The installed launcher owns one bounded writer for stdout and stderr. Progress
 callbacks enqueue at most 64 records and 8 MiB; one active record can retain

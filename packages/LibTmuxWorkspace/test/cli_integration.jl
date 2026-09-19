@@ -10,8 +10,11 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
         launcher = install_cli(
             joinpath(fixture.directory, "bin");
             project=get(ENV, "LIBTMUX_TEST_CLI_PROJECT", Base.active_project()),
-            julia_flags=get(ENV, "LIBTMUX_TEST_CLI_COMPILE", "minimal") == "normal" ?
-                        String[] : ["--compile=min", "-O0"],
+            julia_flags=vcat(
+                ["--threads=$(Threads.nthreads())"],
+                get(ENV, "LIBTMUX_TEST_CLI_COMPILE", "minimal") == "normal" ? String[] :
+                ["--compile=min", "-O0"],
+            ),
         )
         path = joinpath(fixture.directory, "workspace.yaml")
         write(
@@ -68,8 +71,11 @@ end
         launcher = install_cli(
             joinpath(fixture.directory, "bin");
             project=get(ENV, "LIBTMUX_TEST_CLI_PROJECT", Base.active_project()),
-            julia_flags=get(ENV, "LIBTMUX_TEST_CLI_COMPILE", "minimal") == "normal" ?
-                        String[] : ["--compile=min", "-O0"],
+            julia_flags=vcat(
+                ["--threads=$(Threads.nthreads())"],
+                get(ENV, "LIBTMUX_TEST_CLI_COMPILE", "minimal") == "normal" ? String[] :
+                ["--compile=min", "-O0"],
+            ),
         )
         fifo, script, pidfile =
             (joinpath(fixture.directory, name) for name in ("blocked", "before", "pid"))
@@ -138,6 +144,8 @@ end
             @test last(records)["result"]["status"] == "cancelled"
             @test only(last(records)["result"]["rollback"])["status"] == "removed"
             @test ccall(:kill, Cint, (Cint, Cint), parse(Int, read(pidfile, String)), 0) ==
+                  -1
+            @test ccall(:kill, Cint, (Cint, Cint), -parse(Int, read(pidfile, String)), 0) ==
                   -1
             server = LibTmux.Server(socket_path=fixture.socket, tmux=fixture.tmux)
             @test isempty(LibTmux.sessions(LibTmux.snapshot(server)))

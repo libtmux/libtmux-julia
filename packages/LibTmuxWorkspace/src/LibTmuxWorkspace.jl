@@ -44,6 +44,7 @@ include("parser.jl")
 include("plan.jl")
 include("script.jl")
 include("apply.jl")
+include("cli_signal.jl")
 include("cli.jl")
 include("precompile.jl")
 
