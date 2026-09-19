@@ -12,6 +12,90 @@ const PACKAGE_SOURCES = (
     ),
 )
 
+# ProcessFailedException renders the inherited environment stored in Cmd.env.
+struct ConsumerProcessError <: Exception
+    phase::String
+    cause::Exception
+end
+
+function Base.showerror(io::IO, error::ConsumerProcessError)
+    print(
+        io,
+        "consumer phase ",
+        repr(error.phase),
+        " failed: ",
+        nameof(typeof(error.cause)),
+    )
+    if error.cause isa ProcessFailedException
+        for (index, process) in enumerate(error.cause.procs)
+            print(
+                io,
+                "; child ",
+                index,
+                " exit=",
+                process.exitcode,
+                " signal=",
+                process.termsignal,
+            )
+        end
+    end
+end
+
+function run_consumer_child(phase::AbstractString, command)
+    result, failure = nothing, nothing
+    try
+        result = run(command)
+    catch error
+        failure = error
+    end
+    # Leave the catch stack before throwing so Julia cannot render the raw cause.
+    failure isa InterruptException && throw(failure)
+    failure === nothing || throw(ConsumerProcessError(String(phase), failure))
+    result
+end
+
+function consumer_self_test()
+    marker = "consumer-synthetic-credential-sentinel"
+    child = Cmd(["/bin/sh", "-c", "echo child-stdout; echo child-stderr >&2; exit 7"])
+    program = """
+    include($(repr(@__FILE__)))
+    run_consumer_child("sentinel child", addenv($(repr(child)), "CONSUMER_TEST_EXTRA" => "safe"))
+    """
+    command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=min -O0 -e $program`
+    output, errors = IOBuffer(), IOBuffer()
+    process = run(
+        pipeline(
+            ignorestatus(setenv(command, Dict("CONSUMER_TEST_SECRET" => marker)));
+            stdout=output,
+            stderr=errors,
+        ),
+    )
+    stdout_text, stderr_text = String(take!(output)), String(take!(errors))
+    @assert !success(process)
+    @assert occursin("child-stdout", stdout_text)
+    @assert occursin("child-stderr", stderr_text)
+    @assert occursin("consumer phase \"sentinel child\" failed", stderr_text)
+    @assert occursin("exit=7 signal=0", stderr_text)
+    @assert !occursin(marker, stdout_text * stderr_text)
+    @assert !occursin("CONSUMER_TEST_SECRET", stdout_text * stderr_text)
+    @assert !occursin("caused by", stderr_text)
+    failure = try
+        run_consumer_child(
+            "inspectable cause",
+            setenv(`/bin/sh -c "exit 7"`, Dict("CONSUMER_TEST_SECRET" => marker)),
+        )
+    catch error
+        error
+    end
+    @assert failure isa ConsumerProcessError
+    @assert failure.cause isa ProcessFailedException
+    @assert only(failure.cause.procs).exitcode == 7
+    @assert success(run_consumer_child("successful child", `/bin/sh -c "exit 0"`))
+    println(
+        "PASS consumer child output, exit evidence, inspectable cause and diagnostic omission",
+    )
+end
+
 function package_files(root)
     files = String[]
     for entry in (
@@ -117,7 +201,8 @@ function prepare(stage)
     program *= workspace_test_setup(stage)
     command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 -e $program`
     # Dependency acquisition is an explicit setup phase, outside timed checks.
-    run(
+    run_consumer_child(
+        "prepare dependencies",
         addenv(
             Cmd(command; dir=stage),
             isolated_environment(stage)...,
@@ -128,12 +213,18 @@ function prepare(stage)
         project = joinpath(stage, "environments", name)
         warmup = "using $name; using UUIDs"
         command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$project -e $warmup`
-        run(addenv(Cmd(command; dir=stage), isolated_environment(stage)...))
+        run_consumer_child(
+            "prepare $name import",
+            addenv(Cmd(command; dir=stage), isolated_environment(stage)...),
+        )
     end
     test_project = joinpath(stage, "test-environments", "LibTmuxWorkspace")
     warmup = "using LibTmuxWorkspace, JSON"
     command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$test_project -e $warmup`
-    run(addenv(Cmd(command; dir=stage), isolated_environment(stage)...))
+    run_consumer_child(
+        "prepare workspace test import",
+        addenv(Cmd(command; dir=stage), isolated_environment(stage)...),
+    )
     open(joinpath(stage, "exports.toml"), "w") do io
         TOML.print(io, exports; sorted=true)
     end
@@ -178,7 +269,10 @@ function check(stage; imports=true)
         println("PASS $name external import and core module identity")
         """
         command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$project -e $program`
-        run(addenv(Cmd(command; dir=stage), isolated_environment(stage)...))
+        run_consumer_child(
+            "$name external import",
+            addenv(Cmd(command; dir=stage), isolated_environment(stage)...),
+        )
     end
     check_manifest(stage, joinpath(stage, "test-environments", "LibTmuxWorkspace"))
     metadata = TOML.parsefile(joinpath(stage, "source", "LibTmux", "Project.toml"))
@@ -205,7 +299,10 @@ function check_examples(stage)
         project = joinpath(stage, "environments", name)
         command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$project $program`
         started = time_ns()
-        run(addenv(Cmd(command; dir=stage), isolated_environment(stage)...))
+        run_consumer_child(
+            "$name example $(relpath(program, joinpath(stage, "source", name)))",
+            addenv(Cmd(command; dir=stage), isolated_environment(stage)...),
+        )
         println(
             "PASS ",
             name,
@@ -235,7 +332,8 @@ function check_launchers(stage)
         program = joinpath(stage, "source", name, "test", script)
         command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$project $program`
         started = time_ns()
-        run(
+        run_consumer_child(
+            "$name installed launcher",
             addenv(
                 Cmd(command; dir=stage),
                 isolated_environment(stage)...,
@@ -254,8 +352,9 @@ function check_launchers(stage)
 end
 
 function main(args)
+    args == ["--self-test"] && return consumer_self_test()
     length(args) == 2 && args[1] in ("prepare", "check", "examples", "launchers") || error(
-        "Usage: julia dev/check-consumers.jl <prepare|check|examples|launchers> <external-stage>",
+        "Usage: julia dev/check-consumers.jl <prepare|check|examples|launchers> <external-stage>, or --self-test",
     )
     stage = abspath(args[2])
     ancestor = stage
