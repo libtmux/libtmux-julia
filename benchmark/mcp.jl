@@ -17,6 +17,52 @@ const MCP_BENCH_TOOLS = (
     "send_keys_and_wait",
 )
 
+# ProcessFailedException renders Cmd.env. Keep the original cause inspectable,
+# but print only error categories and process exit evidence.
+struct MCPBenchmarkError <: Exception
+    cause::Exception
+end
+
+function mcp_error_evidence(error::Exception)
+    error isa MCPBenchmarkError && return mcp_error_evidence(error.cause)
+    evidence = Dict{String,Any}("type"=>string(nameof(typeof(error))))
+    if error isa ProcessFailedException
+        evidence["processes"] = [
+            Dict("exit_code"=>process.exitcode, "signal"=>process.termsignal) for
+            process in error.procs
+        ]
+    elseif error isa CompositeException
+        evidence["causes"] = mcp_error_evidence.(error.exceptions)
+    end
+    evidence
+end
+
+function Base.showerror(io::IO, error::MCPBenchmarkError)
+    print(io, "MCP benchmark failure: ")
+    JSON.print(io, mcp_error_evidence(error.cause))
+end
+
+function mcp_self_test()
+    marker = "mcp-synthetic-credential-sentinel"
+    failure = try
+        run(setenv(Cmd(["/bin/sh", "-c", "exit 7"]), Dict("MCP_TEST_SECRET"=>marker)))
+        nothing
+    catch error
+        error
+    end
+    @assert failure isa ProcessFailedException
+    wrapped = MCPBenchmarkError(failure)
+    @assert wrapped.cause === failure
+    evidence = mcp_error_evidence(wrapped)
+    @assert evidence["type"] == "ProcessFailedException"
+    @assert only(evidence["processes"]) == Dict("exit_code"=>7, "signal"=>0)
+    @assert !occursin(marker, sprint(showerror, wrapped))
+    combined = MCPBenchmarkError(CompositeException([failure, ArgumentError(marker)]))
+    @assert [item["type"] for item in mcp_error_evidence(combined)["causes"]] == ["ProcessFailedException", "ArgumentError"]
+    @assert !occursin(marker, sprint(showerror, combined))
+    println("PASS benchmark failure classification and diagnostic omission")
+end
+
 function mcp_parameters(arguments)
     values = Dict(
         "samples"=>"3",
@@ -216,6 +262,7 @@ function mcp_main(arguments)
     random = MersenneTwister(options.seed)
     owned = nothing
     primary = nothing
+    cleanup = nothing
     try
         owned = open_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment)
         let server = owned.server
@@ -275,7 +322,8 @@ function mcp_main(arguments)
                             run(setenv(command, child_environment))
                         catch error
                             failure = error
-                        finally
+                        end
+                        try
                             if isfile(artifact)
                                 sample["client"] =
                                     JSON.parsefile(artifact; dicttype=Dict{String,Any})
@@ -299,8 +347,15 @@ function mcp_main(arguments)
                                     keepempty=false,
                                 ),
                             )
+                        catch error
+                            failure =
+                                failure === nothing ? error :
+                                CompositeException([failure, error])
                         end
-                        failure === nothing || throw(failure)
+                        if failure !== nothing
+                            sample["failure"] = mcp_error_evidence(failure)
+                            throw(failure)
+                        end
                         sample["fixture_session_preserved"] &&
                         sample["clients_after_exit"] == 0 &&
                         sample["buffers_after_exit"] == 0 ||
@@ -315,9 +370,8 @@ function mcp_main(arguments)
         primary = error
         report["status"] = "fail"
         report["error_type"] = string(nameof(typeof(error)))
-        rethrow()
+        report["error"] = mcp_error_evidence(error)
     finally
-        cleanup = nothing
         if owned !== nothing
             try
                 close(owned)
@@ -326,6 +380,7 @@ function mcp_main(arguments)
                 cleanup = error
                 report["status"] = "fail"
                 report["cleanup_error_type"] = string(nameof(typeof(error)))
+                report["cleanup_error"] = mcp_error_evidence(error)
             end
         end
         report["driver_body_ns"] = time_ns() - started
@@ -344,17 +399,24 @@ function mcp_main(arguments)
             isopen(io) && close(io)
             rm(temporary; force=true)
         end
-        cleanup === nothing ||
-            throw(primary === nothing ? cleanup : CompositeException([primary, cleanup]))
-        if !report["source_unchanged"]
-            changed = ErrorException("sources changed during measurement")
-            throw(primary === nothing ? changed : CompositeException([primary, changed]))
-        end
     end
+    errors = Exception[]
+    primary === nothing || push!(errors, primary)
+    cleanup === nothing || push!(errors, cleanup)
+    report["source_unchanged"] ||
+        push!(errors, ErrorException("sources changed during measurement"))
+    # Throw after leaving the catch stack so Julia cannot print the raw cause.
+    isempty(errors) || throw(
+        MCPBenchmarkError(length(errors) == 1 ? only(errors) : CompositeException(errors)),
+    )
     println("MCP benchmark ", report["status"], "; raw samples retained")
 end
 
 if abspath(PROGRAM_FILE) == (@__FILE__)
-    using LibTmux, LibTmuxMCP
-    mcp_main(ARGS)
+    if ARGS == ["--self-test"]
+        mcp_self_test()
+    else
+        using LibTmux, LibTmuxMCP
+        mcp_main(ARGS)
+    end
 end
