@@ -30,7 +30,7 @@ export FormatField, FormatObservation, FormatValueError, read_formats
 export RawFormat, render_format, FormatHints, format_hints
 export ControlConnection, ControlResult, ControlCommandError, ControlConnectionError
 export ControlTargetError, ControlCleanupError, open_control, ControlSignal, control_signal
-export ControlCaptureCleanupError
+export ControlBufferCleanupError
 export TmuxCommand, OperationResult, BatchResult, GroupResult, run_batch, run_group
 export ObservationEvent, NotificationEvent, PaneOutput, FormatUpdate, ObservationLost
 export ObservationCursor, ObservationStream, notifications, observe_output, subscribe_format
@@ -64,8 +64,10 @@ include("observation.jl")
 include("control_io.jl")
 include("control_operations.jl")
 include("control_topology.jl")
+include("control_clients.jl")
 include("control_formats.jl")
 include("control_configuration.jl")
+include("control_buffers.jl")
 include("criteria.jl")
 include("wire.jl")
 include("sibling_wire.jl")

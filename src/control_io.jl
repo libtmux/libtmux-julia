@@ -1,11 +1,11 @@
-"An owned capture buffer could not be retired; `buffer` identifies the possible remote resource."
-struct ControlCaptureCleanupError <: LibTmuxError
+"An owned control buffer could not be retired; `buffer` identifies the possible remote resource."
+struct ControlBufferCleanupError <: LibTmuxError
     buffer::BufferRef
     cause::Exception
 end
-Base.showerror(io::IO, error::ControlCaptureCleanupError) = print(
+Base.showerror(io::IO, error::ControlBufferCleanupError) = print(
     io,
-    "could not retire owned control capture buffer ",
+    "could not retire owned control buffer ",
     repr(string(error.buffer.id)),
     ": ",
     sprint(showerror, error.cause),
@@ -32,13 +32,7 @@ end
 
 function _control_buffer_size(connection, name; kwargs...)
     prefix = "LIBTMUX\t"
-    argv = [
-        "list-buffers",
-        "-f",
-        "#{==:#{buffer_name},$name}",
-        "-F",
-        prefix * "#{buffer_size}",
-    ]
+    argv = ["list-buffers", "-F", prefix * _format_template(["buffer_name", "buffer_size"])]
     result = _control_request(
         connection,
         argv,
@@ -46,16 +40,18 @@ function _control_buffer_size(connection, name; kwargs...)
         kwargs...,
     )
     result.failed && throw(ControlCommandError(result, "list-buffers"))
-    rows = _decode_format_rows(result.stdout, 2)
-    isempty(rows) && return nothing
-    row = only(rows)
-    row[1] == "LIBTMUX" || throw(_ControlProtocolError(:rows, :invalid_prefix))
-    size = tryparse(Int, row[2])
+    rows = _decode_format_rows(result.stdout, 3)
+    all(row -> row[1] == "LIBTMUX", rows) ||
+        throw(_ControlProtocolError(:rows, :invalid_prefix))
+    matches = filter(row -> row[2] == name, rows)
+    isempty(matches) && return nothing
+    row = only(matches)
+    size = tryparse(Int, row[3])
     size !== nothing && size >= 0 || throw(_ControlProtocolError(:rows, :invalid_size))
     size
 end
 
-function _control_remove_capture(connection, buffer)
+function _control_remove_buffer(connection, buffer)
     started = time_ns()
     remaining() = _snapshot_remaining(started, 0.9)
     name = string(buffer.id)
@@ -63,7 +59,7 @@ function _control_remove_capture(connection, buffer)
         _control_buffer_size(connection, name; timeout=remaining()) === nothing && return
         _control_effect(connection, ["delete-buffer", "-b", name]; timeout=remaining())
     catch error
-        throw(ControlCaptureCleanupError(buffer, error))
+        throw(ControlBufferCleanupError(buffer, error))
     end
     nothing
 end
@@ -80,7 +76,7 @@ block its event loop; yielding Julia I/O does not make that write asynchronous.
 
 Screen options match `capture_bytes(server, pane)`. `timeout` is one operation
 deadline. Cancellation is followed by a separate uncancelled 900 ms buffer
-cleanup budget. If remote cleanup cannot be proved, `ControlCaptureCleanupError`
+cleanup budget. If remote cleanup cannot be proved, `ControlBufferCleanupError`
 retains its buffer reference; a primary failure is preserved in a
 `CompositeException`. The owned local spool is always removed. There is no
 subprocess fallback or retry.
@@ -151,7 +147,7 @@ function capture_bytes(
     finally
         cleanup = Exception[]
         try
-            submitted && _control_remove_capture(connection, buffer)
+            submitted && _control_remove_buffer(connection, buffer)
         catch error
             push!(cleanup, error)
         end

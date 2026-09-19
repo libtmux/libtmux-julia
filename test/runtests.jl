@@ -32,6 +32,8 @@ if suite in ("integration", "all")
     include("control_io.jl")
     include("control_operations.jl")
     include("control_topology.jl")
+    include("control_clients.jl")
     include("control_formats.jl")
     include("control_configuration.jl")
+    include("control_buffers.jl")
 end

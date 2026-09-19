@@ -233,6 +233,10 @@ function _paste_args(context, pane, bracketed)
     end
     usage === nothing &&
         throw(UnsupportedCapability(:paste_bytes, "paste-buffer is not advertised"))
+    _paste_flags(usage, pane, bracketed)
+end
+
+function _paste_flags(usage, pane, bracketed)
     flags = match(r"^\[-([A-Za-z]+)\]", usage)
     flags === nothing &&
         throw(UnsupportedCapability(:paste_bytes, "unrecognized paste-buffer flags"))

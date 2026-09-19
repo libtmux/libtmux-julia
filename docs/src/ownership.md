@@ -6,7 +6,8 @@
 | Borrowed endpoint | Caller | LibTmux never destroys it implicitly |
 | Control clients | [`ControlConnection`](@ref) | `close` or `open_control` callback |
 | Cancellation callback | [`CancellationSubscription`](@ref) | `close` |
-| Capture spool/buffer | Capture operation | Success/failure cleanup |
+| Capture/paste spool and temporary buffer | I/O operation | Success/failure cleanup |
+| Buffer returned by `load_buffer` | Caller | Explicit `delete_buffer` |
 | Snapshot/selection | Caller references | Ordinary Julia lifetime |
 
 Remote functions return normal results. For concurrency, call them from
@@ -52,7 +53,11 @@ Choose the transport explicitly. Unsupported routes have no implicit fallback.
 | Snapshots and captured local queries | Yes | Yes |
 | Binary/text screen capture | Yes | Yes, through an owned buffer/spool |
 | New windows, split panes and key input | Yes | Yes, with exact typed targets |
-| Session creation, topology and configuration | Yes | Typed methods pending |
+| Session creation, topology and layouts | Yes | Yes, with explicit references and links |
+| Client switch/detach | Yes | Yes, with an observed client incarnation check |
+| Paste and buffer load/save/delete | Yes | Yes, through an owned local spool |
+| Environment set/unset/remove | Yes | Yes |
+| Environment reads, options and hooks | Yes | Typed methods pending |
 | Typed format reads | Yes | Yes, with escaped reply rows |
 | Raw format rendering and discovery hints | Yes | Not admitted to the control reply grammar |
 | Raw future output, notifications and sampled format subscriptions | No | Yes |
@@ -71,6 +76,20 @@ next. A group is not a transaction.
 file. A same-queue fence confirms file completion; `%end` alone does not.
 The daemon must share the local filesystem. Its file write can block the
 tmux event loop even while Julia's caller yields.
+
+Control paste and buffer load/save use the same local-filesystem boundary.
+`paste_bytes` preserves input bytes without adding Enter or converting LF to
+CR; the terminal application may still transform input. Capture and paste
+retire their temporary buffers. `load_buffer` transfers buffer ownership to
+the caller. Failed cleanup retains the buffer reference in
+`ControlBufferCleanupError`, alongside any primary error.
+
+Control client methods verify the captured name and PID/creation-time pair.
+That check cannot reserve the client against concurrent replacement. Client
+names containing spaces or control bytes are refused because tmux emits them
+as unescaped notification fields. Buffer methods permit spaces but refuse
+control bytes. Detaching the connection's own client may close it before the
+completion fence and leave the effect uncertain.
 
 ```@eval
 using Markdown
