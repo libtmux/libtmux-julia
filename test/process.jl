@@ -96,11 +96,38 @@ end
             cancel=preparation_token,
             input=CancelDuringCopy(preparation_token),
         )
-        @test_throws ProcessIOError execute(
-            `sh -c "exec 0<&-; while :; do :; done"`;
-            input=fill(UInt8(1), 131072),
-            timeout=0.08,
-        )
+        stdin_ready = Ref(false)
+        function stdin_timer(callback, delay)
+            timer, task = LibTmux._owned_timer(callback, delay)
+            if callback isa LibTmux._DeadlineCallback
+                try
+                    # No drain or input worker starts before this readiness read.
+                    stdin_ready[] = readline(callback.stop.error.out) == "stdin closed"
+                catch
+                    close(timer)
+                    wait(task)
+                    rethrow()
+                end
+            end
+            timer, task
+        end
+        # This deadline bounds a broken error path; it is not an asserted latency.
+        closed_stdin = try
+            execute(
+                `sh -c "exec 0<&-; printf 'stdin closed\n' >&2; while :; do :; done"`;
+                input=fill(UInt8(1), 131072),
+                timeout=0.9,
+                _make_timer=stdin_timer,
+            )
+        catch error
+            error
+        end
+        @test stdin_ready[]
+        @test closed_stdin isa ProcessIOError
+        if closed_stdin isa ProcessIOError
+            @test closed_stdin.stream === :stdin
+            @test closed_stdin.result.termsignal == Base.SIGKILL
+        end
         rejected = try
             execute(`sh -c "printf rejected >&2; exit 2"`; input=fill(UInt8(1), 131072))
         catch error
