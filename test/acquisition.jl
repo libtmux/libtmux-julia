@@ -6,8 +6,12 @@
             empty = LibTmux.snapshot(server)
             @test isempty(LibTmux.sessions(empty))
             @test isempty(LibTmux.panes(empty))
-            path = joinpath(fixture.directory, "cwd\tline\né\\n")
+            path_root = mkdir(joinpath(fixture.directory, "cwd-root"))
+            linked_root = joinpath(fixture.directory, "cwd-link")
+            symlink(path_root, linked_root)
+            path = joinpath(linked_root, "cwd\tline\né\\n")
             mkpath(path)
+            expected_path = realpath(path)
             run_command(
                 server,
                 "new-session",
@@ -42,7 +46,7 @@
             @test length(LibTmux.paneoccurrences(snap)) == 5
             @test isempty(LibTmux.clients(snap))
             @test count(p -> p.title == title, LibTmux.panes(snap)) == 1
-            @test any(p -> p.current_path == path, LibTmux.panes(snap))
+            @test any(p -> p.current_path == expected_path, LibTmux.panes(snap))
             @test count(
                 PaneWhere(active=true, window=WindowWhere(name="api")),
                 panes(snap),
