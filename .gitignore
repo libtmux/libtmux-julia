@@ -1,0 +1,28 @@
+# Build and coverage output.
+/build/
+/dist/
+/coverage/
+*.lcov
+*.prof
+*.profraw
+*.profdata
+*.log
+
+# Editors and desktops.
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local tool and agent state.
+/.direnv/
+/.envrc.local
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Agent work plans.
+/docs/superpowers/
+/plans/
+/superpowers/
