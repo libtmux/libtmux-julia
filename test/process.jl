@@ -12,6 +12,15 @@ Base.size(value::FrozenInputBytes) = (length(value.bytes),)
 Base.getindex(value::FrozenInputBytes, i::Int) = value.bytes[i]
 Base.copy(value::FrozenInputBytes) = value
 
+@testset "empty process input performs no write" begin
+    endpoint = Base.PipeEndpoint()
+    close(endpoint)
+    errors = Exception[]
+    worker = LibTmux._ProcessInput(error -> push!(errors, error), endpoint, UInt8[])
+    @test worker() === nothing
+    @test isempty(errors)
+end
+
 @testset "bounded owned processes" begin
     @test isdefined(LibTmux, :_run_process)
     if isdefined(LibTmux, :_run_process)

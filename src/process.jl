@@ -280,7 +280,7 @@ end
 
 Base.@noinline function (worker::_ProcessInput)()
     try
-        write(worker.io, worker.payload)
+        isempty(worker.payload) || write(worker.io, worker.payload)
         nothing
     catch cause
         worker.stop(ProcessIOError(:stdin, cause))
