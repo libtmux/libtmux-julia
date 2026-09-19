@@ -62,18 +62,18 @@ const DOC_SNIPPETS = Dict(
         note="JSON 1.9 criteria codec round trip",
     ),
     ("docs/projections.md", 1) => (
-        kind=:illustrative,
-        gate=:none,
+        kind=:executable,
+        gate=:context,
         fingerprint="4d56cc0a335200ba2b1e277d4745342edc3aeae8edc64cc12d6b4757f0f07d5f",
         source="",
-        note="Caller supplies a captured Snapshot to pane_rows",
+        note="Owned snapshot passed to pane_rows",
     ),
     ("docs/projections.md", 2) => (
-        kind=:illustrative,
-        gate=:none,
+        kind=:executable,
+        gate=:context,
         fingerprint="b88c4bc32b35365f8f073940716b34bdeee28876ec6a1e5a1b2d64b0e31ddfd1",
         source="",
-        note="Caller supplies a captured Snapshot and Tables 1.14",
+        note="Owned snapshot passed to pane_columns with Tables 1.14",
     ),
     ("docs/src/index.md", 1) => (
         kind=:derived,
@@ -125,25 +125,25 @@ const DOC_SNIPPETS = Dict(
         note="Private copy of the shipped workspace configuration",
     ),
     ("packages/LibTmuxWorkspace/README.md", 2) => (
-        kind=:illustrative,
-        gate=:none,
-        fingerprint="3e1a8b6a9a26fbebbe1ed64d528d142abe213658c96c24d95d9fb1a3ecf1ec27",
+        kind=:executable,
+        gate=:context,
+        fingerprint="3474dbfa248b047f7481d6c2e94c3d66cfad718843f2b62a422c4238d4a24f01",
         source="",
-        note="Caller supplies an existing explicit server and workspace.yaml",
+        note="Owned server and private workspace.yaml",
     ),
     ("packages/LibTmuxWorkspace/README.md", 3) => (
-        kind=:illustrative,
-        gate=:none,
-        fingerprint="32a8ef52caec6bb60ca7086b5792601b3db45efaae7ab92554817aee122c5bda",
+        kind=:executable,
+        gate=:context,
+        fingerprint="d3e17d2d572c86a8fb3f643053dfc3e930bd5023b4a8e0504448ec4e7d2ba1ac",
         source="",
-        note="Caller chooses an installation directory; owned launcher tests are separate",
+        note="Private installation directory; installed launchers have a separate runtime gate",
     ),
     ("src/formats.jl", 1) => (
-        kind=:illustrative,
-        gate=:none,
+        kind=:executable,
+        gate=:context,
         fingerprint="bc1e99dde60cc5f77405df4dd482b2ad03a6a8a44cc9dc7446cd051f4ea705b6",
         source="",
-        note="Caller supplies an existing server and exact pane_ref",
+        note="Owned server and exact pane reference",
     ),
 )
 
@@ -245,9 +245,9 @@ function validate_snippets(entries, specifications, root)
         elseif spec.gate === :doctest
             entry.language == "jldoctest" ||
                 error("Pure executable snippets must use doctests")
-        elseif spec.kind === :illustrative
+        elseif spec.gate === :context || spec.kind === :illustrative
             syntax_error(Meta.parseall(entry.code; filename=entry.path)) &&
-                error("Illustrative snippet has invalid Julia syntax: $(entry.path)")
+                error("Contextual snippet has invalid Julia syntax: $(entry.path)")
         else
             error("Unknown snippet classification")
         end
@@ -307,6 +307,7 @@ function inventory_text(entries)
         detail = isempty(spec.source) ? spec.note : "[$(spec.source)](../$(spec.source))"
         gate =
             spec.gate === :doctest ? "snippet doctests" :
+            spec.gate === :context ? "owned-context runner" :
             spec.kind === :derived ? "external example runner" :
             "exact snippet not executed"
         println(output, "| $location | $(spec.kind) | $gate | $detail |")
@@ -355,15 +356,15 @@ function inventory_text(entries)
     )
     println(
         output,
-        "Illustrative snippets require caller-owned context or installation choices.",
+        "`dev/check-doc-examples.jl contextual` executes all five contextual fences",
     )
     println(
         output,
-        "Their syntax and drift are checked; exact execution is not claimed. Existing",
+        "exactly as shipped with an owned tmux server, captured rows, a private",
     )
     println(
         output,
-        "API tests do not replace that missing snippet-level runtime evidence.\n",
+        "workspace file and installation directory. It checks results and cleanup.\n",
     )
     println(
         output,
@@ -422,6 +423,77 @@ function run_snippet_doctests(entries)
     end
 end
 
+function run_contextual_snippets(entries)
+    @eval import LibTmux, LibTmuxWorkspace, Tables
+    selected = Dict(
+        (entry.path, entry.ordinal) => entry for
+        entry in entries if DOC_SNIPPETS[(entry.path, entry.ordinal)].gate === :context
+    )
+    executed = Set{Tuple{String,Int}}()
+    workspace = Module(gensym(:ShippedDocExamples))
+    execute(key) = begin
+        push!(executed, key)
+        entry = selected[key]
+        Base.include_string(workspace, entry.code, entry.path)
+    end
+    bind(name, value) = Core.eval(workspace, Expr(:(=), name, QuoteNode(value)))
+    endpoint = Ref{String}()
+    # Only checked-in example source is executed; no caller data becomes code.
+    Base.invokelatest() do
+        LibTmux.with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) do server
+            endpoint[] = dirname(server.socket_path)
+            LibTmux.new_session(server; name="doc-context", command=["/bin/cat"])
+            snap = LibTmux.snapshot(server)
+            pane = only(LibTmux.panes(snap))
+            bind(:server, server)
+            bind(:pane_ref, pane.ref)
+            execute(("docs/projections.md", 1))
+            rows = Base.invokelatest(() -> getproperty(workspace, :pane_rows)(snap))
+            @assert length(rows) == 1 && only(rows).id == pane.id
+            @assert only(rows).width == pane.width
+            execute(("docs/projections.md", 2))
+            columns = Base.invokelatest(() -> getproperty(workspace, :pane_columns)(snap))
+            @assert columns.id == [pane.id]
+            @assert columns.current_command == [pane.current_command]
+            formats = execute(("src/formats.jl", 1))
+            @assert length(formats) == 3
+            @assert formats[1].value == pane.width && formats[2].value === true
+            @assert !isempty(formats[3].value)
+            mktempdir(; prefix="libtmux-julia-doc-context-") do directory
+                write(
+                    joinpath(directory, "workspace.yaml"),
+                    """
+session_name: \${PROJECT}
+options:
+  default-shell: /bin/sh
+windows:
+  - window_name: docs
+    panes: [null, null]
+""",
+                )
+                cd(directory) do
+                    execute(("packages/LibTmuxWorkspace/README.md", 2))
+                    result = Base.invokelatest(getproperty, workspace, :result)
+                    @assert result.status === :complete
+                    observed = LibTmux.snapshot(server)
+                    @assert any(
+                        session -> session.name == "example",
+                        LibTmux.sessions(observed),
+                    )
+                    @assert length(LibTmux.panes(observed)) == 3
+                    bind(:bin_directory, joinpath(directory, "bin"))
+                    launcher = execute(("packages/LibTmuxWorkspace/README.md", 3))
+                    @assert isfile(launcher) && !islink(launcher)
+                    @assert dirname(launcher) == joinpath(directory, "bin")
+                end
+            end
+        end
+    end
+    @assert !ispath(endpoint[])
+    @assert executed == Set(keys(selected))
+    println("PASS ", length(executed), " exact contextual fences and owned cleanup")
+end
+
 function doc_example_self_test()
     text = "```text\n```julia\n```\n\n~~~~julia\nx = 1\n~~~~\n"
     entries = document_fences(text, "owned.md")
@@ -461,8 +533,9 @@ end
 
 function doc_examples_main(arguments)
     mode = isempty(arguments) ? "check" : only(arguments)
-    mode in ("check", "inventory", "write", "doctest", "self-test") ||
-        error("usage: check-doc-examples.jl [check|inventory|write|doctest|self-test]")
+    mode in ("check", "inventory", "write", "doctest", "contextual", "self-test") || error(
+        "usage: check-doc-examples.jl [check|inventory|write|doctest|contextual|self-test]",
+    )
     mode == "self-test" && return doc_example_self_test()
     entries = doc_example_check()
     inventory = inventory_text(entries)
@@ -477,6 +550,7 @@ function doc_examples_main(arguments)
             "Example inventory is stale; run the write mode after reviewing snippet metadata",
         )
         mode == "doctest" && run_snippet_doctests(entries)
+        mode == "contextual" && run_contextual_snippets(entries)
         println(
             "PASS discovery/drift: ",
             length(entries),

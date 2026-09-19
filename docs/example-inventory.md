@@ -8,8 +8,8 @@ and program links. It does not establish runtime correctness.
 | --- | --- | --- | --- |
 | [docs/criteria-wire.md](../docs/criteria-wire.md) (1) | executable | snippet doctests | Pure criteria wire round trip |
 | [docs/criteria-wire.md](../docs/criteria-wire.md) (2) | executable | snippet doctests | JSON 1.9 criteria codec round trip |
-| [docs/projections.md](../docs/projections.md) (1) | illustrative | exact snippet not executed | Caller supplies a captured Snapshot to pane_rows |
-| [docs/projections.md](../docs/projections.md) (2) | illustrative | exact snippet not executed | Caller supplies a captured Snapshot and Tables 1.14 |
+| [docs/projections.md](../docs/projections.md) (1) | executable | owned-context runner | Owned snapshot passed to pane_rows |
+| [docs/projections.md](../docs/projections.md) (2) | executable | owned-context runner | Owned snapshot passed to pane_columns with Tables 1.14 |
 | [docs/src/index.md](../docs/src/index.md) (1) | derived | external example runner | [examples/owned_capture.jl](../examples/owned_capture.jl) |
 | [docs/src/observations.md](../docs/src/observations.md) (1) | derived | external example runner | [examples/output_stream.jl](../examples/output_stream.jl) |
 | [docs/src/ownership.md](../docs/src/ownership.md) (1) | derived | external example runner | [examples/control_cancel.jl](../examples/control_cancel.jl) |
@@ -17,9 +17,9 @@ and program links. It does not establish runtime correctness.
 | [docs/src/queries.md](../docs/src/queries.md) (2) | executable | snippet doctests | Pure callable criteria and wire conversion |
 | [docs/src/workspaces.md](../docs/src/workspaces.md) (1) | derived | external example runner | [packages/LibTmuxWorkspace/examples/owned_load.jl](../packages/LibTmuxWorkspace/examples/owned_load.jl) |
 | [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (1) | executable | snippet doctests | Private copy of the shipped workspace configuration |
-| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (2) | illustrative | exact snippet not executed | Caller supplies an existing explicit server and workspace.yaml |
-| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (3) | illustrative | exact snippet not executed | Caller chooses an installation directory; owned launcher tests are separate |
-| [src/formats.jl](../src/formats.jl) (1) | illustrative | exact snippet not executed | Caller supplies an existing server and exact pane_ref |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (2) | executable | owned-context runner | Owned server and private workspace.yaml |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (3) | executable | owned-context runner | Private installation directory; installed launchers have a separate runtime gate |
+| [src/formats.jl](../src/formats.jl) (1) | executable | owned-context runner | Owned server and exact pane reference |
 
 ## Executable programs
 
@@ -48,9 +48,9 @@ manual build. `dev/check-consumers.jl examples STAGE` supplies their separate
 owned-tmux runtime check. `dev/check-consumers.jl launchers STAGE` checks both
 installed consumer launchers; shell command blocks are not Julia fences.
 
-Illustrative snippets require caller-owned context or installation choices.
-Their syntax and drift are checked; exact execution is not claimed. Existing
-API tests do not replace that missing snippet-level runtime evidence.
+`dev/check-doc-examples.jl contextual` executes all five contextual fences
+exactly as shipped with an owned tmux server, captured rows, a private
+workspace file and installation directory. It checks results and cleanup.
 
 The scan includes Markdown and library source docstrings. Documenter reference
 directives such as `@autodocs` are not displayed Julia examples; their source

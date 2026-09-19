@@ -268,6 +268,7 @@ def command_plan(args, stage, metadata):
     add("extensions", [*normal, "-e", extensions], 300, "outer")
     add("docs", [*normal, "docs/make.jl"], 300, "outer")
     add("doc-snippets", [*normal, "dev/check-doc-examples.jl", "doctest"], 300, "outer")
+    add("doc-contextual", [*normal, "dev/check-doc-examples.jl", "contextual"], 300, "outer")
     add("imports", [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]], 300, "outer")
     add("external-examples", [*minimal, "dev/check-consumers.jl", "examples", metadata["consumers"]], 300, "outer")
     add("external-launchers", [*minimal, "dev/check-consumers.jl", "launchers", metadata["consumers"]], 300, "outer")

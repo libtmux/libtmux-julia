@@ -145,9 +145,20 @@ $ julia \
 ```
 
 The [example inventory](docs/example-inventory.md) distinguishes exact pure
-doctests, snippets derived from executable programs, and contextual examples
-that still need runtime coverage. The matrix runs the separate doctest and
-external-example gates; a successful inventory check alone proves neither.
+doctests, snippets derived from executable programs, and contextual examples.
+After the matrix preparation below, run the contextual examples with its
+resolved project and depot. The runner supplies an owned server, captured rows
+and private files, then checks the results and cleanup:
+
+```console
+$ env JULIA_DEPOT_PATH="$matrix_stage/depot" julia \
+    --startup-file=no \
+    --project="$matrix_stage/environment" \
+    dev/check-doc-examples.jl contextual
+```
+
+The matrix runs separate doctest, contextual and external-example gates.
+A successful inventory check alone does not establish runtime correctness.
 
 ## External package imports
 

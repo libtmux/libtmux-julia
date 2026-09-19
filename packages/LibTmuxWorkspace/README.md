@@ -158,10 +158,11 @@ application.
 
 ## Apply and inspect partial effects
 
+With an explicit `server` and a configuration file in the current directory:
+
 ```julia
 using LibTmux, LibTmuxWorkspace
 
-server = Server(socket_path="/tmp/my-tmux/socket")
 prepared = plan(expand(validate(read_config("workspace.yaml"));
                        env=Dict("PROJECT" => "example")))
 result = apply(server, prepared; rollback=:created)
@@ -228,10 +229,11 @@ to names and paths in the resulting document.
 After preparing a consumer project, install a launcher into a directory you
 choose. It binds to that resolved project and performs no dependency installs.
 Existing launchers are preserved unless `force=true` is explicit.
+Set `bin_directory` to your chosen directory before running this example:
 
 ```julia
 using LibTmuxWorkspace
-install_cli(joinpath(homedir(), ".local", "bin"))
+install_cli(bin_directory)
 ```
 
 The example uses an already-running server at an explicit socket:
