@@ -241,6 +241,9 @@ function _control_notification!(parser::_ControlParser, events, line, name::Stri
     elseif name == "subscription-changed"
         length(args) >= 7 && args[6] == ":" || _control_fail(parser, :notification_arity)
         _control_id(parser, args[2], 0x24)
+    elseif name in ("paste-buffer-changed", "paste-buffer-deleted")
+        # The complete tail is a buffer name, including leading or repeated spaces.
+        length(line) > ncodeunits(name) + 2 || _control_fail(parser, :notification_arity)
     elseif name != "exit"
         !isempty(args) && !isempty(args[1]) || _control_fail(parser, :notification_arity)
     end

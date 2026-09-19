@@ -61,6 +61,14 @@
                   LibTmux._ControlNotification
         end
 
+        for kind in ("paste-buffer-changed", "paste-buffer-deleted"),
+            name in (" leading", "two  spaces", " ")
+
+            record = "%" * kind * " " * name
+            event = only(feed(Parser(), codeunits(record * "\n")))
+            @test event.bytes == codeunits(record)
+        end
+
         for malformed in (
             "%end 1 2 1\n",
             "%begin -1 2 1\n",
@@ -78,6 +86,8 @@
             "%begin 18446744073709551616 2 1\n",
             "%output %0 raw\r\n",
             "%window-renamed @1\n",
+            "%paste-buffer-changed\n",
+            "%paste-buffer-deleted \n",
         )
             parser = Parser()
             @test_throws ProtocolError feed(parser, codeunits(malformed))
