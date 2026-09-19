@@ -36,6 +36,15 @@ TMUX_SHA256 = {
 }
 
 
+def tmux_configure_command(target, version, os_name):
+    command = ["./configure", f"--prefix={target}"]
+    if os_name == "Darwin":
+        command.append("--enable-utf8proc")
+        if version in ("3.5a", "3.6b", "3.7c"):
+            command.append("--enable-jemalloc")
+    return command
+
+
 def build_tmux(args):
     stage = checked_stage(args.stage, create=True)
     target = stage / "tmux" / args.version
@@ -51,7 +60,8 @@ def build_tmux(args):
         with tarfile.open(archive) as source:
             source.extractall(target, filter="data")
         source_root = target / f"tmux-{args.version}"
-        subprocess.run(["./configure", f"--prefix={target}"], cwd=source_root, check=True)
+        subprocess.run(tmux_configure_command(target, args.version, platform.system()),
+                       cwd=source_root, check=True)
         subprocess.run(["make", "-j2"], cwd=source_root, check=True)
         subprocess.run(["make", "install"], cwd=source_root, check=True)
     observed = subprocess.check_output([str(binary), "-V"], text=True).strip()
@@ -173,19 +183,26 @@ def phase(name, argv, *, cwd, env, log, budget):
     return answer
 
 
-PREPARE = r'''
+PACKAGE_SPECIFICATIONS = r'''
 using Pkg
+function package_specifications(arguments)
+    pairs = [split(argument, '='; limit=2) for argument in arguments]
+    [PackageSpec(name=String(first(pair)), version=VersionNumber(last(pair))) for pair in pairs]
+end
+'''
+
+PREPARE = PACKAGE_SPECIFICATIONS + r'''
 root, project = ARGS[1:2]
 Pkg.activate(project)
 Pkg.develop([PackageSpec(path=root),
              PackageSpec(path=joinpath(root, "packages", "LibTmuxWorkspace")),
              PackageSpec(path=joinpath(root, "packages", "LibTmuxMCP"))])
-packages = [split(arg, '='; limit=2) for arg in ARGS[3:end]]
-Pkg.add([PackageSpec(name=first(pair), version=last(pair)) for pair in packages])
+packages = package_specifications(ARGS[3:end])
+Pkg.add(packages)
 resolved = values(Pkg.dependencies())
-for (name, version) in packages
-    any(info -> info.name == name && info.version == VersionNumber(version), resolved) ||
-        error("resolved quality tool differs from its admitted version: " * name)
+for package in packages
+    any(info -> info.name == package.name && info.version == package.version, resolved) ||
+        error("resolved quality tool differs from its admitted version: " * package.name)
 end
 Pkg.precompile()
 '''
@@ -300,9 +317,27 @@ def run(args):
     return 0 if result["status"] == "PASS" else 1
 
 
-def self_test():
+def self_test(julia=None):
+    if julia:
+        script = PACKAGE_SPECIFICATIONS + r'''
+specifications = package_specifications(["Aqua=0.8.18", "JSON=1.9.0"])
+@assert length(specifications) == 2
+@assert specifications[1].name == "Aqua"
+@assert specifications[1].version == v"0.8.18"
+@assert specifications[2].name == "JSON"
+@assert specifications[2].version == v"1.9.0"
+println("PASS admitted version arguments construct real Pkg specifications")
+'''
+        subprocess.run([julia, "--startup-file=no", "--compile=min", "-O0", "-e", script],
+                       check=True)
     with tempfile.TemporaryDirectory(prefix="libtmux-julia-matrix-test-") as directory:
         base = Path(directory)
+        assert tmux_configure_command(base, "3.7c", "Darwin") == [
+            "./configure", f"--prefix={base}", "--enable-utf8proc", "--enable-jemalloc"]
+        assert tmux_configure_command(base, "3.2a", "Darwin") == [
+            "./configure", f"--prefix={base}", "--enable-utf8proc"]
+        assert tmux_configure_command(base, "3.7c", "Linux") == [
+            "./configure", f"--prefix={base}"]
         literal = "; $(touch must-not-exist)"
         ok = phase("literal", [sys.executable, "-c", "import sys; print(sys.argv[1])", literal],
                    cwd=base, env=os.environ.copy(), log=base / "literal.log", budget=0.9)
@@ -327,7 +362,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("matrix")
-    sub.add_parser("self-test")
+    self_check = sub.add_parser("self-test")
+    self_check.add_argument("--julia", help="also check real Pkg argument conversion offline")
     build = sub.add_parser("build-tmux", help="setup only: download, verify and build one pinned release")
     build.add_argument("stage")
     build.add_argument("version", choices=tuple(TMUX_SHA256))
@@ -347,7 +383,7 @@ def main():
         if args.command == "matrix":
             print(json.dumps({"include": support_cells()}))
         elif args.command == "self-test":
-            self_test()
+            self_test(args.julia)
         elif args.command == "build-tmux":
             build_tmux(args)
         elif args.command == "prepare":
