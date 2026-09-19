@@ -46,7 +46,7 @@ function _created_window(server, session_ref, window_ref, remaining, cancel)
     LibTmux.WindowLinkRef(link), pane
 end
 
-function _with_ready_marker(publish, timeout, cancel)
+function _with_ready_marker(publish, timeout, cancel; _monitor=FolderMonitor)
     started = time_ns()
     directory = mktempdir(; prefix="libtmux-julia-ready-")
     marker = joinpath(directory, "ready")
@@ -74,7 +74,13 @@ function _with_ready_marker(publish, timeout, cancel)
         _remaining(started, timeout, cancel)
     end
     try
-        monitor = FolderMonitor(directory)
+        write(marker, "")
+        original_inode = stat(marker).inode
+        # Watch the placeholder inode: Darwin uses kqueue for regular files,
+        # avoiding FSEvents' asynchronous directory registration and restarts.
+        monitor = _monitor(marker)
+        # libuv acknowledges close after registering pending native I/O watches.
+        close(Base.AsyncCondition())
         subscription =
             cancel === nothing ? nothing : LibTmux.on_cancel(() -> stop(:cancelled), cancel)
         timer, timer_task = _owned_timer(() -> stop(:deadline), check())
@@ -82,21 +88,22 @@ function _with_ready_marker(publish, timeout, cancel)
         publish(marker, content)
         while true
             check()
-            event = try
+            if stat(marker).inode != original_inode
+                # Atomic replacement exposes complete text, including empty text.
+                bytes = open(marker, "r") do io
+                    read(io, ncodeunits(content) + 1)
+                end
+                bytes == codeunits(content) ||
+                    throw(ArgumentError("invalid shell readiness marker"))
+                return nothing
+            end
+            try
                 wait(monitor)
             catch error
                 check()
                 rethrow()
             end
-            check()
-            # The producer publishes by rename: reads never observe partial text.
-            first(event) == "ready" || continue
-            bytes = open(marker, "r") do io
-                read(io, ncodeunits(content) + 1)
-            end
-            bytes == codeunits(content) ||
-                throw(ArgumentError("invalid shell readiness marker"))
-            return nothing
+            # Events are wake hints; filenames may be absent or coalesced.
         end
     finally
         lock(state_lock) do
@@ -171,7 +178,7 @@ exact session after checking its generation and name. Only newly created panes
 receive commands. The plan's 1-based positions resolve to returned typed refs.
 
 Default readiness sends a marker through a POSIX shell and awaits its atomic
-publication through an owned directory monitor. No polling or delays occur.
+publication through an owned file monitor. No polling or delays occur.
 Cancellation removes the directory, so late producers cannot leave waiters.
 Custom launchers with
 input require explicit `readiness=:none`. A successful command step means input
