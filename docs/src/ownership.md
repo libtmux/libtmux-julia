@@ -57,7 +57,8 @@ Choose the transport explicitly. Unsupported routes have no implicit fallback.
 | Client switch/detach | Yes | Yes, with an observed client incarnation check |
 | Paste and buffer load/save/delete | Yes | Yes, through an owned local spool |
 | Environment set/unset/remove | Yes | Yes |
-| Environment reads, options and hooks | Yes | Typed methods pending |
+| Environment reads | Yes | Refused: encoded presence/hidden/removal metadata is unavailable |
+| Options and sparse hooks | Yes | Exact names/scopes; hook storage uses a restricted grammar |
 | Typed format reads | Yes | Yes, with escaped reply rows |
 | Raw format rendering and discovery hints | Yes | Not admitted to the control reply grammar |
 | Raw future output, notifications and sampled format subscriptions | No | Yes |
@@ -90,6 +91,36 @@ names containing spaces or control bytes are refused because tmux emits them
 as unescaped notification fields. Buffer methods permit spaces but refuse
 control bytes. Detaching the connection's own client may close it before the
 completion fence and leave the effect uncertain.
+
+Control configuration reads request one exact option or hook name. They never
+read a broad option listing, whose user-defined names can contain raw newlines.
+`inherit=true` follows explicit parents only when the local option is absent.
+An empty string or empty array masks inheritance; a missing sparse index stays
+missing. Hook reads preserve tmux's canonical command bodies and numeric indices.
+
+The generated option catalog pins metadata from tmux 3.2a through 3.7c.
+Most entries have stable types and scopes. Seven require an exact pinned
+version: `allow-passthrough`, `destroy-unattached`, `pane-border-format`,
+`pane-border-style`, `pane-active-border-style`, `window-linked` and
+`window-unlinked`. Those seven are refused on an unpinned version such as
+3.7d; other catalog entries still use named commands to check availability.
+Unknown names and incompatible scopes are rejected. Unavailable built-ins and
+target errors retain their `ControlResult` instead of becoming absent values.
+
+Unrestricted string option values retain literal tabs and newlines. Values
+that tmux may echo in validation errors must be printable UTF-8. Scalar
+command options and `set_hook` accept literal command names, quoted arguments,
+punctuation escapes and semicolon-separated commands. Expansion, comments,
+command blocks and escapes that decode into control bytes are refused. This
+validates storage; executing a hook must still respect the trusted hook
+contract above. A failed whole-array assignment may already have cleared it.
+
+`get_environment(connection, ...)` raises `UnsupportedCapability`: the
+researched control dialects cannot encode the complete `EnvironmentValue`
+contract. Raw environment output can contain newlines, while format lookup
+loses absence, hidden/removal flags and local/global origin. Use an explicit
+`Server` read when its best-effort identity semantics meet the caller's needs.
+Environment writes remain available through the control connection.
 
 ```@eval
 using Markdown

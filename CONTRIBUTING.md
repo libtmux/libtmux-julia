@@ -90,6 +90,21 @@ $ /usr/bin/time -p julia \
     dev/generate-criteria.jl --check
 ```
 
+Check the pinned tmux option scope/type catalog without an upstream checkout:
+
+```console
+$ julia \
+    --startup-file=no \
+    --compile=min \
+    -O0 \
+    dev/generate-options.jl --check
+```
+
+The catalog records release commits and source hashes. When updating it, use
+`dev/generate-options.jl --check-upstream CHECKOUT` to compare the recorded
+metadata with those exact tmux sources. Runtime named requests still check
+option availability on the connected daemon.
+
 Optional JSON/Tables checks use a separate project prepared with this checkout
 and admitted dependency versions. The matrix preparation command below creates
 that environment; its `extensions` phase runs the captured-data fixtures with

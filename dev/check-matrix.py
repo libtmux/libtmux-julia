@@ -288,6 +288,7 @@ def command_plan(args, stage, metadata):
     add("quality", [*minimal, "dev/check-quality.jl", "quality"], 30, "quality")
     add("format", [*normal, "dev/check-quality.jl", "format"], 30, "quality")
     add("generated", [*minimal, "dev/generate-criteria.jl", "--check"], 30, "quality")
+    add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 30, "quality")
     add("example-inventory", [*minimal, "dev/check-doc-examples.jl", "check"], 30, "quality")
     add("core-normal", [*normal, "test/runtests.jl", "all"], 300, "outer")
     add("workspace-normal", [*normal, "packages/LibTmuxWorkspace/test/runtests.jl", "all"], 300, "outer")

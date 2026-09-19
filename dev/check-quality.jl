@@ -8,8 +8,9 @@ elseif QUALITY_PHASE == "format"
 end
 
 const QUALITY_ROOT = dirname(@__DIR__)
+include(joinpath(@__DIR__, "generate-options.jl"))
 const QUALITY_PACKAGES = ("LibTmux", "LibTmuxWorkspace", "LibTmuxMCP")
-const GENERATED_JULIA = Set(["src/criteria_generated.jl"])
+const GENERATED_JULIA = Set(["src/criteria_generated.jl", "src/options_generated.jl"])
 
 function source_files()
     files = String[]
@@ -75,7 +76,7 @@ function format_check()
     println(
         "PASS formatter: ",
         length(files),
-        " files; generated criteria checked separately",
+        " files; generated sources checked separately",
     )
 end
 
@@ -83,6 +84,7 @@ function main(args)
     phase = isempty(args) ? "quality" : only(args)
     phase in ("quality", "format", "list") ||
         error("usage: check-quality.jl [quality|format|list]")
+    phase == "list" || options_main(["--check"])
     if phase == "list"
         foreach(path -> println(relpath(path, QUALITY_ROOT)), source_files())
     elseif phase == "quality"
