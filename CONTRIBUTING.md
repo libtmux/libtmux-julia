@@ -256,6 +256,12 @@ immutable consumer packages, and records commands, whole-command times and
 failure states. Preparation can access the network; subsequent checks are
 offline. Source changes invalidate the prepared export.
 
+The isolated tooling project disables JuliaFormatter's optional package-wide
+precompile workload through its supported preference. The formatter check
+still uses normal compilation and inspects every owned source file. Product
+precompilation is unchanged. Prepared metadata records the preference, and
+the runner rejects preference changes before checking the cell.
+
 ```console
 $ matrix_stage=$(mktemp -d "${TMPDIR:-/tmp}/ltj-matrix.XXXXXX")
 ```

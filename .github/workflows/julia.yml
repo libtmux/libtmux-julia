@@ -82,5 +82,6 @@ jobs:
             ${{ env.MATRIX_STAGE }}/results-*.json
             ${{ env.MATRIX_STAGE }}/prepared.json
             ${{ env.MATRIX_STAGE }}/environment/Project.toml
+            ${{ env.MATRIX_STAGE }}/environment/LocalPreferences.toml
             ${{ env.MATRIX_STAGE }}/environment/Manifest.toml
             ${{ env.MATRIX_STAGE }}/logs/*.log

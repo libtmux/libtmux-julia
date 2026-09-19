@@ -18,6 +18,7 @@ import tarfile
 import urllib.request
 import threading
 import time
+import tomllib
 import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,6 +27,10 @@ PINNED_TOOLS = {
     "Tables": "1.14.0", "JSON": "1.9.0", "YAML": "0.4.17",
     "ModelContextProtocol": "0.7.0",
 }
+
+# JuliaFormatter's default workload formats a copied package tree in every style.
+# Keep that optional workload out of tool setup; the normal format gate still runs.
+TOOL_PREFERENCES = "[JuliaFormatter]\nprecompile_workload = false\n"
 
 TMUX_SHA256 = {
     "3.2a": "551553a4f82beaa8dadc9256800bcc284d7c000081e47aa6ecbb6ff36eacd05f",
@@ -251,6 +256,7 @@ def prepare(args):
     initial_digest = source_digest()
     project = stage / "environment"
     project.mkdir(exist_ok=True)
+    (project / "LocalPreferences.toml").write_text(TOOL_PREFERENCES)
     env = environment(stage, offline=False)
     argv = [args.julia, "--startup-file=no", f"--project={project}", "-e", PREPARE,
             str(ROOT), str(project), *[f"{name}={version}" for name, version in PINNED_TOOLS.items()]]
@@ -270,7 +276,8 @@ def prepare(args):
     if initial_digest != source_digest():
         raise ValueError("source changed during preparation; rerun with stable source (dependency cache retained)")
     metadata = dict(schema_version=1, source_digest=initial_digest, tools=PINNED_TOOLS,
-                    consumers=str(consumers), project=str(project), registry_seed=registry_seed)
+                    consumers=str(consumers), project=str(project), registry_seed=registry_seed,
+                    tool_preferences=tomllib.loads(TOOL_PREFERENCES))
     (stage / "prepared.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print("PASS prepared dependencies and immutable external consumers; no timed checks run")
 
@@ -314,6 +321,9 @@ def run(args):
     metadata = json.loads((stage / "prepared.json").read_text())
     if metadata["source_digest"] != source_digest():
         raise ValueError("source changed since preparation; prepare a fresh source snapshot before checks")
+    preferences = Path(metadata["project"]) / "LocalPreferences.toml"
+    if tomllib.loads(preferences.read_text()) != metadata["tool_preferences"]:
+        raise ValueError("tool preferences changed since preparation; prepare a fresh stage")
     env = environment(stage, offline=True)
     env.update(LIBTMUX_TEST_TMUX=args.tmux, LIBTMUX_TEST_CLI_COMPILE="normal",
                LIBTMUX_TEST_MINIMAL_CHILD="0")
