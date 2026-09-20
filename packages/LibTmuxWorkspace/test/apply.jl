@@ -37,11 +37,11 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
                                     shellword(output) *
                                     "; " *
                                     marker,
-                                "focus" => true,
                             ),
-                            nothing,
+                            Dict("focus" => true),
                         ],
                     ),
+                    Dict("window_name" => "logs", "window_index" => 7),
                 ],
             )
             prepared = plan(expand(validate(document); base_directory=fixture.directory))
@@ -53,14 +53,37 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
             @test read(output, String) == "literal;#{pane_id}"
             @test read(script_output, String) == "before"
             snap = LibTmux.snapshot(server)
-            @test length(LibTmux.windows(snap)) == 1
-            @test length(LibTmux.panes(snap)) == 2
-            @test only(LibTmux.windowlinks(snap)).index == 0
+            @test length(LibTmux.windows(snap)) == 2
+            @test length(LibTmux.panes(snap)) == 3
+            links = sort(collect(LibTmux.windowlinks(snap)); by=l -> l.index)
+            @test [l.index for l in links] == [0, 7]
+            @test [l.active for l in links] == [true, false]
+            main = LibTmux.window(first(links))
+            panes = sort(collect(LibTmux.panes(main)); by=p -> p.index)
+            @test [p.active for p in panes] == [false, true]
+            @test all(p -> p.height == main.height, panes)
+            @test sum(p.width for p in panes) + 1 == main.width
+            @test abs(panes[1].width - panes[2].width) <= 1
             @test last(events).event == :complete
             @test_throws WorkspaceApplyError apply(server, prepared)
             frozen = freeze(server, result.session)
-            @test validate(frozen).session_name == "workspace"
-            @test length(validate(frozen).windows[1].panes) == 2
+            captured = validate(frozen)
+            @test captured.session_name == "workspace"
+            @test length(captured.windows[1].panes) == 2
+            @test [w.focus for w in captured.windows] == [true, false]
+            @test [p.focus for p in captured.windows[1].panes] == [false, true]
+            layout = only(
+                LibTmux.read_formats(
+                    server,
+                    main.ref,
+                    LibTmux.FormatField("window_layout"),
+                ),
+            ).value
+            @test captured.windows[1].layout == layout
+            @test all(
+                p -> p.start_directory == realpath(fixture.directory),
+                captured.windows[1].panes,
+            )
 
         end
     end

@@ -63,6 +63,49 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
                 ),
             ),
         ) == 1
+        server = LibTmux.Server(socket_path=fixture.socket, tmux=fixture.tmux)
+        for (name, timeout, exitcode) in (("partial", "30", 4), ("deadline", "0.001", 6))
+            document = Dict(
+                "session_name" => name,
+                "windows" => [
+                    Dict(
+                        "window_name" => "created",
+                        "options_after" => Dict("not-a-real-option" => true),
+                    ),
+                ],
+            )
+            failure_path = joinpath(fixture.directory, name * ".json")
+            write(failure_path, JSON.json(document))
+            command = Cmd([
+                launcher,
+                "load",
+                failure_path,
+                "--socket",
+                fixture.socket,
+                "--tmux",
+                fixture.tmux,
+                "--output",
+                "json",
+                "--rollback-created",
+                "--no-readiness",
+                "--timeout",
+                timeout,
+            ])
+            output = IOBuffer()
+            process = open(stderr_path, "w") do errors
+                run(pipeline(ignorestatus(command); stdout=output, stderr=errors))
+            end
+            failure = JSON.parse(String(take!(output)))
+            @test process.exitcode == exitcode
+            @test failure["status"] == "error" && failure["exit_code"] == exitcode
+            @test !isempty(read(stderr_path, String))
+            if exitcode == 4
+                @test failure["result"]["status"] == "partial"
+                @test !isempty(failure["result"]["created"])
+                @test only(failure["result"]["rollback"])["status"] == "removed"
+            end
+            @test [s.name for s in LibTmux.sessions(LibTmux.snapshot(server))] == ["installed"]
+        end
     end
 end
 
