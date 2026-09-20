@@ -33,7 +33,7 @@ function parameters(arguments)
         error("windows must be between sessions and 32")
     1 <= defaults["panes"] <= 4 || error("panes per window must be in 1:4")
     0 <= defaults["links"] <= 8 || error("extra shared links must be in 0:8")
-    0 <= defaults["bytes"] <= 16384 || error("output bytes must be in 0:16384")
+    0 <= defaults["bytes"] <= 4 * 1024^2 || error("input bytes must be in 0:4194304")
     ispath(output) && error("refusing to replace an existing measurement file")
     defaults, output
 end
@@ -62,6 +62,8 @@ function source_hashes()
 end
 
 function setup_graph(server, options)
+    history = max(2000, cld(options["bytes"], 20) + 200)
+    set_option(server, :global_session, "history-limit", string(history))
     for index = 1:options["sessions"]
         new_session(server; name="bench_$index", command=["/bin/cat"])
     end
@@ -109,7 +111,10 @@ function setup_graph(server, options)
         string(target.id);
         input=codeunits(payload),
     )
-    (; graph=snapshot(server), primary, target)
+    captured = capture_bytes(server, target; start_line=:history)
+    count(==(0x78), captured) == options["bytes"] ||
+        error("fixture capture lost seeded bytes; check pane width and history capacity")
+    (; graph=snapshot(server), primary, target, captured)
 end
 
 function local_trials(graph)
@@ -159,24 +164,40 @@ const MODES = (
 
 function workload(mode, server, connection, commands, query, target)
     lane = startswith(mode, "subprocess") ? server : connection
+    started = time_ns()
     outcomes = if endswith(mode, "group")
         run_group(lane, commands)
     else
         concurrency = endswith(mode, "serial") ? 1 : 4
         run_batch(lane, commands; concurrency)
     end
+    mutation_ns = time_ns() - started
     # Opaque subprocess groups cannot attribute aggregate success to steps.
     if outcomes isa GroupResult && outcomes.opaque
         @assert outcomes.aggregate !== nothing && outcomes.aggregate.exitcode == 0
     else
         @assert all(outcome -> outcome.status === :completed, outcomes)
     end
+    started = time_ns()
     graph = snapshot(lane)
+    snapshot_ns = time_ns() - started
+    started = time_ns()
     matched = filter(query, panes(graph))
+    ids = entitykey.(matched)
+    query_ns = time_ns() - started
+    started = time_ns()
+    capture = capture_bytes(lane, target; start_line=:history)
+    capture_ns = time_ns() - started
     (;
         outcomes,
-        ids=entitykey.(matched),
-        capture=capture_bytes(lane, target; start_line=:history),
+        ids,
+        capture,
+        phases=Dict(
+            "mutation"=>mutation_ns,
+            "snapshot"=>snapshot_ns,
+            "query"=>query_ns,
+            "capture"=>capture_ns,
+        ),
     )
 end
 
@@ -185,6 +206,8 @@ function workflow_trials(server, connection, target, options, samples)
     query = PaneWhere(active=true, width=F.AtLeast(10))
     expected = entitykey.(filter(query, panes(snapshot(server))))
     capture = capture_bytes(server, target; start_line=:history)
+    count(==(0x78), capture) == options["bytes"] ||
+        error("control attachment changed the captured payload")
     for iteration = 0:options["samples"]
         modes = shuffle(random, collect(MODES))
         for mode in modes
@@ -217,6 +240,9 @@ function workflow_trials(server, connection, target, options, samples)
                     "operation_count"=>length(commands),
                     "result_count"=>length(result.ids),
                     "capture_bytes"=>length(result.capture),
+                    "phases_ns"=>result.phases,
+                    "mutations_per_second"=>length(commands) * 1e9 /
+                                            result.phases["mutation"],
                     "statuses"=>string.([outcome.status for outcome in result.outcomes]),
                     "ordering"=>endswith(mode, "group") || endswith(mode, "serial") ?
                                 "submission order" :
@@ -238,7 +264,7 @@ end
 function main(arguments)
     options, output = parameters(arguments)
     report = Dict{String,Any}(
-        "schema_version"=>1,
+        "schema_version"=>2,
         "status"=>"running",
         "julia"=>string(VERSION),
         "threads"=>Threads.nthreads(),
@@ -253,6 +279,8 @@ function main(arguments)
             "Buffer deletion is the common audited group workload; acquisition/capture follow it",
             "Snapshot acquisition is stable after capture, not an atomic transaction",
             "No peak backlog instrumentation; pending_after reports the retirement boundary",
+            "Input bytes are seeded x characters; screen capture also contains line breaks",
+            "Phase timings isolate mutation, snapshot, local query and capture within one workload",
         ],
     )
     environment = Dict(
@@ -261,8 +289,10 @@ function main(arguments)
         "SHELL"=>"/bin/sh",
     )
     whole = time_ns()
+    directory = nothing
     try
         with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do server
+            directory = dirname(server.socket_path)
             report["tmux"] = strip(
                 decode_text(
                     run_command(server, "display-message", "-p", "#{version}").stdout,
@@ -277,6 +307,11 @@ function main(arguments)
                 "panes"=>length(panes(fixture.graph)),
                 "windowlinks"=>length(windowlinks(fixture.graph)),
                 "paneoccurrences"=>length(paneoccurrences(fixture.graph)),
+            )
+            report["output_fixture"] = Dict(
+                "seeded_bytes"=>options["bytes"],
+                "capture_bytes"=>length(fixture.captured),
+                "capture_sha256"=>bytes2hex(sha256(fixture.captured)),
             )
             report["queries"] = local_trials(fixture.graph)
             opening = time_ns()
@@ -300,6 +335,9 @@ function main(arguments)
             report["clients_after_close"] = 0
         end
         report["owned_server_closed"] = true
+        report["socket_directory_removed"] = !ispath(directory)
+        report["socket_directory_removed"] ||
+            error("owned socket directory survived cleanup")
         report["status"] = "pass"
     catch error
         report["status"] = "fail"

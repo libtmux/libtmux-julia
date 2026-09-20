@@ -62,6 +62,8 @@ and each transport's semicolon group. Grouping applies to the deletion
 commands; snapshot acquisition and capture follow it. Independent batches
 preserve input-indexed results but need not execute in order. Opaque
 subprocess groups cannot attribute success to individual steps.
+Each sample records mutation, snapshot, local-query and capture time separately.
+Mutation throughput counts the deletion commands only.
 
 BenchmarkTools separately measures closure/vector, criterion/vector,
 criterion/Selection, lazy, decoded and nested-relation queries. Local queries
@@ -76,6 +78,25 @@ Record actual entity and occurrence counts from the result, not just input
 dimensions. RSS is the process lifetime high-water mark; Julia allocations
 refer to the measured workflow. An after-operation backlog of zero does not
 establish a zero peak backlog.
+
+For a multi-megabyte capture, run the same workload with a larger input:
+
+```console
+$ julia \
+    --startup-file=no \
+    --project=benchmark \
+    --threads=4 \
+    benchmark/workflows.jl \
+    samples=20 \
+    bytes=2097152 \
+    output=benchmark/results/capture-2mib.json
+```
+
+`bytes` accepts up to 4 MiB of seeded text. The owned fixture increases history
+capacity and checks that every seeded character survives capture before timing
+begins. Captured output also includes screen line breaks; the report records its
+actual byte count and hash. Every mode must return the same bytes and identities.
+Retain failed runs, including fixture truncation and cleanup failures.
 
 ## Observations and pressure
 
@@ -96,6 +117,9 @@ A controlled raw terminal producer verifies exact bytes and increasing
 cursors. Pressure cases cover slow-subscriber overflow, cancellation,
 unrelated request progress and bounded admission. The polling/event
 comparison requires the same marker to become visible in a captured screen.
+The capacity case fills the pending queue with submitted waits, cancels them
+together, and measures caller wakeup separately from backend retirement.
+It requires an empty queue and confirmed signal cleanup before testing reuse.
 Raw events wake the event strategy; raw bytes are not treated as a screen
 image. Private queue introspection is measurement instrumentation, not a
 supported application API.

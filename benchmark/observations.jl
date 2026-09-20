@@ -80,10 +80,9 @@ function observation_scope(f)
     result
 end
 
-# Measurement instrumentation only: observe reader registration under its lock.
+# Measurement instrumentation only: observe state under the connection lock.
 # The workload itself uses public APIs. The deadline task is closed and joined.
-function observation_reader_ready(stream, timeout)
-    connection = stream.connection
+function observation_state_ready(ready, connection, timeout)
     expired = Ref(false)
     timer = Timer(timeout)
     watcher = Threads.@spawn begin
@@ -103,11 +102,10 @@ function observation_reader_ready(stream, timeout)
     end
     try
         lock(connection.lock) do
-            while stream.consumer === nothing && stream.open && !expired[]
+            while !ready() && connection.state === :open && !expired[]
                 wait(connection.changed)
             end
-            stream.consumer !== nothing && stream.open ||
-                error("reader readiness not proved")
+            ready() || error("benchmark state readiness not proved")
         end
     finally
         close(timer)
@@ -115,6 +113,12 @@ function observation_reader_ready(stream, timeout)
     end
     nothing
 end
+
+observation_reader_ready(stream, timeout) = observation_state_ready(
+    () -> stream.consumer !== nothing && stream.open,
+    stream.connection,
+    timeout,
+)
 
 function observation_source_hashes()
     result = Dict{String,String}()
@@ -326,12 +330,20 @@ end
 
 function observation_capacity_trial(server, connection, options)
     reserved = Any[]
+    tokens = CancellationToken[]
+    readers = Task[]
     observation_scope() do own
         own(() -> begin
-            while !isempty(reserved)
-                signal = pop!(reserved)
-                notify(signal)
-                wait(signal; timeout=options.timeout)
+            foreach(cancel!, tokens)
+            foreach(wait, readers)
+            for signal in reserved
+                if lock(() -> signal.state === :minted, connection.lock)
+                    notify(signal)
+                    wait(signal; timeout=options.timeout)
+                end
+            end
+            observation_state_ready(connection, options.timeout) do
+                isempty(connection.pending) && isempty(connection.signals)
             end
         end)
         setup = time_ns()
@@ -339,6 +351,20 @@ function observation_capacity_trial(server, connection, options)
         for _ = 1:options.capacity
             push!(reserved, control_signal(connection))
         end
+        for signal in reserved
+            token = CancellationToken()
+            push!(tokens, token)
+            push!(readers, Threads.@spawn try
+                wait(signal; timeout=options.timeout, cancel=token)
+            catch error
+                error
+            end)
+        end
+        observation_state_ready(connection, options.timeout) do
+            all(signal -> signal.request !== nothing && signal.request.sent, reserved)
+        end
+        pending_peak = lock(() -> length(connection.pending), connection.lock)
+        pending_peak == options.capacity || error("pending saturation not established")
         setup_ns = time_ns()-setup
         started = time_ns()
         failure = try
@@ -349,9 +375,18 @@ function observation_capacity_trial(server, connection, options)
         end
         reject_ns = time_ns()-started
         failure isa ArgumentError || error("reserved connection capacity was not enforced")
-        signal = pop!(reserved)
-        notify(signal)
-        wait(signal; timeout=options.timeout)
+        started = time_ns()
+        foreach(cancel!, tokens)
+        outcomes = fetch.(readers)
+        cancel_ns = time_ns()-started
+        all(error -> error isa RequestCancelled && error.sent, outcomes) ||
+            error("submitted cancellation storm did not cancel every caller")
+        observation_state_ready(connection, options.timeout) do
+            isempty(connection.pending) && isempty(connection.signals)
+        end
+        retirement_ns = time_ns()-started
+        all(signal -> signal.cleanup_done && signal.error === nothing, reserved) ||
+            error("backend signal retirement not confirmed")
         started = time_ns()
         run_command(
             connection,
@@ -365,9 +400,14 @@ function observation_capacity_trial(server, connection, options)
             "setup_ns"=>setup_ns,
             "capacity"=>options.capacity,
             "rejection_ns"=>reject_ns,
+            "submitted_pending_peak"=>pending_peak,
+            "cancelled_sent_requests"=>length(outcomes),
+            "cancel_to_callers_ns"=>cancel_ns,
+            "cancel_to_retirement_ns"=>retirement_ns,
+            "pending_after"=>lock(() -> length(connection.pending), connection.lock),
+            "signals_after"=>lock(() -> length(connection.signals), connection.lock),
             "recovery_request_ns"=>elapsed,
-            "held_during_recovery"=>length(reserved),
-            "domain"=>"connection credits reserved by public ControlSignal handles",
+            "domain"=>"submitted waits at capacity; cancellation callers and backend retirement measured separately",
         )
     end
 end
@@ -497,7 +537,7 @@ function observation_main(arguments)
     samples = Any[]
     started = time_ns()
     report = Dict{String,Any}(
-        "schema_version"=>1,
+        "schema_version"=>2,
         "status"=>"running",
         "julia"=>string(VERSION),
         "threads"=>Threads.nthreads(),
@@ -529,7 +569,8 @@ function observation_main(arguments)
             "Capture polling intentionally repeats public capture calls with no sleeps, at most 256 attempts",
             "Each timing includes public API work and scheduling; marker production uses the same paste_bytes path",
             "Private locked reader readiness is measurement instrumentation, not a public library guarantee",
-            "Capacity pressure reports bounded outcomes, not a throughput or maximum-scale comparison",
+            "Capacity pressure fills the primary pending queue with submitted waits; the auxiliary cleanup lane has separate capacity",
+            "Cancellation caller latency is separate from confirmed backend retirement; neither implies rollback",
             "First use is retained; no artificial package warmup or dependency installation runs here",
             "Small raw samples do not establish population tail latency or relative speed",
             "RSS is the driver process lifetime high water, not per-phase allocation or daemon RSS",
