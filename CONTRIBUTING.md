@@ -181,10 +181,13 @@ The consumer checker exports read-only source copies into a directory outside
 the checkout. Each package gets an isolated project, manifest, and depot.
 Preparation downloads dependencies into the isolated depot and warms normal
 imports. The subsequent check runs offline.
-Dependency acquisition uses normal compilation. Matrix setup first copies the
-prepared registry into the consumer depot and verifies every file's SHA-256.
-The copy shares no writable files; consumer projects retain one owned depot
-and resolve library source only from their immutable exports.
+Dependency acquisition uses normal compilation. Matrix setup copies the
+prepared registry and completed stdlib caches into the consumer depot. The
+selected Julia executable supplies the stdlib module names and cache version;
+product caches are excluded. Every copied file has verified SHA-256 bytes
+and independent storage. Consumer projects retain one owned depot and resolve
+library source only from their immutable exports. Julia still validates cache
+compatibility and compiles each exported product normally.
 It is setup, not an inner or mid check. These commands share one shell:
 
 ```console

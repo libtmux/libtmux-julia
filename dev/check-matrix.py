@@ -251,6 +251,44 @@ def seed_registry_cache(source_depot, consumer_depot):
     return records
 
 
+def seed_stdlib_cache(source_depot, consumer_depot, version, modules):
+    source = source_depot / "compiled" / version
+    destination = consumer_depot / "compiled" / version
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("stdlib seeding requires an empty consumer cache")
+    records = []
+    for module in sorted(modules):
+        directory = source / module
+        if directory.is_symlink():
+            raise ValueError("stdlib cache must not contain symbolic links")
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.iterdir()):
+            if path.suffix not in (".ji", ".so", ".dylib") or path.name.startswith("jl_"):
+                continue
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("stdlib cache must contain regular completed files")
+            relative = path.relative_to(source)
+            copied = destination / relative
+            expected = hashlib.sha256(path.read_bytes()).hexdigest()
+            copied.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, copied)
+            if copied.samefile(path) or hashlib.sha256(copied.read_bytes()).hexdigest() != expected:
+                raise ValueError("stdlib copy failed independent-byte verification")
+            records.append(dict(file=str(relative), sha256=expected, bytes=copied.stat().st_size))
+    return records
+
+
+def stdlib_cache_profile(julia, env):
+    program = '''println(VERSION)
+    println("v", VERSION.major, ".", VERSION.minor)
+    foreach(println, filter(name -> isdir(joinpath(Sys.STDLIB, name)), readdir(Sys.STDLIB)))
+    '''
+    lines = subprocess.check_output([julia, "--startup-file=no", "--history-file=no",
+                                     "-e", program], env=env, text=True).splitlines()
+    return dict(julia=lines[0], version=lines[1], modules=lines[2:])
+
+
 def prepare(args):
     stage = checked_stage(args.stage, create=True)
     initial_digest = source_digest()
@@ -270,6 +308,11 @@ def prepare(args):
     started = time.monotonic()
     registry_files = seed_registry_cache(stage / "depot", consumers / "depot")
     registry_seed = dict(seconds=time.monotonic() - started, files=registry_files)
+    started = time.monotonic()
+    profile = stdlib_cache_profile(args.julia, env)
+    stdlib_files = seed_stdlib_cache(stage / "depot", consumers / "depot",
+                                     profile["version"], profile["modules"])
+    stdlib_seed = dict(seconds=time.monotonic() - started, profile=profile, files=stdlib_files)
     subprocess.run([args.julia, "--startup-file=no", "--compile=yes", "-O2",
                     str(ROOT / "dev/check-consumers.jl"), "prepare", str(consumers)],
                    cwd=ROOT, env=env, check=True)
@@ -277,6 +320,7 @@ def prepare(args):
         raise ValueError("source changed during preparation; rerun with stable source (dependency cache retained)")
     metadata = dict(schema_version=1, source_digest=initial_digest, tools=PINNED_TOOLS,
                     consumers=str(consumers), project=str(project), registry_seed=registry_seed,
+                    stdlib_seed=stdlib_seed,
                     tool_preferences=tomllib.loads(TOOL_PREFERENCES))
     (stage / "prepared.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print("PASS prepared dependencies and immutable external consumers; no timed checks run")
@@ -377,6 +421,33 @@ println("PASS admitted version arguments construct real Pkg specifications")
                        check=True)
     with tempfile.TemporaryDirectory(prefix="libtmux-julia-matrix-test-") as directory:
         base = Path(directory)
+        compiled = base / "tool-depot" / "compiled" / "v1.13"
+        for module in ("Pkg", "LibTmux"):
+            (compiled / module).mkdir(parents=True)
+            (compiled / module / "cache.ji").write_bytes(b"cache bytes")
+            (compiled / module / "cache.so").write_bytes(b"native bytes")
+        (compiled / "Pkg" / "cache.pidfile").write_text("unfinished")
+        (compiled / "Pkg" / "jl_incomplete.so").write_text("unfinished")
+        destination = base / "stdlib-consumer"
+        copied = seed_stdlib_cache(compiled.parent.parent, destination, "v1.13", ["Pkg"])
+        assert [item["file"] for item in copied] == ["Pkg/cache.ji", "Pkg/cache.so"]
+        assert not (destination / "compiled" / "v1.13" / "LibTmux").exists()
+        copy = destination / "compiled" / "v1.13" / "Pkg" / "cache.ji"
+        copy.write_bytes(b"changed consumer cache")
+        assert (compiled / "Pkg" / "cache.ji").read_bytes() == b"cache bytes"
+        try:
+            seed_stdlib_cache(compiled.parent.parent, destination, "v1.13", ["Pkg"])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("stdlib seeding overwrote a consumer cache")
+        (compiled / "Pkg" / "linked.ji").symlink_to(compiled / "Pkg" / "cache.ji")
+        try:
+            seed_stdlib_cache(compiled.parent.parent, base / "linked-stdlib", "v1.13", ["Pkg"])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("stdlib seeding accepted a symbolic link")
         registry = base / "quality-depot" / "registries"
         registry.mkdir(parents=True)
         (registry / "General.toml").write_bytes(b"registry metadata")
@@ -427,7 +498,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         cells = support_cells()
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
-    print("PASS independent registry copies, argv boundaries, failed/missing/deadline status, owned reaping and planned-cell identity")
+    print("PASS independent registry/stdlib copies, argv boundaries, failed/missing/deadline status, owned reaping and planned-cell identity")
 
 
 def main():
