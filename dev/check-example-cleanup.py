@@ -85,7 +85,8 @@ def terminate_record(record):
         finally:
             os.close(descriptor)
     else:
-        with select.kqueue() as watcher:
+        watcher = select.kqueue()
+        try:
             event = select.kevent(pid, filter=select.KQ_FILTER_PROC,
                                  flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
                                  fflags=select.KQ_NOTE_EXIT)
@@ -100,6 +101,8 @@ def terminate_record(record):
                 os.kill(pid, signal.SIGKILL)
                 if not watcher.control(None, 1, 0.9):
                     raise AssertionError("owned example process did not exit after rescue")
+        finally:
+            watcher.close()
 
 
 def run_example(command, *, tmux, env, cwd, fault=False, diagnostics=True):
