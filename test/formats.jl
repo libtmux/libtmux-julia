@@ -1,9 +1,13 @@
 @testset "typed format observations" begin
     with_tmux() do fixture
         server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-        path =
-            joinpath(fixture.directory, "é 雪\tline\nlibtmux_invented_hint=\n#{pane_id}\\;")
+        physical = joinpath(fixture.directory, "physical")
+        alias = joinpath(fixture.directory, "alias")
+        mkdir(physical)
+        symlink(physical, alias)
+        path = joinpath(alias, "é 雪\tline\nlibtmux_invented_hint=\n#{pane_id}\\;")
         mkpath(path)
+        expected_path = realpath(path)
         session_ref =
             new_session(server; name="formats", command=["/bin/cat"], start_directory=path)
         captured = snapshot(server)
@@ -17,7 +21,7 @@
             LibTmux.FormatField("version"),
         )
         observed = LibTmux.read_formats(server, pane_ref, fields...)
-        @test observed[1].raw == path && observed[1].value == path
+        @test observed[1].raw == expected_path && observed[1].value == expected_path
         @test observed[2].value isa Int && observed[2].value > 0
         @test observed[3].value === true
         @test observed[4].value === false
@@ -62,7 +66,7 @@
         @test "libtmux_invented_hint" in hints.candidate_names
         @test hints.availability === :unverified && !hints.complete
         @test hints.result isa CommandResult && hints.result.exitcode == 0
-        @test occursin(path, decode_text(hints.result.stdout))
+        @test occursin(expected_path, decode_text(hints.result.stdout))
         literal = "é\tline\n"
         raw = LibTmux.render_format(
             server,
