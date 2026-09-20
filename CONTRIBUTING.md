@@ -224,6 +224,14 @@ $ julia \
     dev/check-consumers.jl examples "$consumer_stage"
 ```
 
+This outer check also requires Python 3.12+ and `ps`. It runs the exported
+programs unchanged through an audited tmux executable. Each owned example
+runs successfully and with a command failure injected after session creation.
+The checker independently verifies daemon/client retirement and socket-directory
+removal. A deliberate missing-close case proves that the audit detects leaks.
+The pure workspace planning example is explicitly exempt from tmux acquisition.
+These checks exercise command failure, not arbitrary process termination.
+
 Check installed launchers from the exported packages, including real MCP
 clients and workspace load/freeze/cancellation:
 

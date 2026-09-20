@@ -295,9 +295,21 @@ function check_examples(stage)
         end
     end
     isempty(programs) && error("No executable examples were discovered")
+    python = something(Sys.which("python3"), "python3")
+    checker = joinpath(@__DIR__, "check-example-cleanup.py")
+    tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
+    core_project = joinpath(stage, "environments", "LibTmux")
+    audit = `$python $checker --negative-control --tmux $tmux --cwd $stage -- $(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$core_project`
+    run_consumer_child(
+        "example cleanup negative control",
+        addenv(Cmd(audit; dir=stage), isolated_environment(stage)...),
+    )
     for (name, program) in programs
         project = joinpath(stage, "environments", name)
-        command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$project $program`
+        example = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$project $program`
+        pure = name == "LibTmuxWorkspace" && basename(program) == "plan.jl"
+        mode = pure ? ["--pure"] : String[]
+        command = `$python $checker $mode --tmux $tmux --cwd $stage -- $example`
         started = time_ns()
         run_consumer_child(
             "$name example $(relpath(program, joinpath(stage, "source", name)))",
