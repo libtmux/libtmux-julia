@@ -63,6 +63,20 @@ function _control_option_arguments(
     (; args..., context, metadata)
 end
 
+function _configuration_text(context, result::ControlResult)
+    _configuration_printed_text(_configuration_text(result)) do
+        probe = _control_request(
+            context.connection,
+            ["display-message", "-p", _CONFIGURATION_PRINT_PROBE],
+            _ControlReplyPolicy(; prefix="LIBTMUX:", diagnostics=true);
+            timeout=_snapshot_remaining(context.started, context.budget),
+            cancel=context.cancel,
+        )
+        probe.failed && throw(ControlCommandError(probe, "display-message"))
+        probe
+    end
+end
+
 function _control_named_configuration(context, scope, name, metadata)
     result = _control_request(
         context.connection,
@@ -77,7 +91,7 @@ function _control_named_configuration(context, scope, name, metadata)
             return _ConfigurationRow[]
         throw(ControlCommandError(result, "show-options"))
     end
-    text = _configuration_text(result)
+    text = _configuration_text(context, result)
     text === nothing && return _ConfigurationRow[]
     rows = _ConfigurationRow[]
     for line in split(text, '\n')

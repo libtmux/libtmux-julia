@@ -8,7 +8,7 @@
             alias = joinpath(fixture.directory, "alias")
             mkdir(physical)
             symlink(physical, alias)
-            text = joinpath(alias, "雪\tline\n%end 1 2 1\n\\literal")
+            text = joinpath(alias, "雪\tline\n%end 1 2 1\n\\literal" * raw"$ENV")
             mkdir(text)
             expected_path = realpath(text)
             session = new_session(

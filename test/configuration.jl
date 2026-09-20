@@ -5,7 +5,7 @@
         captured = snapshot(server)
         window_ref = only(windows(captured)).ref
         pane_ref = only(panes(captured)).ref
-        value = "empty?\tline\n#{pane_id}\\;\n"
+        value = "empty?\tline\n#{pane_id}\\;\n" * raw"$ENV \$ENV ${ENV} $_env"
 
         @test LibTmux.get_option(server, :server, "escape-time") isa String
         @test LibTmux.get_option(server, session_ref, "status-left") === nothing

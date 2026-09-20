@@ -139,9 +139,22 @@
                     @test get_option(connection, :global_session, "destroy-unattached") isa
                           String
                 end
-                for literal in ("~", "'", "\"", "\\", "\$ENV", String(UInt8[1:31; 127]))
+                for literal in (
+                    "~",
+                    "'",
+                    "\"",
+                    "\\",
+                    "\$ENV",
+                    String(UInt8[1:31; 127]),
+                    raw"\$ENV",
+                    raw"\\$ENV",
+                    raw"${ENV} $_env $9 $- $",
+                )
                     set_option(connection, session, "@literal", literal)
                     @test get_option(connection, session, "@literal") == literal
+                    if isascii(literal) && all(c -> !iscntrl(c), literal)
+                        @test get_option(server, session, "@literal") == literal
+                    end
                 end
                 @test_throws ControlCommandError set_option(
                     connection,

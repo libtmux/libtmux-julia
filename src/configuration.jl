@@ -78,12 +78,33 @@ function _configuration_text(result)
     String(chop(text; tail=1))
 end
 
+const _CONFIGURATION_PRINT_PROBE = raw"LIBTMUX:$value"
+const _CONFIGURATION_DOLLAR_ESCAPE = r"\\\$(?=[A-Za-z_{])"
+
+function _configuration_printed_text(probe, text)
+    text === nothing && return nothing
+    occursin(_CONFIGURATION_DOLLAR_ESCAPE, text) || return text
+    observed = probe().stdout
+    # tmux 3.4 adds this escape in server_client_print, after args_escape.
+    observed == codeunits(raw"LIBTMUX:\$value" * "\n") &&
+        return replace(text, _CONFIGURATION_DOLLAR_ESCAPE => raw"$")
+    observed == codeunits(_CONFIGURATION_PRINT_PROBE * "\n") ||
+        throw(ArgumentError("unexpected tmux configuration print encoding"))
+    text
+end
+
+function _configuration_text(context, result::CommandResult)
+    _configuration_printed_text(_configuration_text(result)) do
+        _operation_command(context, "display-message", "-p", _CONFIGURATION_PRINT_PROBE)
+    end
+end
+
 function _configuration_rows(context, scope, requested_name; hooks=true)
     flags = _option_scope_flags(scope)
     args = hooks ? ["show-options", "-A", "-H", flags...] : ["show-options", "-A", flags...]
     result = _operation_command(context, args...)
     rows = _ConfigurationRow[]
-    text = _configuration_text(result)
+    text = _configuration_text(context, result)
     text === nothing && return rows
     for line in split(text, '\n')
         startswith(line, requested_name) || continue
@@ -135,7 +156,7 @@ function _get_option(context, scope, name, index, inherit)
     inherit && push!(flags, "-A")
     key = index === nothing ? name : "$name[$index]"
     result = _operation_command(context, "show-options", flags..., "-v", "--", key)
-    _configuration_text(result)
+    _configuration_text(context, result)
 end
 
 """
@@ -218,7 +239,7 @@ function _get_environment(context, scope, name; inherited=false)
     if hidden
         result = _operation_command(context, "show-environment", flags..., "-h", "--", name)
     end
-    text = _configuration_text(result)
+    text = _configuration_text(context, result)
     text == "-$name" && return EnvironmentValue(nothing, hidden, inherited)
     text !== nothing && startswith(text, "$name=") ||
         throw(ArgumentError("invalid environment reply for $name"))

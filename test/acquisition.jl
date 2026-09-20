@@ -91,3 +91,28 @@ end
     @test pane.current_command == "cat"
     @test_throws SnapshotCoverageError LibTmux._observed_int("", "pane_width")
 end
+
+@testset "real tmux format row encoding" begin
+    OwnedTmux.with_tmux() do fixture
+        value =
+            "tab\tline\nslash\\n #{raw} π😀\r  " *
+            raw"$ENV \$ENV \d ${ENV} $_env $9 $" *
+            String(UInt8[1:31; 127])
+        for arguments in (
+            ("new-session", "-d", "-s", "rows", "cat"),
+            ("set-environment", "-g", "libtmux_test_row", value),
+            ("set-environment", "-g", "libtmux_test_empty", ""),
+        )
+            command = OwnedTmux.tmuxcmd(fixture, arguments...)
+            process = run(pipeline(ignorestatus(command); stdout=devnull, stderr=devnull))
+            @test success(process)
+        end
+        template = LibTmux._format_template(["libtmux_test_row", "libtmux_test_empty"])
+        command = OwnedTmux.tmuxcmd(fixture, "list-panes", "-t", "rows:0", "-F", template)
+        errors = IOBuffer()
+        output = IOBuffer()
+        process = run(pipeline(ignorestatus(command); stdout=output, stderr=errors))
+        @test success(process)
+        @test LibTmux._decode_format_rows(take!(output), 2) == [[value, ""]]
+    end
+end

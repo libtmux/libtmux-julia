@@ -14,6 +14,9 @@
         @test decode(@view(codeunits("!a\tb\n!")[2:5]), 2) == [["a", "b"]]
         @test decode(codeunits("\\n\n"), 1) == [["\n"]]
         @test decode(codeunits("\\\\\n"), 1) == [["\\"]]
+        for encoded in ("\\12\n", "\\400\n", "\\0q0\n")
+            @test_throws ArgumentError decode(codeunits(encoded), 1)
+        end
 
         for value in
             ("a\tb", "a\t", "\\", "a\tb\\\n", "\\x\n", "\\\t\n", "a\tb\tc\n", "a\n")
@@ -23,7 +26,7 @@
         @test_throws ArgumentError decode(UInt8[0xc3, 0x0a], 1)
         @test_throws ArgumentError decode(UInt8[], 0)
 
-        prefix = raw"#{s|\\|\\\\|;s|" * "\t" * raw"|\\t|;s|" * "\n" * raw"|\\n|:"
+        prefix = raw"#{s|\\|\\\\|;s|[$]|\\d|;s|" * "\t" * raw"|\\t|;s|" * "\n" * raw"|\\n|:"
         @test template(["pane_id", "pane_title"]) ==
               prefix * "pane_id}\t" * prefix * "pane_title}"
         @test template(["x", "x"]) == prefix * "x}\t" * prefix * "x}"
@@ -45,34 +48,6 @@
     end
 end
 
-if get(ENV, "LIBTMUX_TEST_FORMAT_ROWS", "0") == "1"
-    if !isdefined(Main, :OwnedTmux)
-        include("support/owned_tmux.jl")
-    end
-    @testset "real tmux format row encoding" begin
-        OwnedTmux.with_tmux() do fixture
-            value = "tab\tline\nslash\\n #{raw} π😀\r  "
-            for arguments in (
-                ("new-session", "-d", "-s", "rows", "cat"),
-                ("set-environment", "-g", "libtmux_test_row", value),
-                ("set-environment", "-g", "libtmux_test_empty", ""),
-            )
-                command = OwnedTmux.tmuxcmd(fixture, arguments...)
-                process =
-                    run(pipeline(ignorestatus(command); stdout=devnull, stderr=devnull))
-                @test success(process)
-            end
-            template = LibTmux._format_template(["libtmux_test_row", "libtmux_test_empty"])
-            command =
-                OwnedTmux.tmuxcmd(fixture, "list-panes", "-t", "rows:0", "-F", template)
-            errors = IOBuffer()
-            output = IOBuffer()
-            process = run(pipeline(ignorestatus(command); stdout=output, stderr=errors))
-            @test success(process)
-            @test LibTmux._decode_format_rows(take!(output), 2) == [[value, ""]]
-        end
-    end
-end
 @testset "format update values decode locally" begin
     identity =
         ServerIdentity(socket_path="/tmp/libtmux-julia-uncontacted/s", generation="sample")
