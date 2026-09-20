@@ -6,6 +6,9 @@ and program links. It does not establish runtime correctness.
 
 | Document and Julia fence | Class | Runtime gate | Source or prerequisite |
 | --- | --- | --- | --- |
+| [README.md](../README.md) (1) | executable | owned-context runner | Private server, captured screen and retained snapshot |
+| [README.md](../README.md) (2) | executable | owned-context runner | Captured predicates without a live daemon |
+| [README.md](../README.md) (3) | executable | owned-context runner | Task-based captures and scoped control cleanup |
 | [docs/criteria-wire.md](../docs/criteria-wire.md) (1) | executable | snippet doctests | Pure criteria wire round trip |
 | [docs/criteria-wire.md](../docs/criteria-wire.md) (2) | executable | snippet doctests | JSON 1.9 criteria codec round trip |
 | [docs/projections.md](../docs/projections.md) (1) | executable | owned-context runner | Owned snapshot passed to pane_rows |
@@ -48,7 +51,7 @@ manual build. `dev/check-consumers.jl examples STAGE` supplies their separate
 owned-tmux runtime check. `dev/check-consumers.jl launchers STAGE` checks both
 installed consumer launchers; shell command blocks are not Julia fences.
 
-`dev/check-doc-examples.jl contextual` executes all five contextual fences
+`dev/check-doc-examples.jl contextual` executes all contextual fences
 exactly as shipped with an owned tmux server, captured rows, a private
 workspace file and installation directory. It checks results and cleanup.
 
