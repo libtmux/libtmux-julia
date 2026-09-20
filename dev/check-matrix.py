@@ -32,6 +32,10 @@ PINNED_TOOLS = {
 # Keep that optional workload out of tool setup; the normal format gate still runs.
 TOOL_PREFERENCES = "[JuliaFormatter]\nprecompile_workload = false\n"
 
+DELIVERY_PHASES = frozenset(("extensions", "docs", "doc-snippets", "doc-contextual",
+                            "imports", "external-examples", "external-launchers"))
+SUITES = ("runtime", "delivery")
+
 TMUX_SHA256 = {
     "3.2a": "551553a4f82beaa8dadc9256800bcc284d7c000081e47aa6ecbb6ff36eacd05f",
     "3.3a": "e4fd347843bd0772c4f48d6dde625b0b109b7a380ff15db21e97c11a4dcdf93f",
@@ -371,10 +375,20 @@ def run(args):
     env = environment(stage, offline=True)
     env.update(LIBTMUX_TEST_TMUX=args.tmux, LIBTMUX_TEST_CLI_COMPILE="normal",
                LIBTMUX_TEST_MINIMAL_CHILD="0")
-    result = dict(schema_version=1, source_digest=metadata["source_digest"],
+    result = dict(schema_version=2, source_digest=metadata["source_digest"],
                   platform=platform.system(), machine=platform.machine(), kernel=platform.release(),
                   wsl="microsoft" in platform.release().lower(), threads=args.threads,
-                  tools=metadata["tools"], status="NOT RUN", phases=[])
+                  tools=metadata["tools"], status="NOT RUN", phases=[], suite=args.suite,
+                  tier=args.tier, active_phase=None)
+    suffix = "" if args.suite == "all" else f"-{args.suite}"
+    destination = stage / f"results-{args.tier}{suffix}-t{args.threads}.json"
+
+    def save():
+        temporary = destination.with_suffix(".tmp")
+        temporary.write_text(json.dumps(result, indent=2) + "\n")
+        temporary.replace(destination)
+
+    save()
     for key, argv in (("julia", [args.julia, "--startup-file=no", "--version"]),
                       ("tmux", [args.tmux, "-V"])):
         resolved = shutil.which(argv[0])
@@ -391,19 +405,35 @@ def run(args):
         if mismatch:
             result["reason"] = f"observed {mismatch} differs from the requested cell"
         else:
-            for name, argv, budget, tier in command_plan(args, stage, metadata):
-                if args.tier != "all" and args.tier != tier:
-                    continue
-                item = phase(name, argv, cwd=ROOT, env=env, log=stage / "logs" / f"{name}.log", budget=budget)
-                result["phases"].append(item)
-                print(f"{item['status']} {name} {item['seconds']:.3f}s", flush=True)
-            result["status"] = "PASS" if result["phases"] and all(p["status"] == "PASS" for p in result["phases"]) else "FAIL"
-            if metadata["source_digest"] != source_digest():
-                result.update(status="STALE", reason="source changed during checks")
-    destination = stage / f"results-{args.tier}-t{args.threads}.json"
-    destination.write_text(json.dumps(result, indent=2) + "\n")
+            commands = selected_commands(args, stage, metadata)
+            result.update(status="RUNNING", planned_phases=[item[0] for item in commands])
+            try:
+                for name, argv, budget, tier in commands:
+                    result["active_phase"] = name
+                    save()
+                    item = phase(name, argv, cwd=ROOT, env=env, log=stage / "logs" / f"{name}.log", budget=budget)
+                    result["phases"].append(item)
+                    result["active_phase"] = None
+                    save()
+                    print(f"{item['status']} {name} {item['seconds']:.3f}s", flush=True)
+                result["status"] = "PASS" if result["phases"] and all(p["status"] == "PASS" for p in result["phases"]) else "FAIL"
+                if metadata["source_digest"] != source_digest():
+                    result.update(status="STALE", reason="source changed during checks")
+            except BaseException as error:
+                result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
+                              error_type=type(error).__name__)
+                raise
+            finally:
+                save()
+    save()
     print(f"{result['status']} matrix result: {destination}")
     return 0 if result["status"] == "PASS" else 1
+
+
+def selected_commands(args, stage, metadata):
+    return [item for item in command_plan(args, stage, metadata)
+            if (args.tier == "all" or item[3] == args.tier)
+            and (args.suite == "all" or (item[0] in DELIVERY_PHASES) == (args.suite == "delivery"))]
 
 
 def self_test(julia=None):
@@ -498,13 +528,52 @@ println("PASS admitted version arguments construct real Pkg specifications")
         cells = support_cells()
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
-    print("PASS independent registry/stdlib copies, argv boundaries, failed/missing/deadline status, owned reaping and planned-cell identity")
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from contextlib import redirect_stdout
+        from io import StringIO
+        args = SimpleNamespace(stage=str(base), julia="julia", tmux="tmux", threads=1,
+                               tier="all", suite="all", expected_julia=None,
+                               expected_tmux=None, expected_os=None, expected_arch=None)
+        metadata = dict(source_digest="fixed", tools={}, project=str(base), consumers=str(base),
+                        tool_preferences=tomllib.loads(TOOL_PREFERENCES))
+        all_names = [item[0] for item in selected_commands(args, base, metadata)]
+        partitions = []
+        for suite in SUITES:
+            args.suite = suite
+            partitions.extend(item[0] for item in selected_commands(args, base, metadata))
+        assert len(partitions) == len(set(partitions)) == len(all_names)
+        assert set(partitions) == set(all_names)
+        assert DELIVERY_PHASES <= set(all_names)
+        args.suite = "all"
+        (base / ".libtmux-julia-matrix").touch()
+        (base / "LocalPreferences.toml").write_text(TOOL_PREFERENCES)
+        (base / "prepared.json").write_text(json.dumps(metadata))
+        plan = [("first", [], 30, "unit"), ("second", [], 30, "unit")]
+        with patch(__name__ + ".source_digest", return_value="fixed"), \
+             patch.object(shutil, "which", return_value="binary"), \
+             patch.object(subprocess, "check_output", return_value="version"), \
+             patch(__name__ + ".command_plan", return_value=plan), \
+             patch(__name__ + ".phase", side_effect=[
+                 dict(name="first", status="FAIL", seconds=0.01), KeyboardInterrupt()]), \
+             redirect_stdout(StringIO()):
+            try:
+                run(args)
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("matrix interruption was swallowed")
+        retained = json.loads((base / "results-all-t1.json").read_text())
+        assert retained["status"] == "INTERRUPTED" and retained["active_phase"] == "second"
+        assert retained["phases"][0]["status"] == "FAIL"
+    print("PASS owned preparation, phase retirement, suite coverage and interrupted result retention")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("matrix")
+    matrix = sub.add_parser("matrix")
+    matrix.add_argument("--split", action="store_true", help="emit runtime and delivery jobs for every cell")
     self_check = sub.add_parser("self-test")
     self_check.add_argument("--julia", help="also check real Pkg argument conversion offline")
     build = sub.add_parser("build-tmux", help="setup only: download, verify and build one pinned release")
@@ -519,12 +588,17 @@ def main():
     execution.add_argument("--tmux", default="tmux")
     execution.add_argument("--threads", type=int, choices=(1, 4), default=1)
     execution.add_argument("--tier", choices=("unit", "quality", "outer", "all"), default="all")
+    execution.add_argument("--suite", choices=("all", *SUITES), default="all")
     for option in ("julia", "tmux", "os", "arch"):
         execution.add_argument(f"--expected-{option}")
     args = parser.parse_args()
     try:
         if args.command == "matrix":
-            print(json.dumps({"include": support_cells()}))
+            cells = support_cells()
+            if args.split:
+                cells = [dict(cell, suite=suite, job_label=f"{cell['label']}-{suite}")
+                         for cell in cells for suite in SUITES]
+            print(json.dumps({"include": cells}))
         elif args.command == "self-test":
             self_test(args.julia)
         elif args.command == "build-tmux":

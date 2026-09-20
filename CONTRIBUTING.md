@@ -309,6 +309,17 @@ extensions, the manual, external imports and discovered examples.
 Its stopped-reader checks exercise actual launcher stdio and require owned
 writers to retire when their readers stop consuming output.
 
+CI splits each platform cell into `runtime` and `delivery` suites to keep
+preparation and checks within the job budget. Runtime covers units, quality
+and library/application tests. Delivery covers extensions, documentation,
+external imports, examples and launchers. Both must pass at the same source
+revision to complete a cell. Use `--suite runtime` or `--suite delivery` to
+run one partition locally; omitting the option runs both.
+
+The driver saves structured results before and after each phase. Interrupted
+runs retain completed failures and identify the unfinished phase; they never
+establish a passing cell.
+
 Print the exact planned version/platform cells:
 
 ```console
