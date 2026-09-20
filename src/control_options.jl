@@ -1,5 +1,3 @@
-include("options_generated.jl")
-
 function _control_option_metadata(context, scope, name, operation)
     startswith(name, '@') && return (
         scope=UInt8(15),
@@ -115,59 +113,6 @@ function _control_named_configuration(context, scope, name, metadata)
     rows
 end
 
-# Invert args_escape's VIS representation as data, without tmux expansion or eval.
-function _control_option_literal(value::AbstractString)
-    bytes = codeunits(value)
-    isempty(bytes) && throw(ArgumentError("missing quoted option value"))
-    first_index, last_index = 1, length(bytes)
-    if bytes[1] in (0x22, 0x27)
-        length(bytes) >= 2 && bytes[end] == bytes[1] ||
-            throw(ArgumentError("invalid quoted option value"))
-        first_index += 1
-        last_index -= 1
-    end
-    output = UInt8[]
-    index = first_index
-    escapes = Dict{UInt8,UInt8}(
-        0x61=>0x07,
-        0x62=>0x08,
-        0x74=>0x09,
-        0x6e=>0x0a,
-        0x76=>0x0b,
-        0x66=>0x0c,
-        0x72=>0x0d,
-        0x73=>0x20,
-        0x65=>0x1b,
-    )
-    while index <= last_index
-        byte = bytes[index]
-        index += 1
-        if byte != 0x5c
-            push!(output, byte)
-            continue
-        end
-        index <= last_index || throw(ArgumentError("truncated option escape"))
-        byte = bytes[index]
-        index += 1
-        if 0x30 <= byte <= 0x37
-            index + 1 <= last_index &&
-            all(b -> 0x30 <= b <= 0x37, bytes[index:(index+1)]) ||
-                throw(ArgumentError("invalid option octal escape"))
-            number = Int(byte-0x30)*64 + Int(bytes[index]-0x30)*8 + Int(bytes[index+1]-0x30)
-            number <= 255 || throw(ArgumentError("option octal escape exceeds one byte"))
-            push!(output, UInt8(number))
-            index += 2
-        elseif haskey(escapes, byte)
-            push!(output, escapes[byte])
-        elseif 0x20 <= byte <= 0x7e && !isletter(Char(byte)) && !isdigit(Char(byte))
-            push!(output, byte)
-        else
-            throw(ArgumentError("unsupported option escape"))
-        end
-    end
-    decode_text(output)
-end
-
 function _control_configuration_parent(context, scope)
     scope isa SessionRef && return :global_session
     scope isa WindowRef && return :global_window
@@ -232,7 +177,7 @@ function get_option(
     matches = filter(row -> row.index == requested && row.body !== nothing, rows)
     isempty(matches) && return nothing
     body = something(only(matches).body)
-    args.metadata.kind === :string ? _control_option_literal(body) : body
+    args.metadata.kind === :string ? _configuration_literal(body) : body
 end
 
 """

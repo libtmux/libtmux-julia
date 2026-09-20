@@ -1,3 +1,5 @@
+include("options_generated.jl")
+
 """A configured environment entry; `value=nothing` marks removal from new processes."""
 struct EnvironmentValue
     value::Union{Nothing,String}
@@ -99,6 +101,59 @@ function _configuration_text(context, result::CommandResult)
     end
 end
 
+# Invert args_escape's VIS representation as data, without tmux expansion or eval.
+function _configuration_literal(value::AbstractString)
+    bytes = codeunits(value)
+    isempty(bytes) && throw(ArgumentError("missing quoted option value"))
+    first_index, last_index = 1, length(bytes)
+    if bytes[1] in (0x22, 0x27)
+        length(bytes) >= 2 && bytes[end] == bytes[1] ||
+            throw(ArgumentError("invalid quoted option value"))
+        first_index += 1
+        last_index -= 1
+    end
+    output = UInt8[]
+    index = first_index
+    escapes = Dict{UInt8,UInt8}(
+        0x61=>0x07,
+        0x62=>0x08,
+        0x74=>0x09,
+        0x6e=>0x0a,
+        0x76=>0x0b,
+        0x66=>0x0c,
+        0x72=>0x0d,
+        0x73=>0x20,
+        0x65=>0x1b,
+    )
+    while index <= last_index
+        byte = bytes[index]
+        index += 1
+        if byte != 0x5c
+            push!(output, byte)
+            continue
+        end
+        index <= last_index || throw(ArgumentError("truncated option escape"))
+        byte = bytes[index]
+        index += 1
+        if 0x30 <= byte <= 0x37
+            index + 1 <= last_index &&
+            all(b -> 0x30 <= b <= 0x37, bytes[index:(index+1)]) ||
+                throw(ArgumentError("invalid option octal escape"))
+            number = Int(byte-0x30)*64 + Int(bytes[index]-0x30)*8 + Int(bytes[index+1]-0x30)
+            number <= 255 || throw(ArgumentError("option octal escape exceeds one byte"))
+            push!(output, UInt8(number))
+            index += 2
+        elseif haskey(escapes, byte)
+            push!(output, escapes[byte])
+        elseif 0x20 <= byte <= 0x7e && !isletter(Char(byte)) && !isdigit(Char(byte))
+            push!(output, byte)
+        else
+            throw(ArgumentError("unsupported option escape"))
+        end
+    end
+    decode_text(output)
+end
+
 function _configuration_rows(context, scope, requested_name; hooks=true)
     flags = _option_scope_flags(scope)
     args = hooks ? ["show-options", "-A", "-H", flags...] : ["show-options", "-A", flags...]
@@ -136,6 +191,17 @@ function _configuration_parent(context, scope)
     nothing
 end
 
+function _configuration_string_option(context, name)
+    startswith(name, '@') && return true
+    metadata = _tmux_option_metadata(name)
+    if metadata === nothing && _tmux_option_versioned(name)
+        result = _operation_command(context, "display-message", "-p", "#{version}")
+        version = _configuration_text(result)
+        version === nothing || (metadata = _tmux_option_metadata(name, version))
+    end
+    metadata !== nothing && metadata.kind === :string
+end
+
 function _get_option(context, scope, name, index, inherit)
     rows = _configuration_option_rows(context, scope, name)
     if isempty(rows) && inherit && startswith(name, '@')
@@ -151,7 +217,11 @@ function _get_option(context, scope, name, index, inherit)
         throw(ArgumentError("array option $name requires an explicit index"))
     !array && index !== nothing && throw(ArgumentError("option $name is not an array"))
     key_index = index === nothing ? nothing : string(index)
-    any(r -> r.index == key_index, rows) || return nothing
+    matches = filter(r -> r.index == key_index, rows)
+    isempty(matches) && return nothing
+    if _configuration_string_option(context, name)
+        return _configuration_literal(something(only(matches).body))
+    end
     flags = _option_scope_flags(scope)
     inherit && push!(flags, "-A")
     key = index === nothing ? name : "$name[$index]"
@@ -165,7 +235,8 @@ end
 Read one scalar or indexed value as a string. `nothing` means no value in the
 requested scope; `""` is an explicit empty value. `inherit=true` follows tmux's
 parent options. Arrays require a numeric `index`; missing sparse entries return
-`nothing`. Use `get_hook` to read an entire command array.
+`nothing`. String options preserve literal control bytes and backslashes.
+Use `get_hook` to read an entire command array.
 
 Scopes are `:server`, `:global_session`, `:global_window`, `SessionRef`,
 `WindowRef` and `PaneRef`. Names are exact built-in names or user names matching
@@ -225,7 +296,7 @@ end
 function _get_environment(context, scope, name; inherited=false)
     flags = _environment_scope_flags(scope)
     result = try
-        _operation_command(context, "show-environment", flags..., "--", name)
+        _operation_command(context, "show-environment", flags..., "-s", "--", name)
     catch error
         if error isa CommandError &&
            error.result.exitcode == 1 &&
@@ -237,13 +308,23 @@ function _get_environment(context, scope, name; inherited=false)
     end
     hidden = isempty(result.stdout)
     if hidden
-        result = _operation_command(context, "show-environment", flags..., "-h", "--", name)
+        result = _operation_command(
+            context,
+            "show-environment",
+            flags...,
+            "-s",
+            "-h",
+            "--",
+            name,
+        )
     end
     text = _configuration_text(context, result)
-    text == "-$name" && return EnvironmentValue(nothing, hidden, inherited)
-    text !== nothing && startswith(text, "$name=") ||
+    text == "unset $name;" && return EnvironmentValue(nothing, hidden, inherited)
+    suffix = "; export $name;"
+    text !== nothing && startswith(text, "$name=\"") && endswith(text, "\"" * suffix) ||
         throw(ArgumentError("invalid environment reply for $name"))
-    EnvironmentValue(text[(length(name)+2):end], hidden, inherited)
+    quoted = chop(text; head=length(name)+1, tail=length(suffix))
+    EnvironmentValue(_configuration_literal(quoted), hidden, inherited)
 end
 
 """
@@ -255,7 +336,9 @@ Read a global (`:global`) or session (`SessionRef`) environment entry. Return
 Hidden entries are returned with `hidden=true`. `inherit=true` falls back to
 global only for an absent session entry, never for a removal marker. This
 explicit multi-command observation is not an atomic child-process environment.
-Variable names use `[A-Za-z_][A-Za-z0-9_]*`.
+Values retain literal control bytes, quotes and backslashes; tmux's shell-style
+reply is decoded as data, never executed. Variable names use
+`[A-Za-z_][A-Za-z0-9_]*`.
 """
 function get_environment(
     server::Server,

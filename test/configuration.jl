@@ -6,6 +6,7 @@
         window_ref = only(windows(captured)).ref
         pane_ref = only(panes(captured)).ref
         value = "empty?\tline\n#{pane_id}\\;\n" * raw"$ENV \$ENV ${ENV} $_env"
+        value *= String(UInt8[1:31; 127]) * raw"\033 \r \a \177"
 
         @test LibTmux.get_option(server, :server, "escape-time") isa String
         @test LibTmux.get_option(server, session_ref, "status-left") === nothing
@@ -26,6 +27,8 @@
               "window"
         LibTmux.set_option(server, pane_ref, "@configuration", value)
         @test LibTmux.get_option(server, pane_ref, "@configuration") == value
+        LibTmux.set_option(server, window_ref, "pane-border-format", value)
+        @test LibTmux.get_option(server, window_ref, "pane-border-format") == value
         @test_throws ArgumentError LibTmux.set_option(
             server,
             pane_ref,

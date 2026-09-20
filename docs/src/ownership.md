@@ -115,7 +115,9 @@ command blocks and escapes that decode into control bytes are refused. This
 validates storage; executing a hook must still respect the trusted hook
 contract above. A failed whole-array assignment may already have cleared it.
 
-Configuration reads preserve literal dollars and backslashes. Replies with
+String option and subprocess environment reads preserve control bytes, literal
+dollars and backslashes. Option quoting and shell-style environment replies
+are decoded as data; no value is evaluated or executed. Replies with
 variable-like dollar escapes require a fixed print probe on the same transport
 and within the operation's deadline. This detects tmux's extra print escaping
 without expanding the value or guessing from a version string. Raw commands

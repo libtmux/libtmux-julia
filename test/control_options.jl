@@ -111,9 +111,12 @@
                     ) isa ControlResult
                     @test get_option(connection, :server, "default-client-command") ==
                           "display-message noop"
+                    @test get_option(server, :server, "default-client-command") ==
+                          "display-message noop"
                     @test set_option(connection, :server, "default-client-command", "") isa
                           ControlResult
                     @test get_option(connection, :server, "default-client-command") == ""
+                    @test get_option(server, :server, "default-client-command") == ""
                     unset_option(connection, :server, "default-client-command")
                 else
                     @test_throws ControlCommandError set_option(
@@ -145,6 +148,8 @@
                     "\"",
                     "\\",
                     "\$ENV",
+                    "\e",
+                    raw"\033",
                     String(UInt8[1:31; 127]),
                     raw"\$ENV",
                     raw"\\$ENV",
@@ -152,9 +157,7 @@
                 )
                     set_option(connection, session, "@literal", literal)
                     @test get_option(connection, session, "@literal") == literal
-                    if isascii(literal) && all(c -> !iscntrl(c), literal)
-                        @test get_option(server, session, "@literal") == literal
-                    end
+                    @test get_option(server, session, "@literal") == literal
                 end
                 @test_throws ControlCommandError set_option(
                     connection,
