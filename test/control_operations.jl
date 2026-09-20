@@ -61,7 +61,11 @@
                 )
                 @test isopen(connection)
 
-                cwd = joinpath(fixture.directory, "cwd;\t\n#literal")
+                physical = joinpath(fixture.directory, "physical")
+                alias = joinpath(fixture.directory, "alias")
+                mkdir(physical)
+                symlink(physical, alias)
+                cwd = joinpath(alias, "cwd;\t\n#literal")
                 mkdir(cwd)
                 path = joinpath(fixture.directory, "creation-bytes")
                 signal = control_signal(connection)
@@ -90,7 +94,9 @@
                 )
                 wait(signal)
                 @test created isa WindowRef && created.server == connection.identity
-                @test read(path) == collect(codeunits(value*"\0"*cwd*"\0"*argument*"\0"))
+                observed = split(read(path, String), '\0')
+                @test observed[[1, 3, 4]] == [value, argument, ""]
+                @test realpath(observed[2]) == realpath(cwd)
                 graph = snapshot(connection)
                 window = only(filter(w -> w.ref == created, windows(graph)))
                 @test window.name == "window;#{literal};雪;"

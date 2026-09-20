@@ -4,8 +4,13 @@
     if admitted
         with_tmux() do fixture
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-            text = joinpath(fixture.directory, "雪\tline\n%end 1 2 1\n\\literal")
+            physical = joinpath(fixture.directory, "physical")
+            alias = joinpath(fixture.directory, "alias")
+            mkdir(physical)
+            symlink(physical, alias)
+            text = joinpath(alias, "雪\tline\n%end 1 2 1\n\\literal")
             mkdir(text)
+            expected_path = realpath(text)
             session = new_session(
                 server;
                 name="control-formats",
@@ -23,7 +28,7 @@
                     FormatField("pane_active", Bool),
                 ]
                 result = read_formats(connection, pane, fields)
-                @test [v.value for v in result[1:2]] == [text, text]
+                @test [v.value for v in result[1:2]] == [expected_path, expected_path]
                 @test result[3].value > 0 && result[4].value === true
                 @test all(v -> v.availability === :present, result)
                 @test only(read_formats(connection, session, FormatField("session_id"))).value ==
