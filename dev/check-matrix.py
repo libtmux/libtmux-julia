@@ -80,25 +80,19 @@ def build_tmux(args):
     print(binary)
 
 
-def support_cells():
+def qa_cells():
     cells = []
 
-    def add(os_name, runner, arch, julia, tmux, threads=1):
+    def add(os_name, runner, arch, julia, tmux, threads=1, suites=SUITES):
         label = f"{os_name}-{arch}-julia{julia}-tmux{tmux}-t{threads}"
         cells.append(dict(label=label, os=os_name, runner=runner, arch=arch,
-                          julia=julia, tmux=tmux, threads=threads, status="NOT RUN"))
+                          julia=julia, tmux=tmux, threads=threads, suites=tuple(suites),
+                          status="NOT RUN"))
 
-    add("Linux", "ubuntu-24.04", "x86_64", "1.10.0", "3.2a")
-    add("Linux", "ubuntu-24.04", "x86_64", "1.10.0", "3.2a", 4)
-    for version in ("1.10.12", "1.11.9", "1.12.7"):
-        add("Linux", "ubuntu-24.04", "x86_64", version, "3.7c")
-    for tmux in ("3.2a", "3.3a", "3.4", "3.5a", "3.6b", "3.7c"):
-        add("Linux", "ubuntu-24.04", "x86_64", "1.13.0", tmux)
-    add("Linux", "ubuntu-24.04", "x86_64", "1.13.0", "3.7c", 4)
+    add("Linux", "ubuntu-24.04", "x86_64", "1.10.0", "3.2a", suites=("all",))
+    add("Linux", "ubuntu-24.04", "x86_64", "1.13.0", "3.7c", 4, ("all",))
     for runner, arch in (("macos-15", "arm64"), ("macos-15-intel", "x86_64")):
-        for julia, tmux in (("1.10.0", "3.2a"), ("1.13.0", "3.7c")):
-            for threads in (1, 4):
-                add("Darwin", runner, arch, julia, tmux, threads)
+        add("Darwin", runner, arch, "1.13.0", "3.7c", suites=("all",))
     return cells
 
 
@@ -525,7 +519,17 @@ println("PASS admitted version arguments construct real Pkg specifications")
         timed = phase("deadline", [sys.executable, "-c", "import threading; threading.Event().wait()"],
                       cwd=base, env=os.environ.copy(), log=base / "deadline.log", budget=0.05)
         assert timed["status"] == "TIMEOUT" and timed["direct_child_reaped"]
-        cells = support_cells()
+        cells = qa_cells()
+        assert [
+            (cell["os"], cell["arch"], cell["julia"], cell["tmux"], cell["threads"])
+            for cell in cells
+        ] == [
+            ("Linux", "x86_64", "1.10.0", "3.2a", 1),
+            ("Linux", "x86_64", "1.13.0", "3.7c", 4),
+            ("Darwin", "arm64", "1.13.0", "3.7c", 1),
+            ("Darwin", "x86_64", "1.13.0", "3.7c", 1),
+        ]
+        assert sum(len(cell["suites"]) for cell in cells) == 4
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
         from types import SimpleNamespace
@@ -594,10 +598,10 @@ def main():
     args = parser.parse_args()
     try:
         if args.command == "matrix":
-            cells = support_cells()
+            cells = qa_cells()
             if args.split:
                 cells = [dict(cell, suite=suite, job_label=f"{cell['label']}-{suite}")
-                         for cell in cells for suite in SUITES]
+                         for cell in cells for suite in cell["suites"]]
             print(json.dumps({"include": cells}))
         elif args.command == "self-test":
             self_test(args.julia)
