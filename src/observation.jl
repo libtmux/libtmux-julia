@@ -73,8 +73,10 @@ end
 """
 A single-consumer, bounded event iterator. Use `take!(stream; timeout, cancel)`
 for an explicit deadline or `for event in stream` for connection-lifetime
-iteration. Close explicitly or use the producer's do-block form. Each fan-out
-subscriber owns its byte copies; overflow ends only that subscription.
+iteration. Close explicitly or use the producer's do-block form for
+deterministic cleanup. An unreachable stream is retired eventually; GC is not
+a cleanup deadline. Each fan-out subscriber owns its byte copies; overflow
+ends only that subscription.
 """
 mutable struct ObservationStream
     connection::ControlConnection
@@ -92,6 +94,7 @@ mutable struct ObservationStream
     open::Bool
     error::Union{Nothing,Exception}
     cleanup_done::Bool
+    reserved::Bool
 end
 
 mutable struct _ObservationHub <: _ControlObservationState
@@ -100,8 +103,9 @@ mutable struct _ObservationHub <: _ControlObservationState
     history::Vector{Tuple{UInt64,_ControlEvent,Int}}
     bytes::Int
     oldest::UInt64
-    streams::Vector{ObservationStream}
+    streams::Vector{WeakRef}
     cleanup::Vector{ObservationStream}
+    reservations::Int
     worker::Union{Nothing,Task}
     output_lock::ReentrantLock
     output_enabled::Bool
@@ -123,8 +127,9 @@ function _observation_hub(connection)
             Tuple{UInt64,_ControlEvent,Int}[],
             0,
             1,
+            WeakRef[],
             ObservationStream[],
-            ObservationStream[],
+            0,
             nothing,
             ReentrantLock(),
             false,
@@ -165,13 +170,58 @@ function _observation_end!(hub, stream; error=nothing)
     stream.error = error
     empty!(stream.queue)
     stream.bytes = 0
-    filter!(candidate -> candidate !== stream, hub.streams)
+    _remove_observation_stream!(hub, stream)
     if stream.subscription !== nothing && !hub.terminal
         push!(hub.cleanup, stream)
     else
         stream.cleanup_done = true
+        _release_observation!(hub, stream)
     end
     notify(stream.connection.changed; all=true)
+end
+
+function _release_observation!(hub, stream)
+    stream.reserved || return nothing
+    hub.reservations > 0 || error("observation reservation underflow")
+    stream.reserved = false
+    hub.reservations -= 1
+    nothing
+end
+
+function _live_observation_streams!(hub)
+    streams = ObservationStream[]
+    filter!(hub.streams) do reference
+        stream = reference.value
+        stream isa ObservationStream || return false
+        push!(streams, stream)
+        true
+    end
+    streams
+end
+
+function _remove_observation_stream!(hub, target)
+    filter!(hub.streams) do reference
+        stream = reference.value
+        stream isa ObservationStream && stream !== target
+    end
+    nothing
+end
+
+function _abandon_observation!(hub, stream::ObservationStream)
+    connection = stream.connection
+    lock(connection.lock) do
+        connection.observation === hub && _observation_end!(hub, stream)
+    end
+    nothing
+end
+
+function _finalize_observation!(stream::ObservationStream)
+    hub = stream.connection.observation
+    hub isa _ObservationHub || return nothing
+    # The construction-time reservation remains held until this task reaches
+    # the normal retirement path.
+    @async _abandon_observation!(hub, stream)
+    nothing
 end
 
 function _observation_match(stream, event)
@@ -290,7 +340,7 @@ function _control_publish!(hub::_ObservationHub, connection, event)
     else
         hub.oldest = hub.sequence + 1
     end
-    for stream in copy(hub.streams)
+    for stream in _live_observation_streams!(hub)
         _observation_enqueue!(hub, stream, event, hub.sequence, size)
     end
     notify(connection.changed; all=true)
@@ -299,7 +349,7 @@ end
 
 function _control_end_observation!(hub::_ObservationHub, connection, reason)
     hub.terminal = true
-    for stream in copy(hub.streams)
+    for stream in _live_observation_streams!(hub)
         error =
             reason === :closed_by_caller ? nothing :
             ObservationLost(:connection_lost, stream.cursor)
@@ -307,6 +357,7 @@ function _control_end_observation!(hub::_ObservationHub, connection, reason)
     end
     for stream in hub.cleanup
         stream.cleanup_done = true
+        _release_observation!(hub, stream)
     end
     empty!(hub.cleanup)
     notify(connection.changed; all=true)
@@ -347,6 +398,7 @@ function _observation_cleanup(connection, hub)
                     connection.cleanup_error =
                         ControlCleanupError(:subscription_cleanup_failed)
                 end
+                _release_observation!(hub, stream)
                 notify(connection.changed; all=true)
             end
         end
@@ -369,9 +421,6 @@ function _new_observation(
         throw(ArgumentError("observation byte limit must be in 1:67108864"))
     lock(connection.lock) do
         hub = _observation_hub(connection)
-        length(hub.streams) + length(hub.cleanup) + hub.cleaning <
-        _OBSERVATION_SUBSCRIBERS ||
-            throw(ArgumentError("connection observation capacity is reserved"))
         cursor = _observation_cursor(connection, hub, pane, hub.sequence, kind)
         if after !== nothing
             after isa ObservationCursor ||
@@ -385,6 +434,9 @@ function _new_observation(
                 throw(ObservationLost(:cursor_expired, after))
             cursor = after
         end
+        hub.reservations < _OBSERVATION_SUBSCRIBERS ||
+            throw(ArgumentError("connection observation capacity is reserved"))
+        hub.reservations += 1
         stream = ObservationStream(
             connection,
             kind,
@@ -401,8 +453,10 @@ function _new_observation(
             true,
             nothing,
             false,
+            true,
         )
-        push!(hub.streams, stream)
+        finalizer(_finalize_observation!, stream)
+        push!(hub.streams, WeakRef(stream))
         if after !== nothing
             for (sequence, event, size) in hub.history
                 sequence > after.sequence &&

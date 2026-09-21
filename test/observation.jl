@@ -1,3 +1,35 @@
+function await_observation(predicate, connection, message)
+    expired = Ref(false)
+    timer, task = LibTmux._owned_timer(0.9) do
+        lock(connection.lock) do
+            expired[] = true
+            notify(connection.changed; all=true)
+        end
+    end
+    try
+        lock(connection.lock) do
+            while !predicate()
+                expired[] && error(message)
+                wait(connection.changed)
+            end
+        end
+    finally
+        close(timer)
+        wait(task)
+    end
+end
+
+Base.@noinline function drop_format_observation(connection, pane)
+    stream = LibTmux.subscribe_format(connection, pane, "pane_dead")
+    take!(stream; timeout=2.0)
+    lock(() -> connection.submitted, connection.lock)
+end
+
+Base.@noinline function abandon_notifications!(streams)
+    empty!(streams)
+    nothing
+end
+
 @testset "bounded observations" begin
     @test isdefined(LibTmux, :ObservationStream)
     if isdefined(LibTmux, :ObservationStream)
@@ -116,8 +148,64 @@
                 @test take!(format; timeout=2.0).bytes == codeunits("1")
                 close(format)
                 @test format.cleanup_done
+
+                dropped = LibTmux.subscribe_format(connection, pane, "pane_dead")
+                @test take!(dropped; timeout=2.0) isa LibTmux.FormatUpdate
+                cleanup_before = lock(() -> connection.submitted, connection.lock)
+                lock(connection.lock) do
+                    Base.finalize(dropped)
+                end
+                await_observation(connection, "dropped observation cleanup timed out") do
+                    !dropped.open && dropped.cleanup_done
+                end
+                @test !isopen(dropped) && dropped.cleanup_done && dropped.error === nothing
+                @test lock(() -> connection.submitted, connection.lock) ==
+                      cleanup_before + 1
+                @test isempty(connection.observation.streams)
+
+                abandoned_before = drop_format_observation(connection, pane)
+                GC.gc(true)
+                await_observation(connection, "abandoned observation cleanup timed out") do
+                    hub = connection.observation
+                    isempty(hub.streams) &&
+                        isempty(hub.cleanup) &&
+                        !hub.cleaning &&
+                        connection.submitted == abandoned_before + 1
+                end
+                @test isempty(connection.observation.streams)
+
+                capacity_streams =
+                    [LibTmux.notifications(connection; kinds=names) for _ = 1:64]
+                abandon_notifications!(capacity_streams)
+                capacity_result = lock(connection.lock) do
+                    GC.gc(true)
+                    @test count(
+                        ref -> ref.value === nothing,
+                        connection.observation.streams,
+                    ) == 64
+                    try
+                        LibTmux.notifications(connection; kinds=names)
+                    catch error
+                        error
+                    end
+                end
+                @test capacity_result isa ArgumentError
+                capacity_result isa LibTmux.ObservationStream && close(capacity_result)
+                await_observation(connection, "observation cleanup did not become idle") do
+                    hub = connection.observation
+                    isempty(hub.streams) &&
+                        isempty(hub.cleanup) &&
+                        !hub.cleaning &&
+                        hub.reservations == 0
+                end
+                @test isempty(connection.observation.streams)
+                @test connection.observation.reservations == 0
+
                 @test_throws ErrorException LibTmux.notifications(connection) do scoped
-                    error("consumer failed")
+                    LibTmux._control_event(connection, event)
+                    for _ in scoped
+                        error("consumer failed")
+                    end
                 end
                 @test isempty(connection.observation.streams)
                 pending = LibTmux.notifications(connection; kinds=names)

@@ -17,6 +17,8 @@ Each stream has one consumer and independent item/byte limits. A slow
 consumer loses its own stream with [`ObservationLost`](@ref); it cannot block
 the shared control reader. `take!` accepts `timeout` and `cancel`. Always use
 the callback form or close explicitly, including after an iteration error.
+An unreachable stream is eventually retired, but GC does not provide a cleanup
+deadline.
 
 [`observation_cursor`](@ref) identifies the last consumed event. Replay with
 `after=cursor` is limited to the same connection and retained history:
