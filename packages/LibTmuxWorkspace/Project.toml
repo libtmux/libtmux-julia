@@ -1,0 +1,30 @@
+name = "LibTmuxWorkspace"
+uuid = "dc7c1d2a-fec3-4b55-92f0-7133c728c990"
+version = "0.1.0"
+license = "MIT"
+
+[deps]
+PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
+FileWatching = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
+Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
+UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
+LibTmux = "1a5dcb9e-7968-44df-ad70-bf0a17628f09"
+
+[compat]
+Base64 = "<0.0.1, 1"
+FileWatching = "<0.0.1, 1"
+UUIDs = "<0.0.1, 1"
+Test = "<0.0.1, 1"
+PrecompileTools = "1.2"
+JSON = "1.9"
+YAML = "0.4.17"
+LibTmux = "0.1"
+julia = "1.10"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

@@ -1,0 +1,21 @@
+schema_version: 1
+session_name: ${PROJECT}
+start_directory: .
+environment:
+  PROJECT: ${PROJECT}
+shell_command_before: printf 'workspace ready\n'
+windows:
+  - window_name: editor
+    focus: true
+    layout: even-horizontal
+    panes:
+      - shell_command: nvim
+        focus: true
+      - null
+  - window_name: checks
+    options_after:
+      synchronize-panes: false
+    panes:
+      - shell_command:
+          - cmd: julia --project=.
+            enter: false

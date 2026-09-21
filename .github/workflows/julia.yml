@@ -1,0 +1,90 @@
+name: Julia
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: julia-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      cells: ${{ steps.cells.outputs.cells }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: cells
+        run: echo "cells=$(python3 dev/check-matrix.py matrix --split)" >> "$GITHUB_OUTPUT"
+      - name: Check matrix ownership and result states
+        run: python3 dev/check-matrix.py self-test
+
+  check:
+    needs: matrix
+    name: ${{ matrix.job_label }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.cells) }}
+    timeout-minutes: 35
+    env:
+      TMPDIR: /tmp
+    steps:
+      - name: Choose owned preparation stage
+        run: echo "MATRIX_STAGE=$RUNNER_TEMP/libtmux-julia-matrix" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: ${{ matrix.julia }}
+          arch: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x64' }}
+      - name: Check setup argument conversion offline
+        run: python3 dev/check-matrix.py self-test --julia julia
+      - name: Prepare Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libevent-dev libncurses-dev bison
+      - name: Prepare macOS build dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install libevent ncurses pkg-config utf8proc jemalloc
+          {
+            echo "PKG_CONFIG_PATH=$(brew --prefix libevent)/lib/pkgconfig:$(brew --prefix ncurses)/lib/pkgconfig:$(brew --prefix utf8proc)/lib/pkgconfig:$(brew --prefix jemalloc)/lib/pkgconfig"
+            echo "CPPFLAGS=-I$(brew --prefix utf8proc)/include"
+            echo "LDFLAGS=-L$(brew --prefix utf8proc)/lib"
+          } >> "$GITHUB_ENV"
+      - name: Prepare pinned tmux release
+        run: python3 dev/check-matrix.py build-tmux "$MATRIX_STAGE" '${{ matrix.tmux }}'
+      - name: Prepare Julia tools and external consumers
+        run: >-
+          python3 dev/check-matrix.py prepare "$MATRIX_STAGE"
+          --threads '${{ matrix.threads }}'
+      - name: Check prepared cell offline
+        run: >-
+          python3 dev/check-matrix.py run "$MATRIX_STAGE"
+          --tmux "$MATRIX_STAGE/tmux/${{ matrix.tmux }}/bin/tmux"
+          --threads '${{ matrix.threads }}'
+          --suite '${{ matrix.suite }}'
+          --expected-julia '${{ matrix.julia }}'
+          --expected-tmux '${{ matrix.tmux }}'
+          --expected-os '${{ matrix.os }}'
+          --expected-arch '${{ matrix.arch }}'
+      - name: Preserve cell evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.job_label }}
+          if-no-files-found: warn
+          path: |
+            ${{ env.MATRIX_STAGE }}/results-*.json
+            ${{ env.MATRIX_STAGE }}/prepared.json
+            ${{ env.MATRIX_STAGE }}/environment/Project.toml
+            ${{ env.MATRIX_STAGE }}/environment/LocalPreferences.toml
+            ${{ env.MATRIX_STAGE }}/environment/Manifest.toml
+            ${{ env.MATRIX_STAGE }}/logs/*.log

@@ -2,10 +2,20 @@
 /build/
 /dist/
 /coverage/
+/docs/build/
+/docs/Manifest.toml
+/benchmark/Manifest.toml
+/benchmark/results/
+/.mcp-env/
+/.workspace-env/
+/bin/libtmux-mcp
+/bin/libtmux-workspace
 *.lcov
 *.prof
 *.profraw
 *.profdata
+__pycache__/
+*.pyc
 *.log
 
 # Editors and desktops.
