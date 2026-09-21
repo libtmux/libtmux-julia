@@ -61,6 +61,14 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Prepare pinned tmux release
         run: python3 dev/check-matrix.py build-tmux "$MATRIX_STAGE" '${{ matrix.tmux }}'
+      - name: Cache isolated Julia tool depot
+        uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
+        with:
+          cache-name: libtmux-julia-matrix-depot-v1
+          depot: ${{ runner.temp }}/libtmux-julia-matrix/depot
+          delete-old-caches: "false"
+        env:
+          JULIA_DEPOT_PATH: ${{ runner.temp }}/libtmux-julia-matrix/depot
       - name: Prepare Julia tools and external consumers
         run: >-
           python3 dev/check-matrix.py prepare "$MATRIX_STAGE"
