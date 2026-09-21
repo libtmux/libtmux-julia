@@ -419,7 +419,7 @@ function _tool_output_schema(app, name)
                         required=["tool", "result"],
                     ),
                 ),
-                "failedIndex"=>Dict("type"=>["integer", "null"]),
+                "failedIndex"=>Dict("type"=>"null"),
                 "atomic"=>Dict("const"=>false),
             ),
         )
@@ -452,6 +452,13 @@ function _tool_output_schema(app, name)
     )
     failure =
         Dict("type"=>"object", "properties"=>Dict("error"=>error), "required"=>["error"])
+    if name == "run_operations"
+        partial = _json_object(
+            merge(fields, Dict("failedIndex"=>_integer_schema(1, 8), "error"=>error));
+            required=[collect(keys(fields)); "error"],
+        )
+        return Dict("type"=>"object", "anyOf"=>[success, partial, failure])
+    end
     Dict("type"=>"object", "anyOf"=>[success, failure])
 end
 
@@ -1018,7 +1025,7 @@ function tools(app::Application)
         "paste_text"=>"Paste UTF-8 text through a temporary owned buffer without adding Enter. The terminal application may transform input.",
         "resize_pane"=>"Request pane width or height in cells. tmux may constrain the resulting size to fit its window.",
         "kill_pane"=>"Destroy one explicitly authorized pane and its running process. Its window or session may also disappear.",
-        "run_operations"=>"Run up to eight enabled tool calls sequentially after validating every item. Stop at the first execution failure and return completed results; no rollback.",
+        "run_operations"=>"Run up to eight enabled tool calls sequentially after validating every item. Stop at the first execution failure and return ordered completed results plus a one-based failedIndex; no rollback.",
         "create_session"=>"Start an argv command in a new application-owned session. Requires allow_create; the session is removed when the application closes. Completion means creation, not command exit.",
         "teardown_session"=>"Destroy an exact generation-bound session created by this application. Borrowed sessions are refused.",
     )

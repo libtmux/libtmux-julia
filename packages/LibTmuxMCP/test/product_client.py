@@ -60,6 +60,33 @@ def main():
         assert response['id'] == identity and 'result' in response, response
         return response['result']
 
+    def partial_batch_schema(schema):
+        required = {'completed', 'failedIndex', 'error', 'atomic'}
+        matches = [branch for branch in schema['anyOf']
+                   if set(branch.get('required', ())) == required]
+        assert len(matches) == 1, schema
+        return matches[0]
+
+    def assert_partial_batch(payload, schema):
+        branch = partial_batch_schema(schema)
+        fields = branch['properties']
+        assert set(payload) == set(fields), payload
+        assert isinstance(payload['failedIndex'], int)
+        assert fields['failedIndex']['minimum'] <= payload['failedIndex'] <= fields['failedIndex']['maximum']
+        assert payload['atomic'] is fields['atomic']['const']
+        assert isinstance(payload['completed'], list)
+        assert len(payload['completed']) <= fields['completed']['maxItems']
+        item_schema = fields['completed']['items']
+        for item in payload['completed']:
+            assert set(item) == set(item_schema['properties']), item
+            assert isinstance(item['tool'], str) and isinstance(item['result'], dict)
+        error_schema = fields['error']
+        assert set(payload['error']) == set(error_schema['properties']), payload
+        assert isinstance(payload['error']['code'], str)
+        assert isinstance(payload['error']['message'], str)
+        assert payload['error']['effects'] in error_schema['properties']['effects']['enum']
+        assert isinstance(payload['error']['retryable'], bool)
+
     try:
         if profile == '2026-07-28':
             send(1, 'server/discover')
@@ -75,6 +102,8 @@ def main():
             'list_panes', 'capture_pane', 'send_keys', 'create_session', 'teardown_session',
             'run_operations', 'wait_for_text', 'send_keys_and_wait'}
         assert all('inputSchema' in tool and 'outputSchema' in tool for tool in listed)
+        run_operations_schema = next(tool['outputSchema'] for tool in listed
+                                     if tool['name'] == 'run_operations')
         listing = call(3, 'list_panes')
         assert not listing.get('isError', False), listing
         row, = listing['structuredContent']['panes']
@@ -98,11 +127,40 @@ def main():
         send('concurrent', 'tools/list')
         assert receive()['id'] == 'concurrent'
         send(None, 'notifications/cancelled', {'requestId': 'waiting'})
-        created = call(7, 'create_session', {'name': 'client-owned', 'command': ['/bin/cat']})
+        batch = call(7, 'run_operations', {'operations': [
+            {'tool': 'create_session',
+             'arguments': {'name': 'client-owned', 'command': ['/bin/cat']}},
+            {'tool': 'create_session',
+             'arguments': {'name': 'borrowed', 'command': ['/bin/cat']}},
+            {'tool': 'create_session',
+             'arguments': {'name': 'client-not-run', 'command': ['/bin/cat']}},
+        ]})
+        assert batch['isError'], batch
+        partial = batch['structuredContent']
+        assert json.loads(batch['content'][0]['text']) == partial
+        assert_partial_batch(partial, run_operations_schema)
+        assert partial['failedIndex'] == 2 and partial['atomic'] is False, partial
+        assert [item['tool'] for item in partial['completed']] == ['create_session']
+        assert partial['error']['code'] == 'operation_failed'
+        assert partial['error']['effects'] == 'possible'
+        created, = [item['result'] for item in partial['completed']]
+        assert created['ownership'] == 'application' and created['completed'], created
+        not_run = call(8, 'create_session',
+                       {'name': 'client-not-run', 'command': ['/bin/cat']})
+        assert not not_run.get('isError', False), not_run
+        for identity, session in ((9, not_run['structuredContent']),
+                                  (10, created)):
+            removed = call(identity, 'teardown_session',
+                           {'sessionId': session['sessionId'],
+                            'generation': session['generation']})
+            assert not removed.get('isError', False), removed
+            assert (removed['structuredContent']['sessionId'] == session['sessionId'] and
+                    removed['structuredContent']['completed'])
+        created = call(11, 'create_session', {'name': 'client-owned', 'command': ['/bin/cat']})
         assert not created.get('isError', False), created
-        send(8, 'server/discover' if profile == '2026-07-28' else 'ping')
+        send(12, 'server/discover' if profile == '2026-07-28' else 'ping')
         alive = receive()
-        assert alive['id'] == 8 and 'result' in alive and 'error' not in alive, alive
+        assert alive['id'] == 12 and 'result' in alive and 'error' not in alive, alive
         if profile == '2026-07-28':
             assert alive['result']['supportedVersions'] == ['2026-07-28', '2025-11-25']
         child.stdin.close()
@@ -111,7 +169,7 @@ def main():
         assert not pending and not child.stdout.read(), 'unexpected late protocol output'
         diagnostics.extend(child.stderr.read())
         assert not diagnostics, diagnostics.decode(errors='replace')
-        print(f'PASS installed MCP {profile} discovery/catalog/policy/tools/observation/cancel/EOF {time.perf_counter()-started:.3f}s')
+        print(f'PASS installed MCP {profile} discovery/catalog/partial/teardown/observation/cancel/EOF {time.perf_counter()-started:.3f}s')
     finally:
         if child.poll() is None:
             child.kill()

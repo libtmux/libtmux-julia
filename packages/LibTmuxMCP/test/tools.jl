@@ -18,7 +18,7 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
     end
 
     @testset "MCP application catalog is pure and policy is copied" begin
-        permitted = ["list_panes", "capture_pane", "send_keys"]
+        permitted = ["list_panes", "capture_pane", "send_keys", "run_operations"]
         app = LibTmuxMCP.Application(
             Server(socket_path="/tmp/libtmux-julia-uncontacted/s");
             allowed_tools=permitted,
@@ -26,7 +26,7 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
         empty!(permitted)
         catalog = LibTmuxMCP.tools(app)
         @test Set(tool.name for tool in catalog) ==
-              Set(["list_panes", "capture_pane", "send_keys"])
+              Set(["list_panes", "capture_pane", "send_keys", "run_operations"])
         @test all(
             tool -> tool.input_schema !== nothing && tool.output_schema !== nothing,
             catalog,
@@ -57,6 +57,28 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
         capture_schema =
             only(filter(tool -> tool.name == "capture_pane", catalog)).output_schema
         @test "text" in capture_schema["anyOf"][1]["required"]
+        batch_schema =
+            only(filter(tool -> tool.name == "run_operations", catalog)).output_schema
+        partial = filter(batch_schema["anyOf"]) do branch
+            Set(get(branch, "required", String[])) ==
+            Set(["completed", "failedIndex", "error", "atomic"])
+        end
+        @test length(partial) == 1
+        if length(partial) == 1
+            fields = only(partial)["properties"]
+            @test fields["failedIndex"] == LibTmuxMCP._integer_schema(1, 8)
+            @test Set(fields["completed"]["items"]["required"]) == Set(["tool", "result"])
+            @test Set(fields["error"]["required"]) ==
+                  Set(["code", "message", "effects", "retryable"])
+            @test fields["atomic"] == Dict("const"=>false)
+        end
+        succeeded = filter(batch_schema["anyOf"]) do branch
+            Set(get(branch, "required", String[])) ==
+            Set(["completed", "failedIndex", "atomic"])
+        end
+        @test length(succeeded) == 1
+        length(succeeded) == 1 &&
+            @test only(succeeded)["properties"]["failedIndex"] == Dict("type"=>"null")
         @test_throws ArgumentError LibTmuxMCP.Application(
             Server(socket_path="/tmp/libtmux-julia-uncontacted/s");
             allowed_tools=["unknown"],

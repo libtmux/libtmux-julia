@@ -65,6 +65,11 @@ to every item in `run_operations` before any item executes.
 | `create_session` | Create an application-owned session; requires `--allow-create` |
 | `teardown_session` | Destroy only a session created by this application |
 
+`run_operations` validates every item before execution, then runs them in
+order. A successful batch returns `failedIndex: null`. If an item fails during
+execution, the error result retains earlier `completed` results, reports its
+one-based `failedIndex`, sets `atomic: false`, and does not run later items.
+
 Terminal content is returned as data. Text in a pane does not grant
 permission to invoke another tool. The application neither owns nor destroys
 the borrowed daemon or pre-existing sessions. EOF cancels and joins request
