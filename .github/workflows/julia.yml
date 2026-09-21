@@ -29,9 +29,6 @@ jobs:
     needs: matrix
     name: ${{ matrix.job_label }}
     runs-on: ${{ matrix.runner }}
-    permissions:
-      actions: write
-      contents: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.matrix.outputs.cells) }}
@@ -69,6 +66,7 @@ jobs:
         with:
           cache-name: libtmux-julia-matrix-depot-v1
           depot: ${{ runner.temp }}/libtmux-julia-matrix/depot
+          delete-old-caches: "false"
         env:
           JULIA_DEPOT_PATH: ${{ runner.temp }}/libtmux-julia-matrix/depot
       - name: Prepare Julia tools and external consumers
