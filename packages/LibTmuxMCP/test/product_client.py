@@ -63,7 +63,8 @@ def main():
     def partial_batch_schema(schema):
         required = {'completed', 'failedIndex', 'error', 'atomic'}
         matches = [branch for branch in schema['anyOf']
-                   if set(branch.get('required', ())) == required]
+                   if set(branch.get('required', ())) == required
+                   and branch['properties']['failedIndex'].get('type') == 'integer']
         assert len(matches) == 1, schema
         return matches[0]
 

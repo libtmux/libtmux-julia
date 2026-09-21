@@ -69,6 +69,10 @@ to every item in `run_operations` before any item executes.
 order. A successful batch returns `failedIndex: null`. If an item fails during
 execution, the error result retains earlier `completed` results, reports its
 one-based `failedIndex`, sets `atomic: false`, and does not run later items.
+A `result_limit` response keeps compact summaries of completed items, the
+`failedIndex` value, and `atomic: false`; result values are omitted. For a limited
+partial batch, `originalError` retains the failed item's code. The top-level
+`error.effects` annotation remains conservative for the whole batch.
 
 Terminal content is returned as data. Text in a pane does not grant
 permission to invoke another tool. The application neither owns nor destroys

@@ -61,7 +61,8 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
             only(filter(tool -> tool.name == "run_operations", catalog)).output_schema
         partial = filter(batch_schema["anyOf"]) do branch
             Set(get(branch, "required", String[])) ==
-            Set(["completed", "failedIndex", "error", "atomic"])
+            Set(["completed", "failedIndex", "error", "atomic"]) &&
+                get(branch["properties"]["failedIndex"], "type", nothing) == "integer"
         end
         @test length(partial) == 1
         if length(partial) == 1
@@ -79,6 +80,33 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
         @test length(succeeded) == 1
         length(succeeded) == 1 &&
             @test only(succeeded)["properties"]["failedIndex"] == Dict("type"=>"null")
+        limited_success = filter(batch_schema["anyOf"]) do branch
+            Set(get(branch, "required", String[])) ==
+            Set(["completed", "failedIndex", "error", "atomic"]) &&
+                branch["properties"]["failedIndex"] == Dict("type"=>"null")
+        end
+        @test length(limited_success) == 1
+        if length(limited_success) == 1
+            fields = only(limited_success)["properties"]
+            @test fields["failedIndex"] == Dict("type"=>"null")
+            @test Set(fields["completed"]["items"]["required"]) ==
+                  Set(["tool", "completed", "resultOmitted"])
+            @test fields["completed"]["items"]["properties"]["completed"] ==
+                  Dict("const"=>true)
+            @test fields["completed"]["items"]["properties"]["resultOmitted"] ==
+                  Dict("const"=>true)
+            @test fields["error"]["properties"]["code"] == Dict("const"=>"result_limit")
+        end
+        limited_partial = filter(batch_schema["anyOf"]) do branch
+            Set(get(branch, "required", String[])) ==
+            Set(["completed", "failedIndex", "error", "atomic", "originalError"])
+        end
+        @test length(limited_partial) == 1
+        if length(limited_partial) == 1
+            fields = only(limited_partial)["properties"]
+            @test fields["failedIndex"] == LibTmuxMCP._integer_schema(1, 8)
+            @test Set(fields["originalError"]["required"]) == Set(["code"])
+        end
         @test_throws ArgumentError LibTmuxMCP.Application(
             Server(socket_path="/tmp/libtmux-julia-uncontacted/s");
             allowed_tools=["unknown"],
@@ -233,8 +261,98 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
                     @test partial.is_error && partial.structured_content["failedIndex"] == 2
                     @test only(partial.structured_content["completed"])["result"]["completed"]
                     @test partial.structured_content["error"]["code"] == "stale_target"
+                    @test partial.structured_content["error"]["effects"] == "possible"
                 finally
                     close(batch_app)
+                end
+                large = "result-limit-" * repeat("x", 2048)
+                @test !tool_result(app, "paste_text", Dict("text"=>large)).is_error
+                captured_large = tool_result(app, "capture_pane", Dict("maxBytes"=>4096))
+                @test ncodeunits(captured_large.structured_content["text"]) > 1024
+                limited_app = Application(
+                    server;
+                    caller,
+                    allowed_tools=("capture_pane", "send_keys", "run_operations"),
+                    max_result_bytes=1024,
+                )
+                try
+                    limited_success = tool_result(
+                        limited_app,
+                        "run_operations",
+                        Dict(
+                            "operations"=>[
+                                Dict(
+                                    "tool"=>"capture_pane",
+                                    "arguments"=>Dict("maxBytes"=>4096),
+                                ),
+                            ],
+                        ),
+                    )
+                    @test limited_success.is_error
+                    success_payload = limited_success.structured_content
+                    @test Set(keys(success_payload)) ==
+                          Set(["completed", "failedIndex", "error", "atomic"])
+                    @test success_payload["failedIndex"] === nothing
+                    @test success_payload["atomic"] === false
+                    @test success_payload["error"]["code"] == "result_limit"
+                    @test success_payload["error"]["effects"] == "none"
+                    @test only(success_payload["completed"]) == Dict(
+                        "tool"=>"capture_pane",
+                        "completed"=>true,
+                        "resultOmitted"=>true,
+                    )
+                    limited_partial = tool_result(
+                        limited_app,
+                        "run_operations",
+                        Dict(
+                            "operations"=>[
+                                Dict(
+                                    "tool"=>"send_keys",
+                                    "arguments"=>Dict(
+                                        "keys"=>["result-limit-effect"],
+                                        "literal"=>true,
+                                    ),
+                                ),
+                                Dict(
+                                    "tool"=>"capture_pane",
+                                    "arguments"=>Dict("maxBytes"=>4096),
+                                ),
+                                Dict(
+                                    "tool"=>"capture_pane",
+                                    "arguments"=>Dict(
+                                        "target"=>Dict(
+                                            "paneId"=>string(caller.id),
+                                            "generation"=>"stale",
+                                        ),
+                                    ),
+                                ),
+                            ],
+                        ),
+                    )
+                    @test limited_partial.is_error
+                    partial_payload = limited_partial.structured_content
+                    @test Set(keys(partial_payload)) == Set([
+                        "completed",
+                        "failedIndex",
+                        "error",
+                        "atomic",
+                        "originalError",
+                    ])
+                    @test partial_payload["failedIndex"] == 3
+                    @test partial_payload["atomic"] === false
+                    @test partial_payload["error"]["code"] == "result_limit"
+                    @test partial_payload["error"]["effects"] == "possible"
+                    @test partial_payload["originalError"] == Dict("code"=>"stale_target")
+                    @test partial_payload["completed"] == [
+                        Dict("tool"=>"send_keys", "completed"=>true, "resultOmitted"=>true),
+                        Dict(
+                            "tool"=>"capture_pane",
+                            "completed"=>true,
+                            "resultOmitted"=>true,
+                        ),
+                    ]
+                finally
+                    close(limited_app)
                 end
                 token = CancellationToken()
                 cancel!(token)

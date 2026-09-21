@@ -41,7 +41,10 @@ an explicit catalog. `wait_for_text` waits for bounded literal text;
 output. Matching text does not establish process completion or exit status.
 `run_operations` validates every item against the same target/tool policy
 before performing its finite sequence. A later failure can leave earlier
-effects in place.
+effects in place; `failedIndex` identifies the failed item and `atomic` is
+always false. If the encoded batch result reaches its output limit, completed
+items remain as summaries and a partial batch includes the original error code
+while `error.effects` remains conservative for the whole batch.
 
 Use repeated `--allow-pane` values to constrain panes. `--caller-pane`
 supplies an explicit startup target; the control client's current pane is

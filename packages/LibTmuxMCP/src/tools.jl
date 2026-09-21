@@ -12,6 +12,7 @@ const _TOOL_NAMES = (
     "send_keys_and_wait",
 )
 const _ROUTINE_TOOLS = ("list_panes", "capture_pane", "send_keys")
+const _READ_ONLY_TOOLS = ("list_panes", "capture_pane", "wait_for_text")
 const _TOOL_ARGUMENTS = Dict(
     "wait_for_text"=>(("target", "text"), ("text",)),
     "send_keys_and_wait"=>(("target", "text", "keys", "literal"), ("text", "keys")),
@@ -25,6 +26,8 @@ const _TOOL_ARGUMENTS = Dict(
     "create_session"=>(("name", "command"), ("name", "command")),
     "teardown_session"=>(("sessionId", "generation"), ("sessionId", "generation")),
 )
+
+_tool_can_mutate(name) = !(name in _READ_ONLY_TOOLS)
 
 struct _ToolFailure <: Exception
     code::String
@@ -453,11 +456,48 @@ function _tool_output_schema(app, name)
     failure =
         Dict("type"=>"object", "properties"=>Dict("error"=>error), "required"=>["error"])
     if name == "run_operations"
+        completed_summary = _json_object(
+            Dict(
+                "tool"=>text,
+                "completed"=>Dict("const"=>true),
+                "resultOmitted"=>Dict("const"=>true),
+            );
+            required=["tool", "completed", "resultOmitted"],
+        )
+        limit_error = _json_object(
+            Dict(
+                "code"=>Dict("const"=>"result_limit"),
+                "message"=>text,
+                "effects"=>Dict("enum"=>["none", "possible"]),
+                "retryable"=>boolean,
+            );
+            required=["code", "message", "effects", "retryable"],
+        )
+        limit_fields = Dict(
+            "completed"=>Dict("type"=>"array", "maxItems"=>8, "items"=>completed_summary),
+            "error"=>limit_error,
+            "atomic"=>Dict("const"=>false),
+        )
+        limited_success = _json_object(
+            merge(limit_fields, Dict("failedIndex"=>Dict("type"=>"null")));
+            required=[collect(keys(limit_fields)); "failedIndex"],
+        )
+        original_error = _json_object(Dict("code"=>text); required=["code"])
+        limited_partial = _json_object(
+            merge(
+                limit_fields,
+                Dict("failedIndex"=>_integer_schema(1, 8), "originalError"=>original_error),
+            );
+            required=vcat(collect(keys(limit_fields)), ["failedIndex", "originalError"]),
+        )
         partial = _json_object(
             merge(fields, Dict("failedIndex"=>_integer_schema(1, 8), "error"=>error));
             required=[collect(keys(fields)); "error"],
         )
-        return Dict("type"=>"object", "anyOf"=>[success, partial, failure])
+        return Dict(
+            "type"=>"object",
+            "anyOf"=>[success, partial, limited_success, limited_partial, failure],
+        )
     end
     Dict("type"=>"object", "anyOf"=>[success, failure])
 end
@@ -798,10 +838,13 @@ function _execute_tool(app, plan, context)
             result = try
                 _execute_tool(app, operation, context)
             catch error
+                detail = _tool_error(error, operation.name)
+                any(result -> _tool_can_mutate(result["tool"]), results) &&
+                    (detail["effects"] = "possible")
                 return Dict(
                     "completed"=>results,
                     "failedIndex"=>index,
-                    "error"=>_tool_error(error, operation.name),
+                    "error"=>detail,
                     "atomic"=>false,
                 )
             end
@@ -955,7 +998,7 @@ function _tool_error(error, name)
         error isa LibTmux.DeadlineExceeded ? "deadline" :
         error isa LibTmux.OutputLimitExceeded ? "output_limit" :
         error isa LibTmux.ObservationLost ? "observation_lost" : "operation_failed"
-    mutating = !(name in ("list_panes", "capture_pane", "wait_for_text"))
+    mutating = _tool_can_mutate(name)
     uncertain =
         mutating && (
             error isa
@@ -970,6 +1013,40 @@ function _tool_error(error, name)
         "effects"=>uncertain ? "possible" : "none",
         "retryable"=>false,
     )
+end
+
+function _result_limit_payload(name, payload)
+    completed = get(payload, "completed", nothing)
+    original = get(payload, "error", nothing)
+    previous_mutation =
+        name == "run_operations" &&
+        completed isa AbstractVector &&
+        any(result -> _tool_can_mutate(result["tool"]), completed)
+    original_effects = original isa AbstractDict ? get(original, "effects", "none") : "none"
+    effects =
+        previous_mutation ||
+        original_effects == "possible" ||
+        (name != "run_operations" && _tool_can_mutate(name)) ? "possible" : "none"
+    error = Dict(
+        "code"=>"result_limit",
+        "message"=>"result exceeds the configured byte limit; request fewer rows, lines or operations",
+        "effects"=>effects,
+        "retryable"=>false,
+    )
+    name == "run_operations" && completed isa AbstractVector || return Dict("error"=>error)
+    result = Dict{String,Any}(
+        "completed"=>[
+            Dict("tool"=>item["tool"], "completed"=>true, "resultOmitted"=>true) for
+            item in completed
+        ],
+        "failedIndex"=>get(payload, "failedIndex", nothing),
+        "error"=>error,
+        "atomic"=>false,
+    )
+    if result["failedIndex"] !== nothing && original isa AbstractDict
+        result["originalError"] = Dict("code"=>original["code"])
+    end
+    result
 end
 
 function _invoke_tool(
@@ -989,22 +1066,7 @@ function _invoke_tool(
     end
     encoded = JSON.json(payload)
     if ncodeunits(encoded) > app.max_result_bytes
-        completed = get(payload, "completed", nothing)
-        payload = Dict{String,Any}(
-            "error"=>Dict(
-                "code"=>"result_limit",
-                "message"=>"result exceeds the configured byte limit; request fewer rows, lines or operations",
-                "effects"=>name in ("list_panes", "capture_pane", "wait_for_text") ?
-                           "none" : "possible",
-                "retryable"=>false,
-            ),
-        )
-        if completed isa AbstractVector
-            payload["completed"] = [
-                Dict("tool"=>item["tool"], "completed"=>true, "resultOmitted"=>true) for
-                item in completed
-            ]
-        end
+        payload = _result_limit_payload(name, payload)
         encoded = JSON.json(payload)
     end
     SDK.CallToolResult(
