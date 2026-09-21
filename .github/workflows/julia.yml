@@ -3,6 +3,7 @@ name: Julia
 on:
   push:
     branches: [master]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -20,6 +21,29 @@ jobs:
       cells: ${{ steps.cells.outputs.cells }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify release tag metadata
+        if: >-
+          github.event_name == 'push' &&
+          github.ref_type == 'tag' &&
+          github.event.deleted == false &&
+          github.repository == 'libtmux/libtmux-julia'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_EVENT: ${{ github.event_path }}
+        run: >-
+          python3 dev/check-release-tag.py verify
+          --checkout "$GITHUB_WORKSPACE"
+          --event "$RELEASE_EVENT"
+          --tag "$RELEASE_TAG"
+          --commit "$RELEASE_SHA"
+          --ref "$RELEASE_REF"
+          --repository "$RELEASE_REPOSITORY"
+          --output "$RUNNER_TEMP/libtmux-julia-release-preflight.toml"
       - id: cells
         run: echo "cells=$(python3 dev/check-matrix.py matrix --split)" >> "$GITHUB_OUTPUT"
       - name: Check matrix ownership and result states
@@ -96,3 +120,74 @@ jobs:
             ${{ env.MATRIX_STAGE }}/environment/LocalPreferences.toml
             ${{ env.MATRIX_STAGE }}/environment/Manifest.toml
             ${{ env.MATRIX_STAGE }}/logs/*.log
+
+  tag-install:
+    name: Verify public tag install
+    needs: check
+    if: >-
+      github.event_name == 'push' &&
+      github.ref_type == 'tag' &&
+      github.event.deleted == false &&
+      github.repository == 'libtmux/libtmux-julia'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_SHA: ${{ github.sha }}
+      RELEASE_REF: ${{ github.ref }}
+      RELEASE_REPOSITORY: ${{ github.repository }}
+      RELEASE_EVENT: ${{ github.event_path }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: '1.10.0'
+          arch: x64
+      - name: Choose fresh tag-install stage
+        run: echo "RELEASE_STAGE=$RUNNER_TEMP/libtmux-julia-release" >> "$GITHUB_ENV"
+      - name: Prepare release tag record
+        run: |
+          mkdir -p "$RELEASE_STAGE"
+          python3 dev/check-release-tag.py verify \
+            --checkout "$GITHUB_WORKSPACE" \
+            --event "$RELEASE_EVENT" \
+            --tag "$RELEASE_TAG" \
+            --commit "$RELEASE_SHA" \
+            --ref "$RELEASE_REF" \
+            --repository "$RELEASE_REPOSITORY" \
+            --output "$RELEASE_STAGE/release.toml"
+      - name: Install public tag into a fresh Julia environment
+        run: >-
+          julia --startup-file=no --history-file=no
+          dev/check-tag-install.jl verify
+          --release "$RELEASE_STAGE/release.toml"
+          --stage "$RELEASE_STAGE"
+          --checkout "$GITHUB_WORKSPACE"
+      - name: Recheck public tag after installation
+        run: >-
+          python3 dev/check-release-tag.py verify
+          --checkout "$GITHUB_WORKSPACE"
+          --event "$RELEASE_EVENT"
+          --tag "$RELEASE_TAG"
+          --commit "$RELEASE_SHA"
+          --ref "$RELEASE_REF"
+          --repository "$RELEASE_REPOSITORY"
+          --output "$RELEASE_STAGE/release-after.toml"
+      - name: Compare release records
+        run: cmp -- "$RELEASE_STAGE/release.toml" "$RELEASE_STAGE/release-after.toml"
+      - name: Preserve tag-install evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: public-tag-install
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/libtmux-julia-release/release.toml
+            ${{ runner.temp }}/libtmux-julia-release/release-after.toml
+            ${{ runner.temp }}/libtmux-julia-release/install-proof.toml
+            ${{ runner.temp }}/libtmux-julia-release/project/Project.toml
+            ${{ runner.temp }}/libtmux-julia-release/project/Manifest.toml

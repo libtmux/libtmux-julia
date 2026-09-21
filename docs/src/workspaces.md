@@ -5,17 +5,39 @@ expansion and planning are pure. Applying a plan creates tmux resources and
 can execute shell input. Keep those stages explicit when reviewing an
 untrusted configuration.
 
-Prepare the independent consumer environment from the repository root:
+From a consumer project directory, add the core and workspace package from the
+same public Git tag:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; root=pwd(); Pkg.activate(".workspace-env"); Pkg.develop([Pkg.PackageSpec(path=root), Pkg.PackageSpec(path=joinpath(root,"packages","LibTmuxWorkspace"))]); Pkg.instantiate()'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
 ```
 
-Run the complete owned-server example. It loads two panes, checks their
-layout and focus, freezes the supported reconstruction subset, and closes
-the private daemon:
+The following executable source example needs a checkout and its own consumer
+environment. Clone the same tag, then enter the checkout:
+
+```console
+$ git clone \
+    --branch v0.1.0-alpha.1 \
+    --depth 1 \
+    https://github.com/libtmux/libtmux-julia.git
+```
+
+```console
+$ cd libtmux-julia
+```
+
+Create a local environment for the example:
+
+```console
+$ julia \
+    --startup-file=no \
+    -e 'using Pkg; Pkg.activate(".workspace-env"); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
+```
+
+It loads two panes, checks their layout and focus, freezes the supported
+reconstruction subset, and closes the private daemon:
 
 ```console
 $ julia \
@@ -33,8 +55,8 @@ Markdown.parse("```julia\n" * read(joinpath(@__DIR__, "..", "..", "packages", "L
 
 ## Install the command
 
-The launcher binds to the prepared environment and performs no package
-resolution at startup:
+The launcher binds to that environment and performs no package resolution at
+startup:
 
 ```console
 $ julia \
