@@ -122,6 +122,62 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
     end
 end
 
+@testset "installed workspace launcher uses a named owned socket" begin
+    NamedTmux.with_named_tmux() do fixture
+        LibTmux.new_session(fixture.server; name="borrowed", command=["/bin/cat"])
+        @test only(LibTmux.sessions(LibTmux.snapshot(fixture.server))).name == "borrowed"
+        launcher = install_cli(
+            joinpath(fixture.directory, "bin");
+            project=get(ENV, "LIBTMUX_TEST_CLI_PROJECT", Base.active_project()),
+            julia_flags=vcat(
+                ["--threads=$(Threads.nthreads())"],
+                get(ENV, "LIBTMUX_TEST_CLI_COMPILE", "minimal") == "normal" ? String[] :
+                ["--compile=min", "-O0"],
+            ),
+        )
+        path = joinpath(fixture.directory, "workspace.yaml")
+        write(path, "session_name: installed\nwindows:\n  - window_name: cli\n")
+        loaded = JSON.parse(
+            read(
+                Cmd([
+                    launcher,
+                    "load",
+                    path,
+                    "--socket-name",
+                    fixture.socket_name,
+                    "--tmux",
+                    fixture.tmux,
+                    "--output",
+                    "json",
+                ]),
+                String,
+            ),
+        )
+        @test loaded["status"] == "loaded"
+        frozen = JSON.parse(
+            read(
+                Cmd([
+                    launcher,
+                    "freeze",
+                    "installed",
+                    "--socket-name",
+                    fixture.socket_name,
+                    "--tmux",
+                    fixture.tmux,
+                    "--output",
+                    "json",
+                ]),
+                String,
+            ),
+        )
+        @test frozen["status"] == "frozen"
+        @test validate(frozen["workspace"]).windows[1].name == "cli"
+        @test sort([
+            session.name for session in LibTmux.sessions(LibTmux.snapshot(fixture.server))
+        ]) == ["borrowed", "installed"]
+    end
+end
+
 @testset "installed CLI interrupt reaps script and rolls back" begin
     with_workspace_server() do fixture
         launcher = install_cli(

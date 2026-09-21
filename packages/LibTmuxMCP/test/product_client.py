@@ -8,11 +8,12 @@ import time
 
 
 def main():
-    launcher, socket, tmux, pane, profile = sys.argv[1:]
+    launcher, selector, socket, tmux, pane, profile = sys.argv[1:]
+    assert selector in ('--socket', '--socket-name')
     assert profile in ('2026-07-28', '2025-11-25')
     started = time.perf_counter()
     child = subprocess.Popen(
-        [launcher, '--socket', socket, '--tmux', tmux, '--caller-pane', pane,
+        [launcher, selector, socket, '--tmux', tmux, '--caller-pane', pane,
          '--allow-pane', pane, '--tool', 'list_panes', '--tool', 'capture_pane',
          '--tool', 'send_keys', '--tool', 'create_session', '--tool', 'teardown_session',
          '--tool', 'run_operations', '--tool', 'wait_for_text', '--tool', 'send_keys_and_wait', '--allow-create'],

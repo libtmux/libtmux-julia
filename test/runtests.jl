@@ -19,6 +19,7 @@ if suite in ("unit", "all")
 end
 if suite in ("integration", "all")
     include("fixture_contract.jl")
+    include("named_tmux.jl")
     include("lifecycle.jl")
     include("integration.jl")
     include("acquisition.jl")

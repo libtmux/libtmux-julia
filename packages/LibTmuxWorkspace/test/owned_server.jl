@@ -1,4 +1,7 @@
 # Consumer tests use the core's public ownership API and a minimal environment.
+isdefined(@__MODULE__, :NamedTmux) ||
+    include(joinpath(@__DIR__, "support", "named_tmux.jl"))
+
 function with_workspace_server(f)
     tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
     env = Dict(
