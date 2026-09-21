@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0-alpha.1 - 2026-09-21
+
 #### Initial Julia package suite
 
 Add `LibTmux`, a Julia-native tmux core with explicit server selection,

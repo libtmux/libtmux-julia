@@ -1,8 +1,8 @@
 # Package registration
 
-The suite contains three independent Julia packages in one repository.
-All use MIT and version `0.1.0` for the first unreleased implementation.
-Their package identities are fixed:
+The suite contains three independent Julia packages in one repository. All
+use MIT and `0.1.0-alpha.1` for the first unregistered source release. Their
+package identities are fixed:
 
 | Package | Package directory | UUID |
 | --- | --- | --- |
@@ -16,10 +16,12 @@ range. Their project files do not depend on sibling development paths.
 Documentation and benchmark environments remain separate from runtime
 dependencies.
 
-Before registration, close the required compatibility, external installation,
-example, benchmark and DX gates. Retain the exact source revision, dependency
-resolution, raw results and package-tree hashes. A green focused check or a
-local resolver constraint is not a release-support claim.
+The `v0.1.0-alpha.1` tag is installable through `Pkg.PackageSpec(url=..., rev=...)`.
+It is not a registry package. Before registration, close the required
+compatibility, external installation, example, benchmark and DX gates. Retain
+the exact source revision, dependency resolution, raw results and package-tree
+hashes. A green focused check or a local resolver constraint is not a
+release-support claim.
 
 Register the core first so the consumers' LibTmux dependency can resolve from
 the registry. JuliaRegistrator supports a `subdir` argument for the two
@@ -32,5 +34,12 @@ The intended consumer directories are `packages/LibTmuxMCP` and
 metadata and generated release tags. Do not register the repository root
 under a consumer package's identity.
 
-Publication requires a separate maintainer action after the required checks
-pass.
+Before creating a `v*` source tag, protect that tag pattern so only release
+maintainers can create it and nobody can update or delete it. The `Julia`
+workflow then checks tag metadata, runs the full product matrix, and installs
+the resolved commit into a new Julia depot. It records the resulting manifest
+and package-tree evidence; it does not publish a registry package or GitHub
+release.
+
+Registry publication requires a separate maintainer action after the required
+checks pass.

@@ -1,5 +1,6 @@
 const _SUPPORTED_PROTOCOLS = ("2026-07-28", "2025-11-25")
 const _REQUEST_CONTEXT_KEY = :libtmux_mcp_request
+const _PACKAGE_VERSION = Base.pkgversion(@__MODULE__)
 
 mutable struct _PendingRequest
     id::Union{Int,String}
@@ -314,7 +315,7 @@ function _serve_transport(
     wrapper = _DispatchTransport(transport, dispatcher)
     config = SDK.ServerConfig(
         name="libtmux",
-        version="0.1.0",
+        version=string(_PACKAGE_VERSION),
         capabilities=SDK.Capability[SDK.ToolCapability()],
     )
     server = SDK.Server(config; transport=wrapper)

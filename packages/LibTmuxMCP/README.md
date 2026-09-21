@@ -2,18 +2,18 @@
 
 Run a local stdio MCP application over an explicit tmux endpoint. The package
 uses public LibTmux APIs and a bounded adapter around ModelContextProtocol.jl.
-The implementation is under verification; registry publication and full
-compatibility support are pending.
+The alpha is source-distributed; registry publication and full compatibility
+support are pending.
 
-## Install from this checkout
+## Install v0.1.0-alpha.1
 
-Run from the repository root. This creates a separate consumer environment;
-package resolution belongs to setup, outside timed checks.
+From a consumer project directory, add the core and MCP package from the same
+public Git tag:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; root=pwd(); Pkg.activate(".mcp-env"); Pkg.develop([Pkg.PackageSpec(path=root), Pkg.PackageSpec(path=joinpath(root,"packages","LibTmuxMCP"))]); Pkg.instantiate()'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxMCP")])'
 ```
 
 Install a launcher bound to that environment. Choose a writable destination;
@@ -22,7 +22,7 @@ installation refuses to overwrite an existing launcher by default.
 ```console
 $ julia \
     --startup-file=no \
-    --project=.mcp-env \
+    --project=. \
     -e 'using LibTmuxMCP; println(install_cli("bin"))'
 ```
 
@@ -37,6 +37,17 @@ explicit socket selector. `--socket-name mcp-demo` addresses an existing
 server started with `tmux -L mcp-demo`; `--socket` selects a socket path.
 The launcher reads protocol messages from stdin and writes only protocol
 messages to stdout. Diagnostics go to stderr.
+
+## Develop from this checkout
+
+From the repository root, create a separate consumer environment backed by
+the local core and MCP package:
+
+```console
+$ julia \
+    --startup-file=no \
+    -e 'using Pkg; root=pwd(); Pkg.activate(".mcp-env"); Pkg.develop([Pkg.PackageSpec(path=root), Pkg.PackageSpec(path=joinpath(root,"packages","LibTmuxMCP"))]); Pkg.instantiate()'
+```
 
 ## Targets and effects
 

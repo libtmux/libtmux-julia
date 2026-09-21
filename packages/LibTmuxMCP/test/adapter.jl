@@ -2,6 +2,11 @@ using Test, LibTmuxMCP, ModelContextProtocol, Logging
 import JSON as Codec
 const SDK = ModelContextProtocol
 
+@testset "MCP package metadata" begin
+    @test Base.pkgversion(LibTmuxMCP) isa VersionNumber
+    @test LibTmuxMCP._PACKAGE_VERSION == Base.pkgversion(LibTmuxMCP)
+end
+
 function protocol_request(id, method, params=Dict())
     metadata = Dict(
         "io.modelcontextprotocol/protocolVersion"=>"2026-07-28",
@@ -181,6 +186,8 @@ end
             discovery = protocol_response(transport)
             @test discovery["id"] == "discovery"
             @test discovery["result"]["supportedVersions"] == ["2026-07-28", "2025-11-25"]
+            @test discovery["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["version"] ==
+                  string(Base.pkgversion(LibTmuxMCP))
             for id in ("first", 2)
                 put!(
                     transport.input,
@@ -288,6 +295,8 @@ end
         put!(transport.input, legacy_request("initialize", "initialize", init))
         response = protocol_response(transport)
         @test response["result"]["protocolVersion"] == "2025-11-25"
+        @test response["result"]["serverInfo"]["version"] ==
+              string(Base.pkgversion(LibTmuxMCP))
         @test Set(keys(response["result"]["capabilities"])) == Set(["tools"])
         put!(
             transport.input,
