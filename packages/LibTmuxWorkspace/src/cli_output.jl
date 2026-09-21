@@ -106,82 +106,6 @@ function _cli_output_abort(owner, error)
     nothing
 end
 
-_cli_pipe_endpoint(stream::IOContext) = _cli_pipe_endpoint(stream.io)
-_cli_pipe_endpoint(stream::Base.PipeEndpoint) = stream
-_cli_pipe_endpoint(stream::IO) = nothing
-
-function _cli_output_write_generic(stream, text, owner)
-    deadline = _CLIOutputDeadline(owner, :write_deadline)
-    timer, timer_task = _owned_timer(deadline, owner.timeout)
-    try
-        write(stream, text)
-        flush(stream)
-    finally
-        deadline.active[] = false
-        close(timer)
-        wait(timer_task)
-    end
-    nothing
-end
-
-function _cli_output_wait_write(request, deadline, timeout)
-    task = current_task()
-    Base.preserve_handle(task)
-    Base.sigatomic_begin()
-    Base.uv_req_set_data(request, task)
-    Base.iolock_end()
-    timer = timer_task = nothing
-    local status
-    try
-        Base.sigatomic_end()
-        timer, timer_task = _owned_timer(deadline, timeout)
-        status = wait()::Cint
-        # Julia 1.11+ re-enters this section before Base.uv_write_wait cleanup.
-        isdefined(Base, :uv_write_wait) && Base.sigatomic_begin()
-    finally
-        deadline.active[] = false
-        timer === nothing || close(timer)
-        timer_task === nothing || wait(timer_task)
-        # This is the cleanup path used by Base.uv_write_wait on Julia 1.13
-        # and by Base.uv_write before that helper was exposed in Julia 1.11.
-        Base.sigatomic_end()
-        Base.iolock_begin()
-        queue = task.queue
-        queue === nothing ||
-            Base.list_deletefirst!(queue::Base.IntrusiveLinkedList{Task}, task)
-        if Base.uv_req_data(request) != C_NULL
-            Base.uv_req_set_data(request, C_NULL)
-        else
-            Base.Libc.free(request)
-        end
-        Base.iolock_end()
-        Base.unpreserve_handle(task)
-    end
-    status
-end
-
-function _cli_output_write_pipe(stream, text, owner)
-    GC.@preserve text begin
-        Base.iolock_begin()
-        request = try
-            Base.uv_write_async(stream, pointer(text), UInt(ncodeunits(text)))
-        catch
-            Base.iolock_end()
-            rethrow()
-        end
-        deadline = _CLIOutputDeadline(owner, :write_deadline)
-        status = _cli_output_wait_write(request, deadline, owner.timeout)
-        status < 0 && Base.uv_error("write", status)
-    end
-    nothing
-end
-
-function _cli_output_write(stream::IO, text::String, owner)
-    endpoint = _cli_pipe_endpoint(stream)
-    endpoint === nothing ? _cli_output_write_generic(stream, text, owner) :
-    _cli_output_write_pipe(endpoint, text, owner)
-end
-
 function _cli_output_worker(owner)
     while true
         item = lock(owner.changed) do
@@ -195,11 +119,18 @@ function _cli_output_worker(owner)
         end
         item === nothing && return
         destination, text = item
+        deadline = _CLIOutputDeadline(owner, :write_deadline)
+        timer, timer_task = _owned_timer(deadline, owner.timeout)
         try
             stream = destination === :out ? owner.out : owner.err
-            _cli_output_write(stream, text, owner)
+            write(stream, text)
+            flush(stream)
         catch error
             _cli_output_abort(owner, _CLIOutputError(:write, error))
+        finally
+            deadline.active[] = false
+            close(timer)
+            wait(timer_task)
         end
     end
 end
