@@ -6,26 +6,33 @@ julia_development = "1.13.0"
 julia_proposed_floor = "1.10"
 tmux_proposed_floor = "3.2a"
 platforms_proposed = ["Linux x86_64", "macOS arm64", "macOS x86_64"]
-verified_product_cells = []
+# These complete-suite results apply only to the exact cells below. They do not
+# establish broader platform or version support.
+verified_product_cells = [
+  "Linux x86_64 / Julia 1.10.0 / tmux 3.2a / 1 thread",
+  "Linux x86_64 / Julia 1.13.0 / tmux 3.7c / 4 threads",
+  "macOS arm64 / Julia 1.13.0 / tmux 3.7c / 1 thread",
+  "macOS x86_64 / Julia 1.13.0 / tmux 3.7c / 1 thread",
+]
 
 [required]
-packages = "partial: three external imports, optional extensions and installed applications have focused evidence; complete exported products pending"
+packages = "partial: core, MCP and workspace external imports, extensions and installed applications pass in recorded cells; no released package exists"
 server_selection = "implemented: explicit selectors and opt-in ambient discovery"
 entities_links_identity = "partial: physical entities and links verified; strict identity admission pending"
 snapshots_coverage = "partial: captured graph and explicit coverage verified; topology/restart adversaries pending"
 formats = "partial: typed observations, explicit raw expressions and unverified hints tested current/floor"
-options_environment_hooks = "partial: subprocess and control options/hooks, sparse inheritance and literal values verified current/floor; control environment reads explicitly unsupported; full platform matrix pending"
-topology_lifecycle = "partial: typed topology and owned daemon success/failure cleanup verified; full matrix pending"
-capture_keys_paste_buffers = "partial: exact bytes, explicit keys, paste and owned buffers verified over subprocess and control current/floor; full platform matrix pending"
-native_criteria = "partial: generated local criteria and real captured relations verified; matrix/DX pending"
-wire_adapters = "partial: Julia/JSON plus pinned sibling scalar differentials pass; complete consumer/matrix proof pending"
-subprocess = "partial: bytes, bounds, cancellation and process retirement verified in development cell"
-control_batches = "partial: owned lanes, batches/groups, strict capture, graph acquisition, topology, clients, buffers, exact option/hook configuration and environment writes verified current/floor; full platform matrix pending"
-observation_cursors = "partial: bounded streams and replay verified on current/floor; reset baseline available; full matrix pending"
-mcp = "partial: modern/legacy installed clients, observation tools and cancellation verified; dynamic schemas and effect diagnostics corrected; complete normal matrix pending"
-workspace = "partial: config/apply/freeze, owned rollback and installed CLI verified; stopped output-reader retirement and full matrix pending"
-docs_examples = "partial: Documenter/doctest and real core examples pass; external discovery and human DX gate pending"
-benchmarks = "partial: separate environment and six-mode workload added; measurements and full B1 pending"
+options_environment_hooks = "partial: subprocess and control options/hooks, sparse inheritance and literal values pass in recorded cells; control environment reads explicitly unsupported; broader platform/version coverage pending"
+topology_lifecycle = "partial: typed topology and owned daemon success/failure cleanup pass in recorded cells; broader platform/version coverage pending"
+capture_keys_paste_buffers = "partial: exact bytes, explicit keys, paste and owned buffers pass over subprocess and control in recorded cells; broader platform/version coverage pending"
+native_criteria = "partial: generated local criteria and real captured relations pass in recorded cells; independent DX walkthrough pending"
+wire_adapters = "partial: Julia/JSON plus pinned sibling scalar differentials pass in recorded cells; broader external-consumer coverage pending"
+subprocess = "partial: bytes, bounds, cancellation and process retirement pass in recorded cells"
+control_batches = "partial: owned lanes, batches/groups, strict capture, graph acquisition, topology, clients, buffers, exact option/hook configuration and environment writes pass in recorded cells; broader platform/version coverage pending"
+observation_cursors = "partial: bounded streams and replay pass in recorded cells; reset baseline available; broader platform/version coverage pending"
+mcp = "partial: modern/legacy installed clients, observation tools and cancellation pass in recorded cells; dynamic schemas and effect diagnostics corrected; broader package/version coverage pending"
+workspace = "partial: config/apply/freeze, owned rollback, installed CLI and stopped output-reader retirement pass in recorded cells; broader platform/version coverage pending"
+docs_examples = "partial: Documenter/doctest, contextual and external examples pass in recorded cells; independent human DX gate pending"
+benchmarks = "partial: separate environment and six-mode workload added; baseline measurements and performance limits pending"
 
 [deferred]
 pushdown = "Q3 admission and differentials required before shipping"

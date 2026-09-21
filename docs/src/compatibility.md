@@ -2,13 +2,16 @@
 
 | Boundary | Current evidence |
 | --- | --- |
-| Julia | Development 1.13.0; focused checks also run on proposed floor 1.10.0 |
-| tmux | Focused source/runtime checks on 3.2a and 3.7d |
-| Linux x86_64 | Development host; WSL is recorded as Linux |
-| macOS arm64/x86_64 | Proposed, not verified |
-| Full package suite | In progress; no complete product support matrix |
+| Julia / tmux | 1.10.0 / 3.2a and 1.13.0 / 3.7c in the listed CI cells |
+| Linux x86_64 | 1.10.0 / 3.2a / 1 thread and 1.13.0 / 3.7c / 4 threads passed |
+| macOS arm64 | 1.13.0 / 3.7c / 1 thread passed |
+| macOS x86_64 | 1.13.0 / 3.7c / 1 thread passed |
+| Full package suite | Core, MCP, workspace, extensions, documentation, external imports, examples and launchers passed in all listed cells |
 
-A passing focused check does not admit an entire platform/version cell.
+These are exact CI cells, not a promise for other Julia, tmux, platform,
+architecture or thread combinations. An independent guide walkthrough and
+benchmark baselines remain open.
+
 The repository capability manifest records implemented, deferred, excluded
 and untested surfaces. tmux letter suffixes are meaningful; `3.2a` is not
 silently normalized to `3.2`.

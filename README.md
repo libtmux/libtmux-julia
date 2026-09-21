@@ -19,13 +19,13 @@ workspace configuration:
 
 ## Install
 
-Not yet registered. Install the development branch from your Julia project's
+Not yet registered. Add the source package from your Julia project's
 directory:
 
 ```console
 $ julia \
     --project=. \
-    -e 'using Pkg; Pkg.add(url="https://github.com/libtmux/libtmux-julia.git", rev="initial-pr")'
+    -e 'using Pkg; Pkg.add(url="https://github.com/libtmux/libtmux-julia.git")'
 ```
 
 Have `tmux` on your `PATH`. Julia 1.10+ and tmux 3.2a+ are the compatibility
@@ -147,7 +147,6 @@ To run the programs, clone the source:
 
 ```console
 $ git clone \
-    --branch initial-pr \
     https://github.com/libtmux/libtmux-julia.git
 ```
 
@@ -168,9 +167,11 @@ loads a configuration and checks its layout, focus and cleanup.
 
 ## Status and development
 
-Full platform verification, benchmark baselines and an independent guide
-walkthrough remain open. Check the [capability manifest](docs/capabilities.toml)
-and [CI results](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
+The four CI cells in [Compatibility](docs/src/compatibility.md) passed the
+complete package suite. Benchmark baselines and an independent guide walkthrough
+remain open. Check the
+[capability manifest](docs/capabilities.toml) and
+[CI results](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
 for current evidence. WSL is a Linux host; native Windows tmux is outside scope.
 
 [Contributing and checks](CONTRIBUTING.md) ·

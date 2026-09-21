@@ -356,9 +356,10 @@ Measure the whole command. Libraries should aim for the stretch budget.
 | Outer | Under 5 minutes | Under 60 seconds | Types, builds, integration tests, and compatibility checks before commit or PR |
 
 The current runnable tiers include unit checks, owned-tmux integration,
-forced-cleanup cases, generated criteria and external imports. Product-wide
-quality, example discovery, compatibility and benchmark gates remain open.
-Focused passing checks do not establish complete product support.
+forced-cleanup cases, generated criteria and external imports. Four CI product
+cells cover quality, example discovery and compatibility at their listed
+checkpoints. Benchmark baselines and an independent guide walkthrough remain
+open. Focused passing checks do not establish support outside recorded cells.
 
 Keep network access, installs, production builds, browsers, sleeps, and broad
 corpus scans out of the inner and mid loops. Replace polling delays with
