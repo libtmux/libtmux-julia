@@ -33,11 +33,24 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
             "ndjson",
         ]
         stderr_path = joinpath(fixture.directory, "stderr")
-        text = open(stderr_path, "w") do errors
-            read(pipeline(ignorestatus(Cmd(args)); stderr=errors), String)
+        output = Pipe()
+        process = nothing
+        text = try
+            open(stderr_path, "w") do errors
+                process = run(
+                    pipeline(ignorestatus(Cmd(args)); stdout=output, stderr=errors);
+                    wait=false,
+                )
+            end
+            close(output.in)
+            read(output.out, String)
+        finally
+            process === nothing || wait(process)
+            close(output)
         end
         records = JSON.parse.(split(chomp(text), '\n'))
         last(records)["event"] == "error" && println(stderr, read(stderr_path, String))
+        @test process.exitcode == 0
         @test last(records)["event"] == "result"
         @test last(records)["status"] == "loaded"
         @test [r["sequence"] for r in records] == collect(1:length(records))

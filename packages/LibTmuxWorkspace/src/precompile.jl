@@ -88,3 +88,17 @@
         end
     end
 end
+
+# Compile owned-session rollback without invoking tmux during package loading.
+if ccall(:jl_generating_output, Cint, ()) == 1
+    precompile(
+        _rollback_created,
+        (
+            LibTmux.Server,
+            LibTmux.SessionRef,
+            Bool,
+            Vector{LibTmux.WindowLinkRef},
+            Vector{Any},
+        ),
+    )
+end

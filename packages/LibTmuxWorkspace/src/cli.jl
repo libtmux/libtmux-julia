@@ -33,12 +33,23 @@ function _jsonable(value)
     value isa AbstractVector{UInt8} &&
         return Dict("encoding" => "base64", "data" => base64encode(value))
     value isa AbstractDict && return Dict(string(k) => _jsonable(v) for (k, v) in value)
-    value isa NamedTuple && return Dict(
-        string(k) => (k == :environment ? Dict(v) : _jsonable(v)) for
-        (k, v) in pairs(value)
-    )
+    if value isa NamedTuple
+        result = Dict{String,Any}()
+        for key in keys(value)
+            item = getfield(value, key)
+            result[string(key)] = key == :environment ? Dict(item) : _jsonable(item)
+        end
+        return result
+    end
     value isa Pair && return Dict(string(first(value)) => _jsonable(last(value)))
-    value isa Union{Tuple,AbstractVector} && return [_jsonable(v) for v in value]
+    if value isa Union{Tuple,AbstractVector}
+        result = Any[]
+        sizehint!(result, length(value))
+        for index in eachindex(value)
+            push!(result, _jsonable(value[index]))
+        end
+        return result
+    end
     if value isa Union{LibTmux.SessionRef,LibTmux.WindowRef,LibTmux.PaneRef}
         kind =
             value isa LibTmux.SessionRef ? "session" :
