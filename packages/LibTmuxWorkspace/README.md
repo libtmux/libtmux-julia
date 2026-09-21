@@ -10,10 +10,34 @@ YAML 0.4.17, and PrecompileTools. The core does not depend on this package
 or these consumer dependencies. Precompilation covers inert configuration
 and CLI reporting; it never starts processes or contacts tmux.
 
-## Install from this checkout
+## Install v0.1.0-alpha.1
 
-The suite is not registered yet. From the repository root, enter this package
-directory. Use the same shell for the setup and example commands:
+From a consumer project directory, add the core and workspace package from the
+same public Git tag:
+
+```console
+$ julia \
+    --startup-file=no \
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
+```
+
+Install a launcher bound to that environment:
+
+```console
+$ julia \
+    --startup-file=no \
+    --project=. \
+    -e 'using LibTmuxWorkspace; println(install_cli("bin"))'
+```
+
+```console
+$ bin/libtmux-workspace --help
+```
+
+## Develop from this checkout
+
+The source examples below require a checkout. From the repository root, enter
+this package directory and use the same shell for setup and examples:
 
 ```console
 $ cd packages/LibTmuxWorkspace

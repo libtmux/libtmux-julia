@@ -17,6 +17,7 @@ makedocs(
     checkdocs=:exports,
     pages=[
         "Start here"=>"index.md",
+        "Install"=>"installation.md",
         "Captured queries"=>"queries.md",
         "Ownership and I/O"=>"ownership.md",
         "Output observations"=>"observations.md",

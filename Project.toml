@@ -1,6 +1,6 @@
 name = "LibTmux"
 uuid = "1a5dcb9e-7968-44df-ad70-bf0a17628f09"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 license = "MIT"
 
 [deps]

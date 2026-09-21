@@ -4,7 +4,7 @@ Create tmux sessions, split panes, send input and capture terminal output from
 Julia. Read server state into a snapshot, then query it with `filter`, `count`
 and other Julia collection functions.
 
-[Quick start](#create-a-session-and-capture-a-pane) ·
+[Install](#install) · [Quick start](#create-a-session-and-capture-a-pane) ·
 [Queries](#filter-with-ordinary-julia) · [Control](#reuse-a-control-connection) ·
 [Examples](#examples) · [Field reference](docs/generated/criteria.md)
 
@@ -19,19 +19,22 @@ workspace configuration:
 
 ## Install
 
-Not yet registered. Add the source package from your Julia project's
-directory:
+`v0.1.0-alpha.1` is an unregistered source release. From your Julia project's
+directory, add the core from its public Git tag:
 
 ```console
 $ julia \
-    --project=. \
-    -e 'using Pkg; Pkg.add(url="https://github.com/libtmux/libtmux-julia.git")'
+    --startup-file=no \
+    -e 'using Pkg; Pkg.activate("."); Pkg.add(Pkg.PackageSpec(url="https://github.com/libtmux/libtmux-julia.git", rev="v0.1.0-alpha.1"))'
 ```
 
 Have `tmux` on your `PATH`. Julia 1.10+ and tmux 3.2a+ are the compatibility
 targets; see [tested platforms and limits](docs/src/compatibility.md). APIs
-may change during development. Pkg records the installed revision in your
-project's `Manifest.toml`.
+may change during alpha development. Pkg records the requested revision and
+package tree in your project's `Manifest.toml`.
+
+Install the MCP or workspace companion with the matching core specification:
+[installation guide](docs/src/installation.md). The alpha is not in General.
 
 Open Julia in that project to run the examples below:
 
@@ -147,6 +150,8 @@ To run the programs, clone the source:
 
 ```console
 $ git clone \
+    --branch v0.1.0-alpha.1 \
+    --depth 1 \
     https://github.com/libtmux/libtmux-julia.git
 ```
 
