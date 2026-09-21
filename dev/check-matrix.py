@@ -302,6 +302,8 @@ def prepare(args):
                     f"--project={project}", "-e",
                     "using Aqua, LibTmux, LibTmuxWorkspace, LibTmuxMCP, ModelContextProtocol, JSON, Tables"],
                    cwd=ROOT, env=env, check=True)
+    subprocess.run(format_warmup_command(args, project), cwd=ROOT,
+                   env=environment(stage, offline=True), check=True)
     consumers = stage / ("consumers-" + uuid.uuid4().hex)
     started = time.monotonic()
     registry_files = seed_registry_cache(stage / "depot", consumers / "depot")
@@ -322,6 +324,11 @@ def prepare(args):
                     tool_preferences=tomllib.loads(TOOL_PREFERENCES))
     (stage / "prepared.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print("PASS prepared dependencies and immutable external consumers; no timed checks run")
+
+
+def format_warmup_command(args, project):
+    return [args.julia, "--startup-file=no", f"--threads={args.threads}",
+            f"--project={project}", str(ROOT / "dev/check-quality.jl"), "format"]
 
 
 def command_plan(args, stage, metadata):
@@ -542,6 +549,14 @@ println("PASS admitted version arguments construct real Pkg specifications")
         metadata = dict(source_digest="fixed", tools={}, project=str(base), consumers=str(base),
                         tool_preferences=tomllib.loads(TOOL_PREFERENCES))
         all_names = [item[0] for item in selected_commands(args, base, metadata)]
+        budgets = {
+            name: budget for name, _, budget, _ in selected_commands(args, base, metadata)
+        }
+        assert budgets["format"] == 30
+        assert format_warmup_command(args, base) == [
+            "julia", "--startup-file=no", "--threads=1", f"--project={base}",
+            str(ROOT / "dev/check-quality.jl"), "format",
+        ]
         partitions = []
         for suite in SUITES:
             args.suite = suite
@@ -586,6 +601,7 @@ def main():
     preparation = sub.add_parser("prepare")
     preparation.add_argument("stage")
     preparation.add_argument("--julia", default="julia")
+    preparation.add_argument("--threads", type=int, choices=(1, 4), default=1)
     execution = sub.add_parser("run")
     execution.add_argument("stage")
     execution.add_argument("--julia", default="julia")

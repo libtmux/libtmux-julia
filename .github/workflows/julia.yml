@@ -62,7 +62,9 @@ jobs:
       - name: Prepare pinned tmux release
         run: python3 dev/check-matrix.py build-tmux "$MATRIX_STAGE" '${{ matrix.tmux }}'
       - name: Prepare Julia tools and external consumers
-        run: python3 dev/check-matrix.py prepare "$MATRIX_STAGE"
+        run: >-
+          python3 dev/check-matrix.py prepare "$MATRIX_STAGE"
+          --threads '${{ matrix.threads }}'
       - name: Check prepared cell offline
         run: >-
           python3 dev/check-matrix.py run "$MATRIX_STAGE"

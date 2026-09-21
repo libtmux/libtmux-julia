@@ -272,24 +272,29 @@ precompile workload through its supported preference. The formatter check
 still uses normal compilation and inspects every owned source file. Product
 precompilation is unchanged. Prepared metadata records the preference, and
 the runner rejects preference changes before checking the cell.
+Preparation runs the same read-only formatter check at the selected thread
+count so the timed quality gate keeps its 30-second budget.
 
 ```console
 $ matrix_stage=$(mktemp -d "${TMPDIR:-/tmp}/ltj-matrix.XXXXXX")
 ```
 
 ```console
-$ python3 dev/check-matrix.py prepare "$matrix_stage"
+$ python3 dev/check-matrix.py prepare "$matrix_stage" \
+    --threads 4
 ```
 
 Run the prepared unit and quality tiers separately while developing:
 
 ```console
 $ python3 dev/check-matrix.py run "$matrix_stage" \
+    --threads 4 \
     --tier unit
 ```
 
 ```console
 $ python3 dev/check-matrix.py run "$matrix_stage" \
+    --threads 4 \
     --tier quality
 ```
 

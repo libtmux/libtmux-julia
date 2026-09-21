@@ -12,16 +12,106 @@ import sys
 FAULT = "libtmux-example-injected-command-failure"
 
 
+def _ps_process_identity(pid):
+    import subprocess
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="],
+                            capture_output=True, text=True, check=False)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+_DARWIN_PROC_PIDINFO = None
+if sys.platform == "darwin":
+    import ctypes
+    try:
+        class _DarwinBSDInfo(ctypes.Structure):
+            _fields_ = [
+                ("flags", ctypes.c_uint32),
+                ("status", ctypes.c_uint32),
+                ("exit_status", ctypes.c_uint32),
+                ("pid", ctypes.c_uint32),
+                ("parent_pid", ctypes.c_uint32),
+                ("uid", ctypes.c_uint32),
+                ("gid", ctypes.c_uint32),
+                ("real_uid", ctypes.c_uint32),
+                ("real_gid", ctypes.c_uint32),
+                ("saved_uid", ctypes.c_uint32),
+                ("saved_gid", ctypes.c_uint32),
+                ("reserved", ctypes.c_uint32),
+                ("command", ctypes.c_char * 16),
+                ("name", ctypes.c_char * 32),
+                ("files", ctypes.c_uint32),
+                ("process_group", ctypes.c_uint32),
+                ("job_control", ctypes.c_uint32),
+                ("terminal_device", ctypes.c_uint32),
+                ("terminal_group", ctypes.c_uint32),
+                ("nice", ctypes.c_int32),
+                ("start_seconds", ctypes.c_uint64),
+                ("start_microseconds", ctypes.c_uint64),
+            ]
+
+        _DARWIN_PROC_PIDINFO = ctypes.CDLL(
+            "/usr/lib/libproc.dylib",
+            use_errno=True,
+        ).proc_pidinfo
+        _DARWIN_PROC_PIDINFO.argtypes = (
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint64,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        )
+        _DARWIN_PROC_PIDINFO.restype = ctypes.c_int
+    except (AttributeError, OSError):
+        pass
+
+
+def _darwin_process_identity(pid, *, fallback=True):
+    if _DARWIN_PROC_PIDINFO is None:
+        return _ps_process_identity(pid) if fallback else None
+    info = _DarwinBSDInfo()
+    result = _DARWIN_PROC_PIDINFO(
+        pid,
+        3,
+        0,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    )
+    if result == ctypes.sizeof(info):
+        return f"{info.start_seconds}:{info.start_microseconds}"
+    if result == 0 or not fallback:
+        return None
+    return _ps_process_identity(pid)
+
+
 def process_identity(pid):
     if sys.platform.startswith("linux"):
         try:
             return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
         except (FileNotFoundError, ProcessLookupError):
             return None
+    if sys.platform == "darwin":
+        return _darwin_process_identity(pid)
+    return _ps_process_identity(pid)
+
+
+def process_identity_self_test():
     import subprocess
-    result = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="],
-                            capture_output=True, text=True, check=False)
-    return result.stdout.strip() if result.returncode == 0 else None
+    current = process_identity(os.getpid())
+    if current is None:
+        raise AssertionError("current process has no identity")
+    if sys.platform == "darwin":
+        if _DARWIN_PROC_PIDINFO is None:
+            raise AssertionError("proc_pidinfo is unavailable")
+        native = _darwin_process_identity(os.getpid(), fallback=False)
+        if native is None or current != native:
+            raise AssertionError("proc_pidinfo did not identify the current process")
+    child = subprocess.Popen([sys.executable, "-c", ""])
+    child.wait()
+    if process_identity(child.pid) is not None:
+        raise AssertionError("reaped child remains identifiable")
+    if current != process_identity(os.getpid()):
+        raise AssertionError("current identity changed")
+    print("PASS process identity lookup")
 
 
 def tmux_boundary(config_path, arguments):
@@ -33,8 +123,10 @@ def tmux_boundary(config_path, arguments):
     if socket is None and arguments != ["-V"]:
         raise ValueError("example attempted tmux without an explicit owned socket")
     daemon = "-D" in arguments
-    record = dict(pid=os.getpid(), started=process_identity(os.getpid()),
-                  daemon=daemon, socket=socket)
+    started = process_identity(os.getpid())
+    if started is None:
+        raise RuntimeError("could not identify tmux boundary process")
+    record = dict(pid=os.getpid(), started=started, daemon=daemon, socket=socket)
     if daemon:
         record["owner"] = (Path(socket).parent / "owner").read_text()
     (root / f"process-{os.getpid()}.json").write_text(json.dumps(record))
@@ -167,9 +259,13 @@ def main():
     parser.add_argument("--tmux", required=True)
     parser.add_argument("--cwd", required=True)
     parser.add_argument("--negative-control", action="store_true")
+    parser.add_argument("--identity-self-test", action="store_true")
     parser.add_argument("--pure", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    if args.identity_self_test:
+        process_identity_self_test()
+        return 0
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         parser.error("an example command is required")

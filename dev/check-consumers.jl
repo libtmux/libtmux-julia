@@ -298,6 +298,11 @@ function check_examples(stage)
     python = something(Sys.which("python3"), "python3")
     checker = joinpath(@__DIR__, "check-example-cleanup.py")
     tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
+    identity = `$python $checker --identity-self-test --tmux $tmux --cwd $stage`
+    run_consumer_child(
+        "example cleanup process identity",
+        addenv(Cmd(identity; dir=stage), isolated_environment(stage)...),
+    )
     core_project = joinpath(stage, "environments", "LibTmux")
     audit = `$python $checker --negative-control --tmux $tmux --cwd $stage -- $(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$core_project`
     run_consumer_child(
