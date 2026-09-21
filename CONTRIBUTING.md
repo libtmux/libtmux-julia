@@ -309,12 +309,12 @@ extensions, the manual, external imports and discovered examples.
 Its stopped-reader checks exercise actual launcher stdio and require owned
 writers to retire when their readers stop consuming output.
 
-CI splits each platform cell into `runtime` and `delivery` suites to keep
-preparation and checks within the job budget. Runtime covers units, quality
-and library/application tests. Delivery covers extensions, documentation,
-external imports, examples and launchers. Both must pass at the same source
-revision to complete a cell. Use `--suite runtime` or `--suite delivery` to
-run one partition locally; omitting the option runs both.
+The matrix runner can split a platform cell into `runtime` and `delivery`
+suites. Runtime covers units, quality and library/application tests. Delivery
+covers extensions, documentation, external imports, examples and launchers.
+Both must pass at the same source revision to complete a split cell. Use
+`--suite runtime` or `--suite delivery` to run one partition locally; omitting
+the option runs both.
 
 Pull requests run four combined QA cells: Linux floor at one thread, current
 Linux at four threads, and current macOS on each architecture at one thread.

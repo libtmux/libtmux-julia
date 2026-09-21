@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.matrix.outputs.cells) }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       TMPDIR: /tmp
     steps:
