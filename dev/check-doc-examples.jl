@@ -50,7 +50,7 @@ const DOC_SNIPPETS = Dict(
     ("README.md", 1) => (
         kind=:executable,
         gate=:context,
-        fingerprint="9179972ccfc81663c33a3d28ee3548458b092af018db7fca407fd851efacc60d",
+        fingerprint="2865ecf6edfbc339066e8bcf889af438c96d7eb36d61a0d971a5a1a095708d45",
         source="",
         note="Private server, captured screen and retained snapshot",
     ),
@@ -465,11 +465,11 @@ function run_contextual_snippets(entries)
                 execute(("README.md", 1))
                 captured = Base.invokelatest(getproperty, workspace, :snap)
                 @assert only(LibTmux.sessions(captured)).name == "demo"
-                @assert length(LibTmux.panes(captured)) == 1
+                @assert length(LibTmux.panes(captured)) == 2
                 @assert isempty(strip(Base.invokelatest(getproperty, workspace, :screen)))
                 @assert !ispath(dirname(captured.identity.socket_path))
                 ids = execute(("README.md", 2))
-                @assert ids == [only(LibTmux.panes(captured)).id]
+                @assert ids == [only(filter(p -> p.active, LibTmux.panes(captured))).id]
                 screens = execute(("README.md", 3))
                 @assert length(screens) == 2 &&
                         all(screen -> isempty(strip(screen)), screens)
