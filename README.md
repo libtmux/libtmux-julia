@@ -1,3 +1,12 @@
+<!-- libtmux-logo -->
+<p align="center">
+  <picture>
+    <source srcset="assets/logo.svg" type="image/svg+xml">
+    <img src="assets/logo.png" width="128" height="128" alt="libtmux for Julia">
+  </picture>
+</p>
+<!-- /libtmux-logo -->
+
 # LibTmux.jl
 
 Create tmux sessions, split panes, send input and capture terminal output from
