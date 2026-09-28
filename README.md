@@ -7,11 +7,15 @@
 </p>
 <!-- /libtmux-logo -->
 
+<div align="center">
+
 # LibTmux.jl
 
 Create tmux sessions, split panes, send input and capture terminal output from
 Julia. Read server state into a snapshot, then query it with `filter`, `count`
 and other Julia collection functions.
+
+</div>
 
 [Quick start](#create-a-session-and-capture-a-pane) ·
 [Queries](#filter-with-ordinary-julia) · [Control](#reuse-a-control-connection) ·
