@@ -7,12 +7,16 @@
 </p>
 <!-- /libtmux-logo -->
 
+<div align="center">
+
 # LibTmuxMCP
 
 Run a local stdio MCP application over an explicit tmux endpoint. The package
 uses public LibTmux APIs and a bounded adapter around ModelContextProtocol.jl.
 The implementation is under verification; registry publication and full
 compatibility support are pending.
+
+</div>
 
 ## Install from this checkout
 

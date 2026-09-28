@@ -7,12 +7,16 @@
 </p>
 <!-- /libtmux-logo -->
 
+<div align="center">
+
 # LibTmuxWorkspace
 
 Load tmuxp-style YAML or JSON through an inspectable plan, apply it to an
 explicit tmux server, and freeze the supported reconstruction subset. Parsing,
 validation, expansion and planning do not execute configuration commands.
 The library and installed CLI share the same public operations.
+
+</div>
 
 The consumer package depends on the public `LibTmux` package, JSON 1.9 and
 YAML 0.4.17, and PrecompileTools. The core does not depend on this package
