@@ -333,9 +333,10 @@ Both must pass at the same source revision to complete a split cell. Use
 `--suite runtime` or `--suite delivery` to run one partition locally; omitting
 the option runs both.
 
-Pull requests require Linux floor at one thread and current Linux at four
-threads. Current macOS cells on each architecture are supplementary and may
-fail independently; their failures do not excuse a Linux failure.
+Pull requests require four complete Linux cells: floor and current Julia/tmux
+versions, each at one and four threads. Current macOS cells on each architecture
+are supplementary and may fail independently; their failures do not excuse a
+Linux failure.
 Intermediate releases and macOS floor evidence remain explicit compatibility
 work; an unrun release is not support.
 

@@ -90,8 +90,9 @@ def qa_cells():
                           julia=julia, tmux=tmux, threads=threads, suites=tuple(suites),
                           optional=os_name != "Linux", status="NOT RUN"))
 
-    add("Linux", "ubuntu-24.04", "x86_64", "1.10.0", "3.2a", suites=("all",))
-    add("Linux", "ubuntu-24.04", "x86_64", "1.13.0", "3.7c", 4, ("all",))
+    for julia, tmux in (("1.10.0", "3.2a"), ("1.13.0", "3.7c")):
+        for threads in (1, 4):
+            add("Linux", "ubuntu-24.04", "x86_64", julia, tmux, threads, ("all",))
     for runner, arch in (("macos-15", "arm64"), ("macos-15-intel", "x86_64")):
         add("Darwin", runner, arch, "1.13.0", "3.7c", suites=("all",))
     return cells
@@ -329,7 +330,11 @@ def prepare(args):
 
 def format_warmup_command(args, project):
     return [args.julia, "--startup-file=no", f"--threads={args.threads}",
-            f"--project={project}", str(ROOT / "dev/check-quality.jl"), "format"]
+            f"--project={project}", "-e", '''using JuliaFormatter
+JuliaFormatter.format_text("function compiler_probe(x)\n    x + 1\nend\n";
+    style=JuliaFormatter.DefaultStyle(), indent=4, margin=92,
+    format_docstrings=false, whitespace_in_kwargs=false)
+println("PASS formatter compiler preparation; no source files checked")''']
 
 
 def command_plan(args, stage, metadata):
@@ -366,7 +371,14 @@ def command_plan(args, stage, metadata):
     return commands
 
 
-def run(args):
+def result_path(stage, args, *, worker=False):
+    suffix = "" if args.suite == "all" else f"-{args.suite}"
+    if worker:
+        suffix += "-worker-" + args.worker_phase
+    return stage / f"results-{args.tier}{suffix}-t{args.threads}.json"
+
+
+def run_checks(args):
     command_started = time.monotonic()
     stage = checked_stage(args.stage)
     metadata = json.loads((stage / "prepared.json").read_text())
@@ -382,9 +394,9 @@ def run(args):
                   platform=platform.system(), machine=platform.machine(), kernel=platform.release(),
                   wsl="microsoft" in platform.release().lower(), threads=args.threads,
                   tools=metadata["tools"], status="NOT RUN", phases=[], suite=args.suite,
-                  tier=args.tier, active_phase=None, loops={})
-    suffix = "" if args.suite == "all" else f"-{args.suite}"
-    destination = stage / f"results-{args.tier}{suffix}-t{args.threads}.json"
+                  tier=args.tier, active_phase=None, loops={},
+                  invocation=getattr(args, "invocation", None))
+    destination = result_path(stage, args, worker=getattr(args, "worker", False))
 
     def save():
         temporary = destination.with_suffix(".tmp")
@@ -409,7 +421,9 @@ def run(args):
             result["reason"] = f"observed {mismatch} differs from the requested cell"
         else:
             commands = selected_commands(args, stage, metadata)
-            result.update(status="RUNNING", planned_phases=[item[0] for item in commands])
+            scope_args = argparse.Namespace(**(vars(args) | dict(worker=False)))
+            result.update(status="RUNNING", planned_phases=[item[0] for item in commands],
+                          required_phases=[item[0] for item in selected_commands(scope_args, stage, metadata)])
             loop_started = command_started
             active_loop = None
             try:
@@ -449,16 +463,86 @@ def run(args):
 
 def loop_result(name, seconds, args):
     complete = args.suite == "all" and (
-        args.tier in ("all", "mid") if name == "mid" else args.tier in ("all", "outer"))
+        args.tier in ("all", "mid", "outer") if name == "mid" else args.tier in ("all", "outer"))
     return dict(seconds=seconds, budget_seconds=LOOP_BUDGETS[name], complete=complete,
                 status="PASS" if seconds < LOOP_BUDGETS[name] else "FAIL")
 
 
 def selected_commands(args, stage, metadata):
     return [item for item in command_plan(args, stage, metadata)
-            if (args.tier == "all" or item[3] == args.tier
+            if (args.tier in ("all", "outer") or item[3] == args.tier
                 or args.tier == "mid" and item[3] in ("unit", "quality"))
+            and (not getattr(args, "worker", False)
+                 or (item[3] == "outer") == (args.worker_phase == "outer"))
             and (args.suite == "all" or (item[0] in DELIVERY_PHASES) == (args.suite == "delivery"))]
+
+
+def run(args):
+    """Measure complete workers through exit, including their final receipts."""
+    started = time.monotonic()
+    stage = checked_stage(args.stage)
+    invocation = uuid.uuid4().hex
+    batches = ("mid", "outer") if args.tier in ("all", "outer") else ("mid",)
+    result = dict(schema_version=3, status="RUNNING", phases=[], loops={},
+                  tier=args.tier, suite=args.suite, threads=args.threads,
+                  invocation=invocation, workers=[], active_phase=None,
+                  timing_boundary="worker launch through exit; outer includes supervisor orchestration")
+    destination = result_path(stage, args)
+    for batch in batches:
+        argv = [sys.executable, str(Path(__file__).resolve()), "run", str(stage),
+                "--julia", args.julia, "--tmux", args.tmux, "--threads", str(args.threads),
+                "--tier", args.tier, "--suite", args.suite, "--worker",
+                "--worker-phase", batch, "--invocation", invocation]
+        for name in ("julia", "tmux", "os", "arch"):
+            value = getattr(args, f"expected_{name}")
+            if value is not None:
+                argv.extend((f"--expected-{name}", value))
+        budget = LOOP_BUDGETS[batch]
+        if batch == "outer":
+            budget = max(0.001, budget - (time.monotonic() - started))
+        worker_args = argparse.Namespace(**(vars(args) | dict(worker=True, worker_phase=batch)))
+        receipt = result_path(stage, worker_args, worker=True)
+        try:
+            worker = phase(batch, argv, cwd=ROOT, env=os.environ.copy(),
+                           log=stage / "logs" / f"whole-{batch}-t{args.threads}.log", budget=budget)
+        except BaseException as error:
+            result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
+                          active_phase=batch, error_type=type(error).__name__,
+                          supervisor_seconds=time.monotonic() - started)
+            details = json.loads(receipt.read_text()) if receipt.is_file() else {}
+            if details.get("invocation") == invocation:
+                result["phases"].extend(details["phases"])
+                result["active_phase"] = details["active_phase"] or batch
+            destination.write_text(json.dumps(result, indent=2) + "\n")
+            raise
+        result["workers"].append(worker)
+        details = json.loads(receipt.read_text()) if receipt.is_file() else {}
+        if details.get("invocation") == invocation:
+            result["phases"].extend(details["phases"])
+            result["active_phase"] = details["active_phase"]
+            result["required_phases"] = details.get("required_phases", [])
+            for name in ("source_digest", "platform", "machine", "kernel", "wsl", "tools", "julia", "tmux"):
+                if name in details:
+                    result[name] = details[name]
+        else:
+            worker.update(status="FAIL", reason="worker did not retain a receipt for this invocation")
+        seconds = time.monotonic() - started
+        result["loops"][batch] = loop_result(batch, seconds, args)
+        result["loops"][batch]["complete"] &= worker["status"] == "PASS"
+        if worker["status"] != "PASS":
+            result.update(status="FAIL", reason=f"complete {batch} worker failed or exceeded its budget")
+            for remaining in batches[batches.index(batch) + 1:]:
+                result["loops"][remaining] = dict(status="NOT RUN", complete=False,
+                    seconds=None, budget_seconds=LOOP_BUDGETS[remaining])
+            break
+    else:
+        result["status"] = "PASS" if all(loop["status"] == "PASS" for loop in result["loops"].values()) else "FAIL"
+    result["supervisor_seconds"] = time.monotonic() - started
+    temporary = destination.with_suffix(".tmp")
+    temporary.write_text(json.dumps(result, indent=2) + "\n")
+    temporary.replace(destination)
+    print(f"{result['status']} supervised matrix result: {destination}")
+    return 0 if result["status"] == "PASS" else 1
 
 
 def self_test(julia=None):
@@ -556,11 +640,13 @@ println("PASS admitted version arguments construct real Pkg specifications")
             for cell in cells
         ] == [
             ("Linux", "x86_64", "1.10.0", "3.2a", 1),
+            ("Linux", "x86_64", "1.10.0", "3.2a", 4),
+            ("Linux", "x86_64", "1.13.0", "3.7c", 1),
             ("Linux", "x86_64", "1.13.0", "3.7c", 4),
             ("Darwin", "arm64", "1.13.0", "3.7c", 1),
             ("Darwin", "x86_64", "1.13.0", "3.7c", 1),
         ]
-        assert sum(len(cell["suites"]) for cell in cells) == 4
+        assert sum(len(cell["suites"]) for cell in cells) == 6
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
         assert all(cell["optional"] == (cell["os"] != "Linux") for cell in cells)
@@ -578,10 +664,10 @@ println("PASS admitted version arguments construct real Pkg specifications")
             name: budget for name, _, budget, _ in selected_commands(args, base, metadata)
         }
         assert budgets["format"] == 10
-        assert format_warmup_command(args, base) == [
-            "julia", "--startup-file=no", "--threads=1", f"--project={base}",
-            str(ROOT / "dev/check-quality.jl"), "format",
-        ]
+        warmup = format_warmup_command(args, base)
+        assert warmup[:5] == ["julia", "--startup-file=no", "--threads=1", f"--project={base}", "-e"]
+        assert "format_text" in warmup[5] and "compiler_probe" in warmup[5]
+        assert "source_files" not in warmup[5] and "check-quality" not in warmup[5]
         partitions = []
         for suite in SUITES:
             args.suite = suite
@@ -598,6 +684,9 @@ println("PASS admitted version arguments construct real Pkg specifications")
         args.tier = "mid"
         assert loop_result("mid", 1, args)["complete"]
         assert {item[3] for item in selected_commands(args, base, metadata)} == {"unit", "quality"}
+        args.tier = "outer"
+        assert {item[0] for item in selected_commands(args, base, metadata)} == set(all_names)
+        assert loop_result("mid", 1, args)["complete"]
         args.tier = "all"
         (base / ".libtmux-julia-matrix").touch()
         (base / "LocalPreferences.toml").write_text(TOOL_PREFERENCES)
@@ -611,7 +700,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
                  dict(name="first", status="FAIL", seconds=0.01), KeyboardInterrupt()]), \
              redirect_stdout(StringIO()):
             try:
-                run(args)
+                run_checks(args)
             except KeyboardInterrupt:
                 pass
             else:
@@ -626,12 +715,55 @@ println("PASS admitted version arguments construct real Pkg specifications")
              patch(__name__ + ".phase", return_value=dict(name="first", status="PASS", seconds=0.01)), \
              patch.object(time, "monotonic", side_effect=[0, 12]), \
              redirect_stdout(StringIO()):
-            assert run(args) == 1
+            assert run_checks(args) == 1
         retained = json.loads((base / "results-all-t1.json").read_text())
         assert retained["phases"][0]["status"] == "PASS"
         assert retained["loops"]["mid"]["complete"]
         assert retained["loops"]["mid"]["status"] == "FAIL"
         assert retained["status"] == "FAIL"
+        args.tier = "mid"
+        def complete_worker(name, argv, **kwargs):
+            invocation = argv[argv.index("--invocation") + 1]
+            worker_args = SimpleNamespace(**(vars(args) | dict(worker_phase=name)))
+            result_path(base, worker_args, worker=True).write_text(json.dumps(dict(
+                invocation=invocation, phases=[dict(name="first", status="PASS", seconds=0.01)],
+                active_phase=None, loops={"mid": dict(seconds=0.01, status="PASS")},
+            )))
+            return dict(name=name, status="PASS", seconds=12)
+        with patch(__name__ + ".phase", side_effect=complete_worker), \
+             patch.object(time, "monotonic", side_effect=[0, 12, 12]), \
+             redirect_stdout(StringIO()):
+            assert run(args) == 1
+        retained = json.loads(result_path(base, args).read_text())
+        assert retained["phases"][0]["status"] == "PASS"
+        assert retained["loops"]["mid"]["seconds"] == 12
+        assert retained["loops"]["mid"]["status"] == "FAIL"
+        assert retained["status"] == "FAIL"
+        with patch(__name__ + ".phase", return_value=dict(name="mid", status="PASS", seconds=0.01)), \
+             redirect_stdout(StringIO()):
+            assert run(args) == 1
+        retained = json.loads(result_path(base, args).read_text())
+        assert retained["workers"][0]["reason"] == "worker did not retain a receipt for this invocation"
+        def interrupted_worker(name, argv, **kwargs):
+            complete_worker(name, argv, **kwargs)
+            worker_args = SimpleNamespace(**(vars(args) | dict(worker_phase=name)))
+            receipt = result_path(base, worker_args, worker=True)
+            details = json.loads(receipt.read_text())
+            details["phases"][0]["status"] = "FAIL"
+            details["active_phase"] = "second"
+            receipt.write_text(json.dumps(details))
+            raise KeyboardInterrupt()
+        with patch(__name__ + ".phase", side_effect=interrupted_worker), \
+             redirect_stdout(StringIO()):
+            try:
+                run(args)
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("supervisor interruption was swallowed")
+        retained = json.loads(result_path(base, args).read_text())
+        assert retained["status"] == "INTERRUPTED" and retained["active_phase"] == "second"
+        assert retained["phases"][0]["status"] == "FAIL"
     print("PASS owned preparation, phase retirement, suite coverage and interrupted result retention")
 
 
@@ -656,6 +788,9 @@ def main():
     execution.add_argument("--threads", type=int, choices=(1, 4), default=1)
     execution.add_argument("--tier", choices=("unit", "quality", "mid", "outer", "all"), default="all")
     execution.add_argument("--suite", choices=("all", *SUITES), default="all")
+    execution.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    execution.add_argument("--worker-phase", choices=("mid", "outer"), help=argparse.SUPPRESS)
+    execution.add_argument("--invocation", help=argparse.SUPPRESS)
     for option in ("julia", "tmux", "os", "arch"):
         execution.add_argument(f"--expected-{option}")
     args = parser.parse_args()
@@ -673,7 +808,7 @@ def main():
         elif args.command == "prepare":
             prepare(args)
         else:
-            return run(args)
+            return run_checks(args) if args.worker else run(args)
     except (ValueError, FileNotFoundError, subprocess.CalledProcessError) as error:
         print(f"NOT RUN: {error}", file=sys.stderr)
         return 2
