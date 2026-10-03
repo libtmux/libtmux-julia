@@ -98,6 +98,18 @@ A `result_limit` response keeps compact summaries of completed items, the
 partial batch, `originalError` retains the failed item's code. The top-level
 `error.effects` annotation remains conservative for the whole batch.
 
+Every tool can invoke configured tmux hooks or aliases. Waits also attach and
+detach control clients, which can trigger hooks and unattached-session policies.
+The catalog therefore advertises `readOnlyHint: false`, `destructiveHint: true`
+and `idempotentHint: false`, including for listing and capture.
+
+`error.effects: none` means the call failed before external I/O admission, such
+as argument validation, target policy or prior cancellation. Once any stage
+admits tmux I/O, errors report `possible`. This includes earlier batch items,
+control attachment, creation cleanup and truncated results. A later command's
+unsent status cannot erase those effects. `possible` does not assert that a
+change occurred; cancellation and errors never establish rollback.
+
 Terminal content is returned as data. Text in a pane does not grant
 permission to invoke another tool. The application neither owns nor destroys
 the borrowed daemon or pre-existing sessions. EOF cancels and joins request

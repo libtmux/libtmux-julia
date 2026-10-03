@@ -12,7 +12,6 @@ const _TOOL_NAMES = (
     "send_keys_and_wait",
 )
 const _ROUTINE_TOOLS = ("list_panes", "capture_pane", "send_keys")
-const _READ_ONLY_TOOLS = ("list_panes", "capture_pane", "wait_for_text")
 const _TOOL_ARGUMENTS = Dict(
     "wait_for_text"=>(("target", "text"), ("text",)),
     "send_keys_and_wait"=>(("target", "text", "keys", "literal"), ("text", "keys")),
@@ -27,18 +26,11 @@ const _TOOL_ARGUMENTS = Dict(
     "teardown_session"=>(("sessionId", "generation"), ("sessionId", "generation")),
 )
 
-_tool_can_mutate(name) = !(name in _READ_ONLY_TOOLS)
-
 struct _ToolFailure <: Exception
     code::String
     message::String
 end
 Base.showerror(io::IO, error::_ToolFailure) = print(io, error.message)
-
-struct _ToolEffectsError <: Exception
-    cause::Exception
-end
-Base.showerror(io::IO, error::_ToolEffectsError) = showerror(io, error.cause)
 
 struct _ApplicationCall
     token::LibTmux.CancellationToken
@@ -174,7 +166,16 @@ function _tool_remaining(context)
     remaining > 0 || throw(LibTmux.DeadlineExceeded(context.budget, false, nothing))
     remaining
 end
-_tool_kwargs(context) = (; timeout=_tool_remaining(context), cancel=context.cancel)
+function _tool_kwargs(context)
+    timeout = _tool_remaining(context)
+    context.cancel === nothing ||
+        !LibTmux.iscancelled(context.cancel) ||
+        throw(LibTmux.RequestCancelled(false))
+    # Hooks, aliases and client attachment can mutate even observation calls.
+    # Keep admission monotonic across every stage and sequential batch item.
+    hasproperty(context, :effects) && (context.effects[] = true)
+    (; timeout, cancel=context.cancel)
+end
 
 "Cancel and join active calls, then tear down only application-owned sessions."
 function Base.close(app::Application)
@@ -779,53 +780,46 @@ function _wait_text(app, ref, plan, context)
             "generationGuarantee"=>"best_effort",
         )
     end
-    try
-        LibTmux.open_control(app.server, session; _tool_kwargs(context)...) do connection
-            LibTmux.observe_output(
-                connection,
-                ref;
-                max_bytes=app.max_capture_bytes,
-                _tool_kwargs(context)...,
-            ) do stream
-                if plan.name == "wait_for_text"
-                    baseline = LibTmux.capture_baseline(
-                        stream;
-                        max_bytes=app.max_capture_bytes,
-                        _tool_kwargs(context)...,
-                    )
-                    text =
-                        LibTmux.decode!(LibTmux.TextDecoder(), baseline.bytes; final=true)
-                    occursin(plan.args["text"], text) && return matched("baseline")
-                else
-                    LibTmux.send_keys(
-                        app.server,
-                        ref,
-                        plan.args["keys"]...;
-                        literal=plan.args["literal"],
-                        _tool_kwargs(context)...,
-                    )
-                    keys_sent = true
-                end
-                context.progress("waiting")
-                decoder = LibTmux.TextDecoder()
-                tail = ""
-                while true
-                    event = take!(stream; _tool_kwargs(context)...)
-                    text = tail * LibTmux.decode!(decoder, event.bytes)
-                    occursin(plan.args["text"], text) && return matched("output")
-                    # Only a pattern-sized suffix can participate in a future
-                    # match. Never join the independent screen baseline here.
-                    first_byte =
-                        max(1, ncodeunits(text) - ncodeunits(plan.args["text"]) + 1)
-                    tail =
-                        isempty(text) ? "" :
-                        String(SubString(text, nextind(text, first_byte - 1)))
-                end
+    LibTmux.open_control(app.server, session; _tool_kwargs(context)...) do connection
+        LibTmux.observe_output(
+            connection,
+            ref;
+            max_bytes=app.max_capture_bytes,
+            _tool_kwargs(context)...,
+        ) do stream
+            if plan.name == "wait_for_text"
+                baseline = LibTmux.capture_baseline(
+                    stream;
+                    max_bytes=app.max_capture_bytes,
+                    _tool_kwargs(context)...,
+                )
+                text = LibTmux.decode!(LibTmux.TextDecoder(), baseline.bytes; final=true)
+                occursin(plan.args["text"], text) && return matched("baseline")
+            else
+                LibTmux.send_keys(
+                    app.server,
+                    ref,
+                    plan.args["keys"]...;
+                    literal=plan.args["literal"],
+                    _tool_kwargs(context)...,
+                )
+                keys_sent = true
+            end
+            context.progress("waiting")
+            decoder = LibTmux.TextDecoder()
+            tail = ""
+            while true
+                event = take!(stream; _tool_kwargs(context)...)
+                text = tail * LibTmux.decode!(decoder, event.bytes)
+                occursin(plan.args["text"], text) && return matched("output")
+                # Only a pattern-sized suffix can participate in a future
+                # match. Never join the independent screen baseline here.
+                first_byte = max(1, ncodeunits(text) - ncodeunits(plan.args["text"]) + 1)
+                tail =
+                    isempty(text) ? "" :
+                    String(SubString(text, nextind(text, first_byte - 1)))
             end
         end
-    catch error
-        keys_sent && throw(_ToolEffectsError(error))
-        rethrow()
     end
 end
 
@@ -838,9 +832,7 @@ function _execute_tool(app, plan, context)
             result = try
                 _execute_tool(app, operation, context)
             catch error
-                detail = _tool_error(error, operation.name)
-                any(result -> _tool_can_mutate(result["tool"]), results) &&
-                    (detail["effects"] = "possible")
+                detail = _tool_error(error, context.effects[])
                 return Dict(
                     "completed"=>results,
                     "failedIndex"=>index,
@@ -926,7 +918,7 @@ function _session_operation(app, plan, context)
             )
         catch original
             if ref !== nothing
-                cleanup = (; started=time_ns(), budget=0.9, cancel=nothing)
+                cleanup = (; started=time_ns(), budget=0.9, cancel=nothing, context.effects)
                 try
                     _remove_owned_session(app, ref, cleanup)
                 catch error
@@ -983,12 +975,7 @@ function _remove_owned_session(app, ref, context; captured=nothing)
     nothing
 end
 
-function _tool_error(error, name)
-    if error isa _ToolEffectsError
-        result = _tool_error(error.cause, name)
-        result["effects"] = "possible"
-        return result
-    end
+function _tool_error(error, effects::Bool=false)
     code =
         error isa _ToolFailure ? error.code :
         error isa ArgumentError ? "invalid_arguments" :
@@ -998,39 +985,21 @@ function _tool_error(error, name)
         error isa LibTmux.DeadlineExceeded ? "deadline" :
         error isa LibTmux.OutputLimitExceeded ? "output_limit" :
         error isa LibTmux.ObservationLost ? "observation_lost" : "operation_failed"
-    mutating = _tool_can_mutate(name)
-    uncertain =
-        mutating && (
-            error isa
-            Union{LibTmux.CommandError,LibTmux.CreationResponseError,CompositeException} ||
-            error isa Union{LibTmux.ProcessIOError,LibTmux.OutputLimitExceeded} &&
-            error.result !== nothing ||
-            error isa Union{LibTmux.RequestCancelled,LibTmux.DeadlineExceeded} && error.sent
-        )
     Dict(
         "code"=>code,
         "message"=>_clip(sprint(showerror, error), 512),
-        "effects"=>uncertain ? "possible" : "none",
+        "effects"=>effects ? "possible" : "none",
         "retryable"=>false,
     )
 end
 
-function _result_limit_payload(name, payload)
+function _result_limit_payload(name, payload, effects)
     completed = get(payload, "completed", nothing)
     original = get(payload, "error", nothing)
-    previous_mutation =
-        name == "run_operations" &&
-        completed isa AbstractVector &&
-        any(result -> _tool_can_mutate(result["tool"]), completed)
-    original_effects = original isa AbstractDict ? get(original, "effects", "none") : "none"
-    effects =
-        previous_mutation ||
-        original_effects == "possible" ||
-        (name != "run_operations" && _tool_can_mutate(name)) ? "possible" : "none"
     error = Dict(
         "code"=>"result_limit",
         "message"=>"result exceeds the configured byte limit; request fewer rows, lines or operations",
-        "effects"=>effects,
+        "effects"=>effects ? "possible" : "none",
         "retryable"=>false,
     )
     name == "run_operations" && completed isa AbstractVector || return Dict("error"=>error)
@@ -1056,17 +1025,18 @@ function _invoke_tool(
     cancel=LibTmux.CancellationToken(),
     progress=phase -> nothing,
 )
+    effects = Ref(false)
     payload = try
         plan = _plan_tool(app, name, input)
         _application_call(app, cancel) do context
-            _execute_tool(app, plan, merge(context, (; progress)))
+            _execute_tool(app, plan, merge(context, (; progress, effects)))
         end
     catch error
-        Dict("error"=>_tool_error(error, name))
+        Dict("error"=>_tool_error(error, effects[]))
     end
     encoded = JSON.json(payload)
     if ncodeunits(encoded) > app.max_result_bytes
-        payload = _result_limit_payload(name, payload)
+        payload = _result_limit_payload(name, payload, effects[])
         encoded = JSON.json(payload)
     end
     SDK.CallToolResult(
@@ -1094,17 +1064,15 @@ function tools(app::Application)
     [
         SDK.MCPTool(
             name=name,
-            description=descriptions[name],
+            description=descriptions[name] *
+                        " Configured tmux hooks and aliases may have effects, including during observation.",
             input_schema=_tool_schema(app, name),
             output_schema=_tool_output_schema(app, name),
             task_support=:forbidden,
             annotations=Dict{String,Any}(
-                "readOnlyHint"=>name in ("list_panes", "capture_pane", "wait_for_text"),
-                "destructiveHint"=>!(
-                    name in
-                    ("list_panes", "capture_pane", "wait_for_text", "create_session")
-                ),
-                "idempotentHint"=>name in ("list_panes", "capture_pane", "resize_pane"),
+                "readOnlyHint"=>false,
+                "destructiveHint"=>true,
+                "idempotentHint"=>false,
                 "openWorldHint"=>true,
             ),
             handler=(args, context) -> begin
