@@ -123,6 +123,12 @@ boundary. Both tools share the application's deadline and byte bounds, emit
 bounded progress when requested, and release their control clients on
 cancellation. Unrelated requests remain serviceable during a wait.
 
+Set `timeoutSeconds` on either wait tool to shorten that call's total budget.
+The value must be positive and no greater than the application timeout. Setup,
+capture and waiting share the shortened deadline; a wait inside `run_operations`
+also remains bounded by the whole batch's remaining deadline. The MCP tools use
+the core stream waits described in [the observation guide](../../docs/src/observations.md).
+
 ## Library use
 
 `Application(server; ...)` configures policy without I/O. `tools(app)` returns

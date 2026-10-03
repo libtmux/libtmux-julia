@@ -158,6 +158,7 @@ Each program creates and cleans up its own tmux server:
 | Query shared windows and their panes | [shared_windows.jl](examples/shared_windows.jl) |
 | Cancel a waiting control operation | [control_cancel.jl](examples/control_cancel.jl) |
 | Send text and subscribe to pane output | [output_stream.jl](examples/output_stream.jl) |
+| Read an authored command's completion marker and exit status | [command_completion.jl](examples/command_completion.jl) |
 
 To run the programs, clone the source:
 

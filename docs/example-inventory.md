@@ -15,6 +15,7 @@ and program links. It does not establish runtime correctness.
 | [docs/projections.md](../docs/projections.md) (2) | executable | owned-context runner | Owned snapshot passed to pane_columns with Tables 1.14 |
 | [docs/src/index.md](../docs/src/index.md) (1) | derived | external example runner | [examples/owned_capture.jl](../examples/owned_capture.jl) |
 | [docs/src/observations.md](../docs/src/observations.md) (1) | derived | external example runner | [examples/output_stream.jl](../examples/output_stream.jl) |
+| [docs/src/observations.md](../docs/src/observations.md) (2) | derived | external example runner | [examples/command_completion.jl](../examples/command_completion.jl) |
 | [docs/src/ownership.md](../docs/src/ownership.md) (1) | derived | external example runner | [examples/control_cancel.jl](../examples/control_cancel.jl) |
 | [docs/src/queries.md](../docs/src/queries.md) (1) | derived | external example runner | [examples/shared_windows.jl](../examples/shared_windows.jl) |
 | [docs/src/queries.md](../docs/src/queries.md) (2) | executable | snippet doctests | Pure callable criteria and wire conversion |
@@ -32,6 +33,7 @@ from this inventory check.
 
 | Program | Behavior |
 | --- | --- |
+| [examples/command_completion.jl](../examples/command_completion.jl) | owned tmux: authored completion marker and child exit status |
 | [examples/control_cancel.jl](../examples/control_cancel.jl) | owned tmux: cancellation and control cleanup |
 | [examples/output_stream.jl](../examples/output_stream.jl) | owned tmux: output observation and baseline |
 | [examples/owned_capture.jl](../examples/owned_capture.jl) | owned tmux: create, capture and cleanup |

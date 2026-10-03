@@ -110,6 +110,13 @@ const DOC_SNIPPETS = Dict(
         source="examples/output_stream.jl",
         note="",
     ),
+    ("docs/src/observations.md", 2) => (
+        kind=:derived,
+        gate=:external,
+        fingerprint="22efb45d99213798e2557d52f77160c2502adff1365e90acb57ec8d7e11b1985",
+        source="examples/command_completion.jl",
+        note="",
+    ),
     ("docs/src/ownership.md", 1) => (
         kind=:derived,
         gate=:external,
@@ -173,6 +180,7 @@ const DOC_PROGRAMS = Dict(
     "examples/shared_windows.jl"=>"owned tmux: shared links and captured predicates",
     "examples/control_cancel.jl"=>"owned tmux: cancellation and control cleanup",
     "examples/output_stream.jl"=>"owned tmux: output observation and baseline",
+    "examples/command_completion.jl"=>"owned tmux: authored completion marker and child exit status",
     "packages/LibTmuxWorkspace/examples/plan.jl"=>"pure planning of the shipped configuration",
     "packages/LibTmuxWorkspace/examples/owned_load.jl"=>"owned tmux: apply, freeze and cleanup",
 )

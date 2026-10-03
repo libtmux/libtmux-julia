@@ -13,8 +13,11 @@ const _TOOL_NAMES = (
 )
 const _ROUTINE_TOOLS = ("list_panes", "capture_pane", "send_keys")
 const _TOOL_ARGUMENTS = Dict(
-    "wait_for_text"=>(("target", "text"), ("text",)),
-    "send_keys_and_wait"=>(("target", "text", "keys", "literal"), ("text", "keys")),
+    "wait_for_text"=>(("target", "text", "timeoutSeconds"), ("text",)),
+    "send_keys_and_wait"=>(
+        ("target", "text", "keys", "literal", "timeoutSeconds"),
+        ("text", "keys"),
+    ),
     "list_panes"=>(("limit", "offset"), ()),
     "capture_pane"=>(("target", "lines", "maxBytes"), ()),
     "send_keys"=>(("target", "keys", "literal"), ("keys",)),
@@ -317,6 +320,13 @@ function _tool_schema(app, name)
         end
     end
     if name in ("wait_for_text", "send_keys_and_wait")
+        properties["timeoutSeconds"] = Dict(
+            "type"=>"number",
+            "exclusiveMinimum"=>0,
+            "maximum"=>app.timeout,
+            "default"=>app.timeout,
+            "description"=>"Total wait budget in seconds, capped by the remaining application call deadline",
+        )
         properties["text"] =
             merge(_string_schema(min(1024, app.max_capture_bytes)), Dict("minLength"=>1))
         push!(required, "text")
@@ -392,7 +402,7 @@ function _tool_output_schema(app, name)
                 "text"=>text,
                 "source"=>Dict("enum"=>["baseline", "output"]),
                 "evidence"=>Dict("const"=>"literal_text"),
-                "continuity"=>Dict("const"=>"reset"),
+                "continuity"=>Dict("enum"=>["reset", "stream"]),
                 "keysSent"=>boolean,
                 "terminalContent"=>Dict("const"=>"data"),
                 "generationGuarantee"=>text,
@@ -630,6 +640,16 @@ function _plan_tool(app, name, input)
     if name in ("wait_for_text", "send_keys_and_wait")
         args["text"] = _text(input["text"], min(1024, app.max_capture_bytes))
         isempty(args["text"]) && throw(ArgumentError("text cannot be empty"))
+        budget = get(input, "timeoutSeconds", app.timeout)
+        budget isa Real &&
+        !(budget isa Bool) &&
+        isfinite(budget) &&
+        0 < budget <= app.timeout || throw(
+            ArgumentError(
+                "timeoutSeconds must be positive and at most the application timeout",
+            ),
+        )
+        args["timeoutSeconds"] = Float64(budget)
     end
     (; name, args)
 end
@@ -766,20 +786,6 @@ function _wait_text(app, ref, plan, context)
     isempty(links) && throw(LibTmux.StaleReference(string(ref.id)))
     session = first(links).session.ref
     keys_sent = false
-    function matched(source)
-        context.progress("matched")
-        Dict(
-            "target"=>_target_wire(ref),
-            "matched"=>true,
-            "text"=>plan.args["text"],
-            "source"=>source,
-            "evidence"=>"literal_text",
-            "continuity"=>"reset",
-            "keysSent"=>keys_sent,
-            "terminalContent"=>"data",
-            "generationGuarantee"=>"best_effort",
-        )
-    end
     LibTmux.open_control(app.server, session; _tool_kwargs(context)...) do connection
         LibTmux.observe_output(
             connection,
@@ -787,15 +793,7 @@ function _wait_text(app, ref, plan, context)
             max_bytes=app.max_capture_bytes,
             _tool_kwargs(context)...,
         ) do stream
-            if plan.name == "wait_for_text"
-                baseline = LibTmux.capture_baseline(
-                    stream;
-                    max_bytes=app.max_capture_bytes,
-                    _tool_kwargs(context)...,
-                )
-                text = LibTmux.decode!(LibTmux.TextDecoder(), baseline.bytes; final=true)
-                occursin(plan.args["text"], text) && return matched("baseline")
-            else
+            if plan.name == "send_keys_and_wait"
                 LibTmux.send_keys(
                     app.server,
                     ref,
@@ -806,19 +804,25 @@ function _wait_text(app, ref, plan, context)
                 keys_sent = true
             end
             context.progress("waiting")
-            decoder = LibTmux.TextDecoder()
-            tail = ""
-            while true
-                event = take!(stream; _tool_kwargs(context)...)
-                text = tail * LibTmux.decode!(decoder, event.bytes)
-                occursin(plan.args["text"], text) && return matched("output")
-                # Only a pattern-sized suffix can participate in a future
-                # match. Never join the independent screen baseline here.
-                first_byte = max(1, ncodeunits(text) - ncodeunits(plan.args["text"]) + 1)
-                tail =
-                    isempty(text) ? "" :
-                    String(SubString(text, nextind(text, first_byte - 1)))
-            end
+            result = LibTmux.wait_for_text(
+                stream,
+                plan.args["text"];
+                baseline=plan.name == "wait_for_text",
+                max_bytes=app.max_capture_bytes,
+                _tool_kwargs(context)...,
+            )
+            context.progress("matched")
+            Dict(
+                "target"=>_target_wire(ref),
+                "matched"=>true,
+                "text"=>plan.args["text"],
+                "source"=>String(result.source),
+                "evidence"=>String(result.evidence),
+                "continuity"=>String(result.continuity),
+                "keysSent"=>keys_sent,
+                "terminalContent"=>"data",
+                "generationGuarantee"=>"best_effort",
+            )
         end
     end
 end
@@ -845,6 +849,11 @@ function _execute_tool(app, plan, context)
         return Dict("completed"=>results, "failedIndex"=>nothing, "atomic"=>false)
     elseif name == "create_session" || name == "teardown_session"
         return _session_operation(app, plan, context)
+    end
+    if name in ("wait_for_text", "send_keys_and_wait")
+        elapsed = (time_ns() - context.started) / 1e9
+        context =
+            merge(context, (; budget=min(context.budget, elapsed + args["timeoutSeconds"])))
     end
     ref = _resolve_target(app, args["target"], context)
     name == "capture_pane" && return _capture(app, ref, args, context)
@@ -1029,7 +1038,8 @@ function _invoke_tool(
     payload = try
         plan = _plan_tool(app, name, input)
         _application_call(app, cancel) do context
-            _execute_tool(app, plan, merge(context, (; progress, effects)))
+            budget = min(context.budget, get(plan.args, "timeoutSeconds", context.budget))
+            _execute_tool(app, plan, merge(context, (; progress, effects, budget)))
         end
     catch error
         Dict("error"=>_tool_error(error, effects[]))
