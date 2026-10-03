@@ -96,6 +96,13 @@ const DOC_SNIPPETS = Dict(
         source="",
         note="Owned snapshot passed to pane_columns with Tables 1.14",
     ),
+    ("docs/src/api-queries.md", 1) => (
+        kind=:executable,
+        gate=:doctest,
+        fingerprint="0b4638e747fa7615519dc0ce58fe752843ce25229d3379f4941e099b076533f3",
+        source="",
+        note="Pure native criterion composition and wire round trip",
+    ),
     ("docs/src/index.md", 1) => (
         kind=:derived,
         gate=:external,
@@ -344,7 +351,7 @@ function inventory_text(entries)
     println(output, "\n## Executable programs\n")
     println(
         output,
-        "The external consumer checker discovers and executes all six programs from",
+        "The external consumer checker discovers and executes all programs from",
     )
     println(
         output,
@@ -357,20 +364,14 @@ function inventory_text(entries)
         println(output, "| [$path](../$path) | $(DOC_PROGRAMS[path]) |")
     end
     println(output, "\n## Runtime boundaries\n")
-    println(
-        output,
-        "`dev/check-doc-examples.jl doctest` runs the four pure fences exactly as",
-    )
+    println(output, "`dev/check-doc-examples.jl doctest` runs the pure fences exactly as")
     println(
         output,
         "shipped through Documenter, with a private copy of the workspace fixture.",
     )
     println(output, "Use the prepared quality project containing Documenter, JSON and both")
     println(output, "consumer packages; dependency resolution stays outside the check.\n")
-    println(
-        output,
-        "The five derived fences read their executable programs directly during the",
-    )
+    println(output, "Derived fences read their executable programs directly during the")
     println(
         output,
         "manual build. `dev/check-consumers.jl examples STAGE` supplies their separate",
