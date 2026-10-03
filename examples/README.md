@@ -6,7 +6,7 @@ the default server. `LIBTMUX_TEST_TMUX` can select a specific tmux executable.
 
 | Program | Demonstrates |
 | --- | --- |
-| [owned_capture.jl](owned_capture.jl) | Create, capture and close an owned server |
+| [owned_capture.jl](owned_capture.jl) | Owned setup, borrowed named targeting and ambiguity refusal |
 | [shared_windows.jl](shared_windows.jl) | Entities, shared links and local criteria |
 | [control_cancel.jl](control_cancel.jl) | Task cancellation and control ownership |
 | [output_stream.jl](output_stream.jl) | Bounded raw output and an explicit screen reset |
