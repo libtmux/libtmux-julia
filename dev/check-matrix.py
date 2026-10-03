@@ -102,7 +102,7 @@ def qa_cells():
 
 def source_digest():
     digest = hashlib.sha256()
-    inputs = ("Project.toml", "README.md", "LICENSE", "CONTRIBUTING.md", "WRITING.md", "AGENTS.md",
+    inputs = ("Project.toml", "README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "WRITING.md", "AGENTS.md",
               ".github/workflows",
               "src", "ext", "test", "schema", "docs", "examples", "packages",
               "dev", "benchmark")
@@ -980,7 +980,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         (base / "prepared.json").write_text(json.dumps(metadata))
         fingerprint_root = base / "fingerprint-source"
         fingerprints = [fingerprint_root / name for name in (
-            "CONTRIBUTING.md", "WRITING.md", "AGENTS.md", "dev/quality-checks.jl",
+            "CHANGELOG.md", "CONTRIBUTING.md", "WRITING.md", "AGENTS.md", "dev/quality-checks.jl",
             "dev/generate-options.jl", "dev/LibTmuxCheckCompiler/src/LibTmuxCheckCompiler.jl")]
         for path in fingerprints:
             path.parent.mkdir(parents=True, exist_ok=True)
