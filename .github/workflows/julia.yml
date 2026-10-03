@@ -113,6 +113,7 @@ jobs:
     needs: matrix
     name: ${{ matrix.job_label }}
     runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.optional }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.matrix.outputs.cells) }}

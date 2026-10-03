@@ -79,8 +79,19 @@ $ /usr/bin/time -p julia \
 Use `--compile=min -O0` for the inner and mid semantic loops, including all
 unit tests. Normal compilation belongs in the outer loop because it includes
 Julia compilation across every public feature. Minimal compilation does not
-replace those normal checks or establish performance. The runner accepts only
-`unit`, `integration`, and `all`; omitting the argument selects `all`.
+replace those normal checks or establish performance. The runner accepts
+`unit`, `integration`, `all`, or one test file stem. Omitting the argument
+selects `all`. For a focused parser check:
+
+```console
+$ /usr/bin/time -p julia \
+    --startup-file=no \
+    --compile=min \
+    -O0 \
+    --project=. \
+    --threads=1 \
+    test/runtests.jl control_protocol
+```
 
 The forced-cleanup case belongs to the outer loop because it deliberately
 stops its owned daemon and waits for the 900 ms shutdown deadline:
@@ -402,7 +413,8 @@ still uses normal compilation and inspects every owned source file. Product
 precompilation is unchanged. Prepared metadata records the preference, and
 the runner rejects preference changes before checking the cell.
 Preparation runs the same read-only formatter check at the selected thread
-count so the timed quality gate keeps its 30-second budget.
+count. Subsequent checks still format every source and include that work in
+the complete mid budget.
 
 ```console
 $ matrix_stage=$(mktemp -d "${TMPDIR:-/tmp}/ltj-matrix.XXXXXX")
@@ -450,19 +462,19 @@ Both must pass at the same source revision to complete a split cell. Use
 `--suite runtime` or `--suite delivery` to run one partition locally; omitting
 the option runs both.
 
-Pull requests run combined QA cells: Linux floor (tmux 3.3a) at one thread,
-current Linux at four threads, Linux on tmux 3.8 at one thread, and current
-macOS on each architecture at one thread. Rejection cells run tmux 3.0a, 3.1c,
-3.2a and the unpatched 3.3 release against `test/runtests.jl rejection`, with
-the release as its own client and behind a 3.3a client; they assert that
-operations are refused without effect and sit outside the supported matrix. The
-3.0a and 3.1c cells run `test/runtests.jl old-daemon` instead: the real old
-daemon behind a 3.3a client. Every rejection cell also runs the workspace CLI
-against a real daemon of the rejected release, and the 3.0a and 3.1c cells run
-the MCP tools against a daemon that replaces a checked one. Both package suites
-are `runtests.jl old-daemon` and fail instead of skipping when the builds are
-absent. Intermediate releases and macOS floor evidence remain explicit
-compatibility work; an unrun release is not support.
+Pull requests require Linux floor (tmux 3.3a), current Linux, and Linux on
+tmux 3.8. Current macOS cells on each architecture are supplementary and may
+fail independently; their failures do not excuse a Linux failure.
+Rejection cells run tmux 3.0a, 3.1c, 3.2a and unpatched 3.3 outside the
+supported matrix. The 3.2a and 3.3 cells run `test/runtests.jl rejection`
+with the release itself and with a 3.3a client. The 3.0a and 3.1c cells run
+`test/runtests.jl old-daemon` behind a 3.3a client. Both suites assert refusal
+without effects. Every rejection cell also runs the workspace CLI against a
+real daemon of the rejected release, and the 3.0a and 3.1c cells run the MCP
+tools against a daemon that replaces a checked one. Both package suites use
+`runtests.jl old-daemon` and fail instead of skipping when builds are absent.
+Intermediate releases and macOS floor evidence remain explicit compatibility
+work; an unrun release is not support.
 
 The driver saves structured results before and after each phase. Interrupted
 runs retain completed failures and identify the unfinished phase; they never
@@ -487,11 +499,22 @@ MCP/workspace processes. Keep raw results and compiler flags with any claim.
 
 Measure the whole command. Libraries should aim for the stretch budget.
 
-| Loop | Budget | Stretch | Scope |
-| --- | --- | --- | --- |
-| Inner | Under 5 seconds | Under 2 seconds | Focused tests after each edit |
-| Mid | Under 30 seconds | Under 10 seconds | Unit suites, lint, and generated-file checks before handoff |
-| Outer | Under 5 minutes | Under 60 seconds | Types, builds, integration tests, and compatibility checks before commit or PR |
+| Loop | Whole-command budget | Scope |
+| --- | --- | --- |
+| Inner | Under 1 second | Focused tests after each edit |
+| Mid | Under 10 seconds | All unit suites, quality, formatting and generated-file checks |
+| Outer | Under 60 seconds | Complete prepared cell, including normal compilation, integration, documentation and installed consumers |
+
+The matrix runner records aggregate mid and outer durations and fails an
+overrun even when every phase passes. Use `--tier mid` for the complete mid
+scope. The default complete outer includes the preceding mid checks.
+Individual unit/quality and runtime/delivery partitions record incomplete
+scope; they cannot establish a passing complete loop. Retain external
+whole-process timing as well as the runner's orchestration measurements.
+
+Complete timing gates remain open while the existing normal suites and
+installed launcher checks exceed these limits. Passing correctness checks
+do not waive the timing requirement.
 
 The current runnable tiers include unit checks, owned-tmux integration,
 forced-cleanup cases, generated criteria and external imports. Four CI product
