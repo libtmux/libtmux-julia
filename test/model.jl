@@ -55,6 +55,8 @@
             length(LibTmux.paneoccurrences(snap)),
         ) == (2, 2, 3, 3, 5)
         @test snap.acquired == (1.0, 2.0)
+        @test_throws ArgumentError setproperty!(snap, :identity, restarted)
+        @test_throws ArgumentError setproperty!(snap, :_complete, Set{Any}())
         @test LibTmux.window(first(LibTmux.panes(snap))).name == "api"
         @test first(LibTmux.panes(snap)).window.name == "api"
         @test map(w -> w.name, LibTmux.windows(first(LibTmux.sessions(snap)))) ==
@@ -75,17 +77,17 @@
         @test first(LibTmux.sessions(snap)).name == "dev"
         @test length(LibTmux.paneoccurrences(snap)) == 5
         ps = LibTmux.panes(snap)
-        @test ps isa AbstractVector{LibTmux.PaneSnapshot}
+        @test ps isa AbstractVector{<:LibTmux.PaneSnapshot}
         @test (size(ps), axes(ps), collect(eachindex(ps))) ==
               ((3,), (Base.OneTo(3),), [1, 2, 3])
         @test first(collect(ps)).window.name == "api"
         selected = filter(p -> p.active, ps)
-        @test selected isa LibTmux.Selection{LibTmux.PaneSnapshot}
+        @test selected isa LibTmux.Selection{<:LibTmux.PaneSnapshot}
         @test map(p -> string(p.id), selected) == ["%1", "%3"]
         @test LibTmux.snapshotof(selected) === snap
         @test LibTmux.snapshotof(first(selected)) === snap
-        @test eltype(filter(_ -> false, ps)) == LibTmux.PaneSnapshot
-        @test filter(_ -> true, collect(ps)) isa Vector{LibTmux.PaneSnapshot}
+        @test eltype(filter(_ -> false, ps)) == eltype(ps)
+        @test filter(_ -> true, collect(ps)) isa Vector{<:LibTmux.PaneSnapshot}
         repeated = LibTmux.Selection([ps[1], ps[1], ps[3]]; snapshot=snap)
         @test map(p -> string(p.id), filter(_ -> true, repeated)) == ["%1", "%1", "%3"]
         @test map(p -> string(p.id), repeated) == map(p -> string(p.id), repeated)
@@ -105,6 +107,121 @@
         @test_throws LibTmux.SnapshotCoverageError ps[1].width
         @test ps[2].current_command === nothing
     end
+end
+
+@testset "schema accessors infer and retain numeric values" begin
+    identity = ServerIdentity(socket_path="/tmp/libtmux-model", generation="schema")
+    snap = LibTmux._build_snapshot(
+        identity;
+        acquired=(0, 0),
+        complete=true,
+        sessions=[(id="\$0", name="session")],
+        windows=[(id="@1", width=80)],
+        panes=[(
+            id="%1",
+            window_id="@1",
+            width=80,
+            active=true,
+            current_command=nothing,
+            title="literal",
+        )],
+        windowlinks=[(session_id="\$0", window_id="@1", index=0)],
+    )
+    pane = only(panes(snap))
+    @test @inferred((p -> p.id)(pane)) == PaneID("%1")
+    @test @inferred((p -> p.width)(pane)) === 80
+    @test @inferred((p -> p.active)(pane)) === true
+    @test @inferred((p -> p.title)(pane)) === "literal"
+    @test @inferred(Union{Nothing,String}, (p -> p.current_command)(pane)) === nothing
+    @test @inferred((p -> p.ref)(pane)) == PaneRef(identity, "%1")
+    @test @inferred((p -> p.window.width)(pane)) === 80
+
+    width = UInt128(typemax(UInt128))
+    wide = LibTmux._build_snapshot(
+        identity;
+        acquired=(0, 0),
+        complete=true,
+        windows=[(id="@1",)],
+        panes=[(id="%1", window_id="@1", width=width)],
+    )
+    wide_pane = only(panes(wide))
+    @test @inferred((p -> p.width)(wide_pane)) === width
+    @test only(project_rows(panes(wide); columns=(:width,))).width === width
+
+    heterogeneous = LibTmux._build_snapshot(
+        identity;
+        acquired=(0, 0),
+        complete=true,
+        windows=[(id="@1",)],
+        panes=[
+            (id="%1", window_id="@1", width=Int8(7)),
+            (id="%2", window_id="@1", width=width),
+        ],
+    )
+    @test [p.width for p in panes(heterogeneous)] == [Int8(7), width]
+    @test typeof(panes(heterogeneous)[1].width) === Int8
+    @test typeof(panes(heterogeneous)[2].width) === UInt128
+
+    nullable = ((:exit_status, true),)
+    absent = [LibTmux._CapturedRecord((exit_status=nothing,))]
+    @test LibTmux._numeric_schema(absent, nullable) === Tuple{Int}
+    @test LibTmux._numeric_schema([LibTmux._CapturedRecord((;))], nullable) === Tuple{Int}
+    @test LibTmux._numeric_schema(
+        [absent; LibTmux._CapturedRecord((exit_status=width,))],
+        nullable,
+    ) === Tuple{UInt128}
+    @test_throws ArgumentError LibTmux._numeric_schema(absent, ((:exit_status, false),))
+    for value in (true, 1.0)
+        @test_throws ArgumentError LibTmux._numeric_schema(
+            [LibTmux._CapturedRecord((exit_status=value,))],
+            nullable,
+        )
+    end
+end
+
+@testset "indexed relations preserve captured order and unknown edges" begin
+    identity = ServerIdentity(socket_path="/tmp/libtmux-model", generation="indexes")
+    snap = LibTmux._build_snapshot(
+        identity;
+        acquired=(0, 0),
+        complete=true,
+        sessions=[(id="\$0",), (id="\$1",)],
+        windows=[(id="@1",), (id="@2",)],
+        panes=[
+            (id="%3", window_id="@2"),
+            (id="%2", window_id="@1"),
+            (id="%1", window_id="@1"),
+        ],
+        windowlinks=[
+            (session_id="\$0", window_id="@2", index=9),
+            (session_id="\$1", window_id="@1", index=1),
+            (session_id="\$0", window_id="@1", index=3),
+            (session_id="\$0", window_id="@2", index=4),
+        ],
+    )
+    @test [p.id for p in panes(windows(snap)[1])] == [PaneID("%2"), PaneID("%1")]
+    @test [l.index for l in windowlinks(windows(snap)[2])] == [9, 4]
+    @test [l.index for l in windowlinks(sessions(snap)[1])] == [9, 3, 4]
+    @test [w.id for w in windows(sessions(snap)[1])] == [WindowID("@2"), WindowID("@1")]
+    @test [o.pane.id for o in paneoccurrences(snap)] == [
+        PaneID("%3"),
+        PaneID("%2"),
+        PaneID("%1"),
+        PaneID("%2"),
+        PaneID("%1"),
+        PaneID("%3"),
+    ]
+    @test snapshotof(panes(windows(snap)[1])) === snap
+
+    unknown = LibTmux._build_snapshot(
+        identity;
+        acquired=(0, 0),
+        complete=true,
+        windows=[(id="@1",), (id="@2",)],
+        panes=[(id="%1", window_id="@1"), (id="%2",)],
+    )
+    @test_throws SnapshotCoverageError panes(windows(unknown)[1])
+    @test_throws SnapshotCoverageError panes(windows(unknown)[2])
 end
 
 @testset "membership coverage and graph closure" begin

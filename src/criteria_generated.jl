@@ -66,6 +66,66 @@ const _WIRE_FIELDS = Dict{String,Tuple{Symbol,Symbol}}(
 )
 const _FIELD_WIRE = Dict(value => key for (key, value) in _WIRE_FIELDS)
 
+_snapshot_integer_fields(::Val{:client}) = ((:pid, false), (:created, false),)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:client}, ::Val{:pid}) where {SI,WI,PI,CI,LI} = fieldtype(CI, 1)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:client}, ::Val{:created}) where {SI,WI,PI,CI,LI} = fieldtype(CI, 2)
+Base.@constprop :aggressive function _typed_captured(x::ClientSnapshot{S}, key::Symbol) where {S}
+    key === :id && return _captured(x, :id)::ClientID
+    key === :name && return _captured(x, :name)::String
+    key === :pid && return _captured(x, :pid)::_numeric_type(S, Val(:client), Val(:pid))
+    key === :created && return _captured(x, :created)::_numeric_type(S, Val(:client), Val(:created))
+    key === :session_id && return _captured(x, :session_id)::Union{Nothing,SessionID}
+    _captured(x, key)
+end
+
+_snapshot_integer_fields(::Val{:pane}) = ((:index, false), (:width, false), (:height, false),)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:index}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 1)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:width}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 2)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:height}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 3)
+Base.@constprop :aggressive function _typed_captured(x::PaneSnapshot{S}, key::Symbol) where {S}
+    key === :id && return _captured(x, :id)::PaneID
+    key === :index && return _captured(x, :index)::_numeric_type(S, Val(:pane), Val(:index))
+    key === :active && return _captured(x, :active)::Bool
+    key === :dead && return _captured(x, :dead)::Bool
+    key === :width && return _captured(x, :width)::_numeric_type(S, Val(:pane), Val(:width))
+    key === :height && return _captured(x, :height)::_numeric_type(S, Val(:pane), Val(:height))
+    key === :current_command && return _captured(x, :current_command)::Union{Nothing,String}
+    key === :current_path && return _captured(x, :current_path)::Union{Nothing,String}
+    key === :title && return _captured(x, :title)::String
+    key === :window_id && return _captured(x, :window_id)::WindowID
+    _captured(x, key)
+end
+
+_snapshot_integer_fields(::Val{:session}) = ((:attached_clients, false),)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:session}, ::Val{:attached_clients}) where {SI,WI,PI,CI,LI} = fieldtype(SI, 1)
+Base.@constprop :aggressive function _typed_captured(x::SessionSnapshot{S}, key::Symbol) where {S}
+    key === :id && return _captured(x, :id)::SessionID
+    key === :name && return _captured(x, :name)::String
+    key === :attached_clients && return _captured(x, :attached_clients)::_numeric_type(S, Val(:session), Val(:attached_clients))
+    _captured(x, key)
+end
+
+_snapshot_integer_fields(::Val{:window}) = ((:width, false), (:height, false),)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:window}, ::Val{:width}) where {SI,WI,PI,CI,LI} = fieldtype(WI, 1)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:window}, ::Val{:height}) where {SI,WI,PI,CI,LI} = fieldtype(WI, 2)
+Base.@constprop :aggressive function _typed_captured(x::WindowSnapshot{S}, key::Symbol) where {S}
+    key === :id && return _captured(x, :id)::WindowID
+    key === :name && return _captured(x, :name)::String
+    key === :width && return _captured(x, :width)::_numeric_type(S, Val(:window), Val(:width))
+    key === :height && return _captured(x, :height)::_numeric_type(S, Val(:window), Val(:height))
+    _captured(x, key)
+end
+
+_snapshot_integer_fields(::Val{:windowlink}) = ((:index, false),)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:windowlink}, ::Val{:index}) where {SI,WI,PI,CI,LI} = fieldtype(LI, 1)
+Base.@constprop :aggressive function _typed_captured(x::WindowLink{S}, key::Symbol) where {S}
+    key === :index && return _captured(x, :index)::_numeric_type(S, Val(:windowlink), Val(:index))
+    key === :active && return _captured(x, :active)::Bool
+    key === :window_id && return _captured(x, :window_id)::WindowID
+    key === :session_id && return _captured(x, :session_id)::SessionID
+    _captured(x, key)
+end
+
 """
     ClientWhere(; id, name, pid, created, session)
 
@@ -89,7 +149,7 @@ function ClientWhere(; id=_UNCONSTRAINED, name=_UNCONSTRAINED, pid=_UNCONSTRAINE
     ClientWhere(_where_clauses(:client, (; id, name, pid, created, session)), Val(:validated))
 end
 _criterion_entity(::ClientWhere) = :client
-_observation_entity(::Type{ClientSnapshot}) = :client
+_observation_entity(::Type{<:ClientSnapshot}) = :client
 
 """
     PaneWhere(; id, index, active, dead, width, height, current_command, current_path, title, window)
@@ -119,7 +179,7 @@ function PaneWhere(; id=_UNCONSTRAINED, index=_UNCONSTRAINED, active=_UNCONSTRAI
     PaneWhere(_where_clauses(:pane, (; id, index, active, dead, width, height, current_command, current_path, title, window)), Val(:validated))
 end
 _criterion_entity(::PaneWhere) = :pane
-_observation_entity(::Type{PaneSnapshot}) = :pane
+_observation_entity(::Type{<:PaneSnapshot}) = :pane
 
 """
     SessionWhere(; id, name, attached_clients, windows, windowlinks)
@@ -144,7 +204,7 @@ function SessionWhere(; id=_UNCONSTRAINED, name=_UNCONSTRAINED, attached_clients
     SessionWhere(_where_clauses(:session, (; id, name, attached_clients, windows, windowlinks)), Val(:validated))
 end
 _criterion_entity(::SessionWhere) = :session
-_observation_entity(::Type{SessionSnapshot}) = :session
+_observation_entity(::Type{<:SessionSnapshot}) = :session
 
 """
     WindowWhere(; id, name, width, height, panes, windowlinks)
@@ -170,7 +230,7 @@ function WindowWhere(; id=_UNCONSTRAINED, name=_UNCONSTRAINED, width=_UNCONSTRAI
     WindowWhere(_where_clauses(:window, (; id, name, width, height, panes, windowlinks)), Val(:validated))
 end
 _criterion_entity(::WindowWhere) = :window
-_observation_entity(::Type{WindowSnapshot}) = :window
+_observation_entity(::Type{<:WindowSnapshot}) = :window
 
 """
     WindowLinkWhere(; index, active, session, window)
@@ -194,4 +254,4 @@ function WindowLinkWhere(; index=_UNCONSTRAINED, active=_UNCONSTRAINED, session=
     WindowLinkWhere(_where_clauses(:windowlink, (; index, active, session, window)), Val(:validated))
 end
 _criterion_entity(::WindowLinkWhere) = :windowlink
-_observation_entity(::Type{WindowLink}) = :windowlink
+_observation_entity(::Type{<:WindowLink}) = :windowlink

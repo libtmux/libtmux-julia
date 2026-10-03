@@ -74,9 +74,9 @@ end
         q = LibTmux.PaneWhere(active=true, current_command=F.OneOf(["nvim", "vim"]))
         @test q isa Function
         @test map(p -> string(p.id), filter(q, ps)) == ["%1"]
-        @test filter(q, ps) isa Selection{PaneSnapshot}
+        @test filter(q, ps) isa Selection{<:PaneSnapshot}
         @test snapshotof(filter(q, ps)) === snap
-        @test filter(q, collect(ps)) isa Vector{PaneSnapshot}
+        @test filter(q, collect(ps)) isa Vector{<:PaneSnapshot}
         @test (any(q, ps), all(q, ps), count(q, ps), findall(q, ps)) ==
               (true, false, 1, [1])
         @test [p.id for p in ps if q(p)] == [PaneID("%1")]
