@@ -102,7 +102,8 @@ def qa_cells():
 
 def source_digest():
     digest = hashlib.sha256()
-    inputs = ("Project.toml", "README.md", "LICENSE", ".github/workflows",
+    inputs = ("Project.toml", "README.md", "LICENSE", "CONTRIBUTING.md", "WRITING.md", "AGENTS.md",
+              ".github/workflows",
               "src", "ext", "test", "schema", "docs", "examples", "packages",
               "dev", "benchmark")
     for base in inputs:
@@ -976,6 +977,32 @@ println("PASS admitted version arguments construct real Pkg specifications")
         args.tier = "all"
         (base / ".libtmux-julia-matrix").touch()
         (base / "LocalPreferences.toml").write_text(TOOL_PREFERENCES)
+        (base / "prepared.json").write_text(json.dumps(metadata))
+        fingerprint_root = base / "fingerprint-source"
+        fingerprints = [fingerprint_root / name for name in (
+            "CONTRIBUTING.md", "WRITING.md", "AGENTS.md", "dev/quality-checks.jl",
+            "dev/generate-options.jl", "dev/LibTmuxCheckCompiler/src/LibTmuxCheckCompiler.jl")]
+        for path in fingerprints:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("original")
+        with patch(__name__ + ".ROOT", fingerprint_root):
+            fingerprint = source_digest()
+            (base / "prepared.json").write_text(json.dumps(metadata | dict(source_digest=fingerprint)))
+            for path in fingerprints:
+                path.write_text("changed")
+                with patch(__name__ + ".phase") as launch, \
+                     patch.object(subprocess, "check_output", side_effect=AssertionError(
+                         "stale source reached executable probe")) as probe:
+                    try:
+                        run_checks(args)
+                    except ValueError as error:
+                        assert "source changed since preparation" in str(error)
+                    else:
+                        raise AssertionError("changed policy or compiler source was accepted")
+                    launch.assert_not_called()
+                    probe.assert_not_called()
+                path.write_text("original")
+                assert source_digest() == fingerprint
         (base / "prepared.json").write_text(json.dumps(metadata))
         plan = [("first", [], 30, "unit"), ("second", [], 30, "unit")]
         with patch(__name__ + ".source_digest", return_value="fixed"), \
