@@ -1,17 +1,22 @@
 # Compatibility
 
-| Boundary | Current evidence |
-| --- | --- |
-| Julia / tmux | 1.10.0 / 3.3a, 1.13.1 / 3.7c and 1.13.1 / 3.8 on Linux, and 1.13.0 / 3.7c on macOS, in the listed CI cells |
-| Linux x86_64 | 1.10.0 / 3.3a / 1 thread, 1.13.1 / 3.7c / 4 threads and 1.13.1 / 3.8 / 1 thread passed in Julia workflow run 39157326487 |
-| macOS arm64 | 1.13.0 / 3.7c / 1 thread passed |
-| macOS x86_64 | 1.13.0 / 3.7c / 1 thread passed |
-| Full package suite | Core, MCP, workspace, extensions, documentation, external imports, examples and launchers passed in all listed cells |
+Compatibility evidence belongs to an exact source revision. Complete development
+gates remain open; focused correctness checks do not establish full support.
 
-These are exact CI cells, not a promise for other Julia, tmux, platform,
-architecture or thread combinations. Julia 1.10.0 on tmux 3.3a is the evidence
-for the Julia 1.10 floor. An independent guide walkthrough and benchmark
-baselines remain open.
+| Evidence | Scope and result |
+| --- | --- |
+| Baseline correctness | Revision `9e3776d07798174a3590a728d28029efcbb52780`: core, MCP, workspace, extensions, docs, external examples and launchers passed in the original four cells |
+| Baseline cells | Linux x86_64: Julia 1.10.0 / tmux 3.2a / 1 thread and Julia 1.13.0 / tmux 3.7c / 4 threads; macOS arm64 and x86_64: Julia 1.13.0 / tmux 3.7c / 1 thread |
+| Dependency correctness | Revision `0026771494909372fc3d5f2ea3471e156d340d9a`: Linux Julia 1.10.0 / tmux 3.3a / 1 thread, Julia 1.13.1 / tmux 3.7c / 4 threads and Julia 1.13.1 / tmux 3.8 / 1 thread passed in [dependency CI](https://github.com/libtmux/libtmux-julia/actions/runs/39157326487); this does not establish the current adoption revision or its timing gates |
+| Whole-command limits | The baseline and subsequent development run exceed the complete mid/outer budgets; they provide no timing acceptance |
+| Required development cells | Linux tmux 3.3a floor and current versions, each at one and four threads, plus tmux 3.8; macOS supplements these checks |
+| Remaining acceptance | Final-source full gates, installed task workflows, benchmark limits and independent adoption review |
+
+[Baseline CI](https://github.com/libtmux/libtmux-julia/actions/runs/37125764548)
+and [development CI](https://github.com/libtmux/libtmux-julia/actions/runs/37141349711)
+retain their individual results. [Contributing](../../CONTRIBUTING.md) defines
+the complete checks and budgets. An unrun version or platform is not support;
+resolver compatibility declarations are not test evidence.
 
 The minimum tmux release for ordinary operations is 3.3a. The first
 subprocess command to an endpoint reads the connected daemon's release, not
@@ -43,4 +48,3 @@ MCP HTTP remain deferred. Native Julia regex works in ordinary local predicates.
 
 The core uses standard libraries. JSON/Tables integrations are package
 extensions; MCP and workspace dependencies remain in their separate packages.
-Julia compatibility declarations are resolver constraints, not test evidence.

@@ -202,7 +202,7 @@ loads a configuration and checks its layout, focus and cleanup.
 
 This repository holds three Julia packages. Each heading links to the
 package's directory on GitHub. None is in the General registry yet, so no
-registry page exists; [Install](#install) uses the Git tag.
+registry page exists; [Install](#install) uses a public source revision.
 
 ### [LibTmux](https://github.com/libtmux/libtmux-julia/tree/master/src): the core library
 
@@ -318,9 +318,9 @@ The [MCP README](packages/LibTmuxMCP) covers other clients and every tool.
 
 ## Status and development
 
-The CI cells in [Compatibility](docs/src/compatibility.md) passed the
-complete package suite. Benchmark baselines and an independent guide walkthrough
-remain open. Check the
+[Compatibility](docs/src/compatibility.md) separates baseline correctness from
+current development gates. Complete loop budgets, final installed workflows,
+benchmark limits and independent adoption review remain open. Check the
 [capability manifest](docs/capabilities.toml) and
 [CI results](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
 for current evidence. WSL is a Linux host; native Windows tmux is outside scope.

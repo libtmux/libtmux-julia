@@ -1,7 +1,7 @@
 # Package registration
 
 The suite contains three independent Julia packages in one repository. All
-use MIT and `0.1.0-alpha.1` for the first unregistered source release. Their
+use MIT and declare the unregistered version `0.1.0-alpha.1`. Their
 package identities are fixed:
 
 | Package | Package directory | UUID |
@@ -16,8 +16,9 @@ range. Their project files do not depend on sibling development paths.
 Documentation and benchmark environments remain separate from runtime
 dependencies.
 
-The `v0.1.0-alpha.1` tag is installable through `Pkg.PackageSpec(url=..., rev=...)`.
-It is not a registry package. Before registration, close the required
+Install the tested public revision from [Install](src/installation.md). A
+version declaration does not establish a published tag or registry package.
+Before registration, close the required
 compatibility, external installation, example, benchmark and DX gates. Retain
 the exact source revision, dependency resolution, raw results and package-tree
 hashes. A green focused check or a local resolver constraint is not a
