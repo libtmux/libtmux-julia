@@ -349,3 +349,203 @@ function select_window(server::Server, target::WindowLinkRef; kwargs...)
     _check_window_link(context, target)
     _operation_command(context, "select-window", "-t", _window_slot(target))
 end
+
+_maintenance_context(server::Server, target::EntityRef; kwargs...) =
+    _target_context(server, target; kwargs...)
+_maintenance_literal(::Server, text, operation) = _literal_format(text)
+
+function _maintenance_command(context, args)
+    hasproperty(context, :connection) && return _control_topology_effect(context, args)
+    _operation_command(context, args...)
+end
+
+function _maintenance_fields(context, target, names)
+    if hasproperty(context, :connection)
+        fields = FormatField.(names)
+        values = read_formats(
+            context.connection,
+            target,
+            fields;
+            timeout=_snapshot_remaining(context.started, context.budget),
+            cancel=context.cancel,
+        )
+        return [value.value for value in values]
+    end
+    reply = _target_format_command(context, target, _format_template(names))
+    only(_decode_format_rows(reply.stdout, length(names)))
+end
+
+"""
+    clear_history(transport, pane::PaneRef; kwargs...)
+
+Delete this pane's saved scrollback, preserving its visible screen and process.
+Accept a `Server` or `ControlConnection`; return the command result. Cancellation
+after submission does not undo the deletion.
+"""
+function clear_history(transport, pane::PaneRef; kwargs...)
+    context = _maintenance_context(transport, pane; kwargs...)
+    _maintenance_command(context, ["clear-history", "-t", string(pane.id)])
+end
+
+"""
+    set_title(transport, pane::PaneRef, title; kwargs...)
+
+Set a literal pane title without format expansion. The pane application can
+subsequently replace it. Control titles must be printable UTF-8 because tmux
+may emit title notifications. Return the command result.
+"""
+function set_title(transport, pane::PaneRef, title::AbstractString; kwargs...)
+    literal = _maintenance_literal(transport, title, :set_title)
+    context = _maintenance_context(transport, pane; kwargs...)
+    _maintenance_command(context, ["select-pane", "-t", string(pane.id), "-T", literal])
+end
+
+"""
+    set_zoom(transport, pane::PaneRef, zoomed::Bool; kwargs...)
+
+Request a zoomed pane or an unzoomed window. An already satisfied state returns
+`nothing`. Switching between zoomed panes unzooms then zooms the requested pane;
+these observations and commands are best effort against concurrent changes.
+Return the last command result when changed; never retry uncertain effects.
+"""
+function set_zoom(transport, pane::PaneRef, zoomed::Bool; kwargs...)
+    context = _maintenance_context(transport, pane; kwargs...)
+    values = _maintenance_fields(context, pane, ["window_zoomed_flag", "pane_active"])
+    current = _observed_bool(values[1], "window_zoomed_flag")
+    active = _observed_bool(values[2], "pane_active")
+    current == zoomed && (!zoomed || active) && return nothing
+    args = ["resize-pane", "-Z", "-t", string(pane.id)]
+    current && zoomed && _maintenance_command(context, args)
+    _maintenance_command(context, args)
+end
+
+"""
+    rotate_panes(transport, window::WindowRef; direction=:up, kwargs...)
+
+Rotate pane positions in their physical window with `:up` or `:down`. Pane IDs
+and processes remain; indices and active position can change. Return the result.
+"""
+function rotate_panes(transport, target::WindowRef; direction::Symbol=:up, kwargs...)
+    direction in (:up, :down) || throw(ArgumentError("direction must be :up or :down"))
+    context = _maintenance_context(transport, target; kwargs...)
+    _maintenance_command(
+        context,
+        ["rotate-window", direction === :up ? "-U" : "-D", "-t", string(target.id)],
+    )
+end
+
+"""
+    cycle_layout(transport, window::WindowRef; direction=:next, kwargs...)
+
+Select the next or previous predefined layout. This unzooms the physical window
+and can resize panes. Direction is `:next` or `:previous`; return the result.
+"""
+function cycle_layout(transport, target::WindowRef; direction::Symbol=:next, kwargs...)
+    direction in (:next, :previous) ||
+        throw(ArgumentError("direction must be :next or :previous"))
+    context = _maintenance_context(transport, target; kwargs...)
+    _maintenance_command(
+        context,
+        [direction === :next ? "next-layout" : "previous-layout", "-t", string(target.id)],
+    )
+end
+
+"""
+    pipe_pane(transport, pane::PaneRef, shell_command=nothing;
+              input=false, output=true, replace=false, expand_formats=false, kwargs...)
+
+Connect a shell command to future pane output, or use `input=true` to feed its
+stdout into the pane. tmux owns the pipe process; command completion does not
+prove its exit. The caller closes a pipe by explicitly passing `nothing`.
+Existing pipes are protected by a best-effort check unless `replace=true`;
+replacement can close the old pipe before a new one fails.
+
+Shell syntax executes on the tmux host. Formats and strftime sequences remain
+literal unless `expand_formats=true`. No finalizer closes a borrowed pipe and
+no failure rolls back input already delivered.
+"""
+function pipe_pane(
+    transport,
+    pane::PaneRef,
+    shell_command::Union{Nothing,AbstractString}=nothing;
+    input::Bool=false,
+    output::Bool=true,
+    replace::Bool=false,
+    expand_formats::Bool=false,
+    kwargs...,
+)
+    args = ["pipe-pane", "-t", string(pane.id)]
+    if shell_command !== nothing
+        input || output || throw(ArgumentError("enable pipe input or output"))
+        command = _argument(shell_command)
+        isempty(command) && throw(ArgumentError("use nothing to close a pipe"))
+        expand_formats || (command = Base.replace(command, "#"=>"##", "%"=>"%%"))
+        input && push!(args, "-I")
+        output && push!(args, "-O")
+        append!(args, ["--", command])
+    end
+    context = _maintenance_context(transport, pane; kwargs...)
+    if shell_command !== nothing && !replace
+        value = only(_maintenance_fields(context, pane, ["pane_pipe"]))
+        _observed_bool(value, "pane_pipe") &&
+            throw(ArgumentError("pane already has a pipe; use replace=true to replace it"))
+    end
+    if !hasproperty(context, :connection) && shell_command !== nothing
+        args[end] = _literal_tmux_argument(args[end])
+    end
+    _maintenance_command(context, args)
+end
+
+"""
+    break_pane(transport, pane::PaneRef, source::WindowLinkRef,
+               destination::SessionRef; index, name=nothing, select=false, kwargs...)
+
+Move the pane into an explicit destination window slot without respawning it.
+The checked source link establishes session context for a shared window. Removing
+a pane changes every link to its physical window; moving its final pane moves
+the source window link instead. Return the resulting `WindowRef`.
+Checks are best effort against concurrent topology changes. Invalid replies
+raise `CreationResponseError` with uncertain effects; no retry or rollback occurs.
+"""
+function break_pane(
+    transport,
+    pane::PaneRef,
+    source::WindowLinkRef,
+    destination::SessionRef;
+    index::Integer,
+    name::Union{Nothing,AbstractString}=nothing,
+    select::Bool=false,
+    kwargs...,
+)
+    slot = _window_index(index)
+    foreach(
+        ref -> _same_observed_server(pane, ref),
+        (source.session, source.window, destination),
+    )
+    literal =
+        name === nothing ? nothing : _maintenance_literal(transport, name, :break_pane)
+    context = _maintenance_context(transport, pane; kwargs...)
+    if hasproperty(context, :connection)
+        _control_check_link(context, source)
+    else
+        _check_window_link(context, source)
+    end
+    only(_maintenance_fields(context, pane, ["window_id"])) == string(source.window.id) ||
+        throw(StaleReference(string(pane.id)))
+    prefix = hasproperty(context, :connection) ? "LIBTMUX\t" : ""
+    args = [
+        "break-pane",
+        "-s",
+        _window_slot(source) * "." * string(pane.id),
+        "-t",
+        _window_slot(destination, slot),
+        "-P",
+        "-F",
+        prefix * _format_template(["pid", "start_time", "socket_path", "window_id"]),
+    ]
+    select || push!(args, "-d")
+    literal === nothing || append!(args, ["-n", literal])
+    hasproperty(context, :connection) && return _control_create(context, WindowRef, args)
+    result = _operation_command(context, args...)
+    _creation_reference(WindowRef, result; expected=pane.server)
+end
