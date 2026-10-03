@@ -70,6 +70,12 @@ includes the pane ID and observed server generation. Listing returns unique
 physical panes plus linked session/window contexts; it preserves the
 difference between one pane and several occurrences.
 
+Narrow discovery with a generation-bound session/window `scope`, native inert
+`where` criteria, or explicit scalar `columns`. Continue `nextPageToken` only
+while the query and discovered facets remain unchanged; `observation_changed`
+requires a fresh listing. See [pane discovery](docs/discovery.md) for schemas,
+coverage, pagination, cancellation, and stale-target recovery.
+
 `--caller-pane %3` resolves a default target at startup. It never uses the
 control client's current pane. Repeating `--allow-pane` restricts the target
 set. Repeating `--tool` replaces the default catalog. The same policy applies
