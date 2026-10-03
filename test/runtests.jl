@@ -32,6 +32,7 @@ const INTEGRATION_FILES = (
     "control",
     "batches",
     "observation",
+    "waits",
     "observation_adversaries",
     "restart",
     "control_io",
