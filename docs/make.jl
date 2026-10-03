@@ -26,7 +26,14 @@ makedocs(
         "Workspace loading"=>"workspaces.md",
         "Compatibility"=>"compatibility.md",
         "Troubleshooting"=>"troubleshooting.md",
-        "API reference"=>"api.md",
+        "API reference"=>[
+            "Overview"=>"api.md",
+            "Servers and commands"=>"api-server.md",
+            "Captured data and criteria"=>"api-queries.md",
+            "Pane and window operations"=>"api-operations.md",
+            "Configuration and formats"=>"api-configuration.md",
+            "Observations and waits"=>"api-observations.md",
+        ],
     ],
 )
 
