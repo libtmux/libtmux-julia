@@ -7,6 +7,7 @@ const UNIT_FILES = (
     "cancellation",
     "text",
     "model",
+    "lookup",
     "criteria",
     "wire",
     "sibling_wire",

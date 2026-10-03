@@ -251,6 +251,36 @@ function _lookup(snap::Snapshot, kind::Symbol, id, View)
     View(snap, idx)
 end
 
+"Validate a reference against captured identity, without contacting the daemon."
+function _captured_reference(snap::Snapshot, ref)
+    ref.server.socket_path == snap.identity.socket_path ||
+        throw(CrossServerReference(string(ref.id)))
+    ref.server == snap.identity || throw(StaleReference(string(ref.id)))
+    nothing
+end
+
+for (Ref, View, root, index) in (
+    (SessionRef, SessionSnapshot, :sessions, :_session_index),
+    (WindowRef, WindowSnapshot, :windows, :_window_index),
+    (PaneRef, PaneSnapshot, :panes, :_pane_index),
+    (ClientRef, ClientSnapshot, :clients, :_client_index),
+)
+    @eval function Base.get(snap::Snapshot, ref::$Ref, default)
+        _captured_reference(snap, ref)
+        row = get(getfield(snap, $(QuoteNode(index))), ref.id, nothing)
+        if row === nothing
+            _require_coverage(snap, $(QuoteNode(root)))
+            return default
+        end
+        $View(snap, row)
+    end
+    @eval function Base.getindex(snap::Snapshot, ref::$Ref)
+        found = get(snap, ref, nothing)
+        found === nothing && throw(KeyError(ref))
+        found
+    end
+end
+
 for (View, Ref) in (
     (SessionSnapshot, SessionRef),
     (WindowSnapshot, WindowRef),
