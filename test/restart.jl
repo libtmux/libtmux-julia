@@ -75,7 +75,9 @@ end
             original_pid = getpid(fixture.process)
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
             session = new_session(server; name="original", command=["/bin/cat"])
-            pane = only(panes(snapshot(server))).ref
+            original_snapshot = snapshot(server)
+            pane = only(panes(original_snapshot)).ref
+            window = only(windows(original_snapshot)).ref
             connection = open_control(server, session)
             signal = control_signal(connection)
             waiting = Threads.@spawn try
@@ -143,6 +145,8 @@ end
                         "stale-subprocess",
                     )
                     @test_throws StaleReference open_control(fresh_server, session)
+                    @test_throws StaleReference snapshot(fresh_server, session)
+                    @test_throws StaleReference snapshot(fresh_server, window)
                     @test_throws LibTmux.ControlConnectionError rename_session(
                         connection,
                         session,
@@ -158,6 +162,8 @@ end
                             "stale input";
                             literal=true,
                         )
+                        @test_throws StaleReference snapshot(fresh_connection, session)
+                        @test_throws StaleReference snapshot(fresh_connection, window)
                         @test fresh_connection.submitted == before
                         rename_session(fresh_connection, fresh_session, "fresh-operation")
                         @test capture_bytes(fresh_connection, fresh_pane) isa Vector{UInt8}

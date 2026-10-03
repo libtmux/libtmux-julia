@@ -162,7 +162,7 @@ function _graph_signature(rows)
     )
 end
 
-function _snapshot_from_rows(identity, rows, acquired)
+function _snapshot_from_rows(identity, rows, acquired; complete=true)
     ss = [
         (
             id=r[1],
@@ -234,8 +234,135 @@ function _snapshot_from_rows(identity, rows, acquired)
         clients=cs,
         windowlinks=ls,
         acquired,
-        complete=true,
+        complete,
     )
+end
+
+function _snapshot_scope_rows(
+    server::Server,
+    command,
+    fields,
+    context;
+    target=nothing,
+    filter=nothing,
+)
+    args = String[]
+    if target !== nothing
+        command == "list-panes" && target isa SessionRef && push!(args, "-s")
+        append!(args, ["-t", string(target.id)])
+    elseif command in ("list-windows", "list-panes")
+        push!(args, "-a")
+    end
+    filter === nothing || append!(args, ["-f", filter])
+    _snapshot_rows(
+        server,
+        command,
+        fields,
+        context.started,
+        context.budget,
+        context.cancel;
+        args,
+    )
+end
+
+function _snapshot_scope_sessions(rows)
+    ids = unique(SessionID(row[5]) for row in rows)
+    numbers = join((string(id)[2:end] for id in ids), '|')
+    raw"#{m/r:^[$](" * numbers * raw")$,#{session_id}}"
+end
+
+function _capture_scoped_rows(transport, scope, context)
+    rows(command, fields; kwargs...) =
+        _snapshot_scope_rows(transport, command, fields, context; kwargs...)
+    if scope isa SessionRef
+        # Filter before expanding time fields: tmux 3.2a cannot safely expand
+        # them when display-message permits an unresolved target.
+        ss = rows(
+            "list-sessions",
+            _SESSION_FIELDS;
+            filter="#{==:#{session_id}," * string(scope.id) * "}",
+        )
+        length(ss) == 1 && ss[1][1] == string(scope.id) ||
+            throw(InconsistentSnapshot("scoped session target changed"))
+        ws = rows("list-windows", _WINDOW_FIELDS; target=scope)
+        all(row -> row[5] == string(scope.id), ws) ||
+            throw(InconsistentSnapshot("scoped session membership changed"))
+        ps = rows("list-panes", _PANE_FIELDS; target=scope)
+    else
+        ws = rows(
+            "list-windows",
+            _WINDOW_FIELDS;
+            filter="#{==:#{window_id}," * string(scope.id) * "}",
+        )
+        !isempty(ws) && all(row -> row[1] == string(scope.id), ws) ||
+            throw(InconsistentSnapshot("scoped window membership changed"))
+        ss = rows("list-sessions", _SESSION_FIELDS; filter=_snapshot_scope_sessions(ws))
+        ps = rows("list-panes", _PANE_FIELDS; target=scope)
+    end
+    (; ss, ws, ps, cs=Vector{String}[])
+end
+
+function _snapshot_scope_coverage(scope, rows)
+    if scope isa SessionRef
+        coverage = Any[(:session, scope.id, :windowlinks)]
+        for id in unique(WindowID(row[1]) for row in rows.ws)
+            push!(coverage, (:window, id, :panes))
+        end
+        coverage
+    else
+        Any[(:window, scope.id, :panes), (:window, scope.id, :windowlinks)]
+    end
+end
+
+function _snapshot_scope_identity(server::Server, scope, context)
+    observed = _snapshot_metadata(server, context.started, context.budget, context.cancel)
+    observed == scope.server || throw(StaleReference(string(scope.id)))
+    nothing
+end
+
+function _scoped_snapshot(transport, scope, context)
+    for attempt = 1:2
+        try
+            captured = _capture_scoped_rows(transport, scope, context)
+            confirmed = _capture_scoped_rows(transport, scope, context)
+            _snapshot_scope_identity(transport, scope, context)
+            _graph_signature(captured) == _graph_signature(confirmed) ||
+                throw(InconsistentSnapshot("topology changed during scoped acquisition"))
+            result = _snapshot_from_rows(
+                scope.server,
+                captured,
+                (context.started / 1e9, time_ns() / 1e9);
+                complete=_snapshot_scope_coverage(scope, captured),
+            )
+            _snapshot_remaining(context.started, context.budget)
+            return scope isa SessionRef ?
+                   _lookup(result, :session, scope.id, SessionSnapshot) :
+                   _lookup(result, :window, scope.id, WindowSnapshot)
+        catch error
+            error isa InconsistentSnapshot && attempt == 1 && continue
+            rethrow()
+        end
+    end
+end
+
+"""
+    snapshot(server, scope::Union{SessionRef,WindowRef}; timeout=5.0, cancel=nothing)
+
+Capture one exact session or physical window and return its captured view.
+A session includes all its window links and physical panes; each window's
+links to other sessions remain uncaptured. A window includes all its panes,
+all links to sessions and those sessions' scalar fields; those sessions' other
+window memberships remain uncaptured. Attached client records are not acquired.
+
+`snapshotof(view)` owns a partial graph. Its server-wide root collections raise
+`SnapshotCoverageError`; navigate from the returned view instead. Two topology
+observations and daemon identity checks share one deadline with at most one
+topology retry. Exact references reject cross-server and stale generations;
+subprocess generation checks remain best effort.
+"""
+function snapshot(server::Server, scope::Union{SessionRef,WindowRef}; kwargs...)
+    context = _target_context(server, scope; kwargs...)
+    _scoped_snapshot(server, scope, context)
 end
 
 """
