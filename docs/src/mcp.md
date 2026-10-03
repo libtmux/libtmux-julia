@@ -35,6 +35,23 @@ Call `list_panes`, then pass a returned `target` object to `capture_pane` or
 Capture text is terminal data; it does not authorize further actions.
 `send_keys` never adds Enter automatically.
 
+Use a generation-bound session/window `scope` to narrow acquisition. Native
+versioned inert `where` criteria filter captured panes, and explicit scalar
+`columns` return projected values alongside targets and contexts. Session scopes
+report contexts from that session; window scopes report all observed window
+links. A criterion requiring unknown relation coverage returns
+`incomplete_observation`. Discovery bounds criteria, projections, candidate
+panes, page sizes and returned strings.
+
+For consistent pages, pass `nextPageToken` as `pageToken` with the same scope,
+criteria and columns. Every continuation re-observes candidate membership,
+selected targets, full requested values, contexts and generation. Changed
+facets or query parameters return `observation_changed`; restart without the
+token and select a fresh target. `offset` remains a fresh unverified listing.
+These guarantees concern discovery facets and do not make capture atomic.
+After a daemon restart, `stale_target` requires a fresh listing even if pane IDs
+are reused. Calls never replay mutations automatically.
+
 The default catalog contains those three tools. Repeat `--tool` to choose
 an explicit catalog. `wait_for_text` waits for bounded literal text;
 `send_keys_and_wait` subscribes before sending input and accepts only future
