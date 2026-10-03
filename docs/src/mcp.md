@@ -1,13 +1,7 @@
 # Connect an MCP client
 
-LibTmuxMCP serves a local tmux endpoint over stdio. From a consumer project
-directory, add the core and MCP package from the same public Git tag:
-
-```console
-$ julia \
-    --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxMCP")])'
-```
+LibTmuxMCP serves a local tmux endpoint over stdio. Prepare a consumer project
+with both packages from the same revision using [Install](installation.md#mcp-application).
 
 Create the launcher after dependency preparation:
 
