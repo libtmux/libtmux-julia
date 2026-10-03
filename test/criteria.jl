@@ -19,6 +19,7 @@ function criteria_fixture()
                 index=0,
                 active=true,
                 dead=false,
+                exit_status=nothing,
                 width=120,
                 height=30,
                 current_command="nvim",
@@ -31,6 +32,7 @@ function criteria_fixture()
                 index=1,
                 active=false,
                 dead=true,
+                exit_status=7,
                 width=120,
                 height=30,
                 current_command=nothing,
@@ -43,6 +45,7 @@ function criteria_fixture()
                 index=0,
                 active=true,
                 dead=false,
+                exit_status=nothing,
                 width=80,
                 height=24,
                 current_command="julia",
@@ -90,6 +93,9 @@ end
         @test only(filter(LibTmux.PaneWhere(current_command=nothing), ps)).id ==
               PaneID("%2")
         @test count(LibTmux.PaneWhere(width=F.AtLeast(100)), ps) == 2
+        @test count(LibTmux.PaneWhere(exit_status=nothing), ps) == 2
+        status = LibTmux.PaneWhere(exit_status=F.AtLeast(7))
+        @test onlymatch(decode_where(encode_where(status)), ps).id == PaneID("%2")
         @test count(LibTmux.PaneWhere(width=F.GreaterThan(119.5)), ps) == 2
         @test count(LibTmux.PaneWhere(width=F.AtMost(80)), ps) == 1
         @test count(LibTmux.PaneWhere(width=F.LessThan(100)), ps) == 1
