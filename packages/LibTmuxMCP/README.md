@@ -161,6 +161,12 @@ The default catalog contains [`list_panes`][tool_list_panes],
   message says to upgrade tmux and restart the server, or pin the previous
   libtmux release.
 
+Narrow discovery with a generation-bound session/window `scope`, native inert
+`where` criteria, or explicit scalar `columns`. Continue `nextPageToken` only
+while the query and discovered facets remain unchanged; `observation_changed`
+requires a fresh listing. See [pane discovery](docs/discovery.md) for schemas,
+coverage, pagination, cancellation, and stale-target recovery.
+
 | Tool | Effect |
 | --- | --- |
 | [`list_panes`][tool_list_panes] | Fresh bounded graph listing with context and pagination |
