@@ -23,6 +23,7 @@ export BufferInfo, list_buffers
 export paste_bytes, paste_text
 export WindowLinkRef, resize_pane, resize_window, link_window, unlink_window
 export move_pane, move_window, swap_pane, swap_window, respawn_pane, respawn_window
+export clear_history, pipe_pane, break_pane, set_title, set_zoom, rotate_panes, cycle_layout
 export rename_session, rename_window, switch_client, detach_client
 export EnvironmentValue, HookCommand, get_option, set_option, unset_option
 export get_environment, set_environment, unset_environment, remove_environment
