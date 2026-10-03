@@ -19,6 +19,7 @@ export select_pane, select_window
 export kill_session, kill_window, kill_pane, CrossServerReference, StaleReference
 export CreationResponseError, CaptureDecodeError, BufferID, BufferRef
 export capture_bytes, capture_pane, send_keys, load_buffer, save_buffer, delete_buffer
+export BufferInfo, list_buffers
 export paste_bytes, paste_text
 export WindowLinkRef, resize_pane, resize_window, link_window, unlink_window
 export move_pane, move_window, swap_pane, swap_window, respawn_pane, respawn_window
@@ -26,6 +27,7 @@ export rename_session, rename_window, switch_client, detach_client
 export EnvironmentValue, HookCommand, get_option, set_option, unset_option
 export get_environment, set_environment, unset_environment, remove_environment
 export get_hook, set_hook, unset_hook
+export OptionEntry, HookEntry, list_options, list_hooks, list_environment
 export FormatField, FormatObservation, FormatValueError, read_formats
 export RawFormat, render_format, FormatHints, format_hints
 export ControlConnection, ControlResult, ControlCommandError, ControlConnectionError

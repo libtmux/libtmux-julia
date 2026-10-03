@@ -15,6 +15,41 @@ Base.:(==)(a::BufferID, b::BufferID) = a.name == b.name
 Base.hash(id::BufferID, h::UInt) = hash((:buffer, id.name), h)
 const BufferRef = EntityRef{BufferID}
 
+"""A borrowed paste-buffer observation. Listing neither creates nor owns the buffer."""
+struct BufferInfo
+    ref::BufferRef
+    size::Int
+end
+
+"""
+    list_buffers(server; max_bytes=1048576, kwargs...)
+
+Capture exact names and byte sizes in tmux order. References share an observed
+daemon generation and are borrowed: release only buffers the caller owns or
+explicitly intends to delete. Names can be replaced within the same generation;
+listing does not reserve their contents. Replies are bounded by `max_bytes`.
+"""
+function list_buffers(server::Server; max_bytes::Int=1024^2, kwargs...)
+    max_bytes >= 0 || throw(ArgumentError("max_bytes cannot be negative"))
+    context = _operation_context(server; kwargs...)
+    _verify_row_codec(server, context.started, context.budget, context.cancel)
+    identity = _snapshot_metadata(server, context.started, context.budget, context.cancel)
+    result = _operation_command(
+        context,
+        "list-buffers",
+        "-F",
+        _format_template(["buffer_name", "buffer_size"]);
+        max_output_bytes=max_bytes,
+    )
+    rows = _decode_format_rows(result.stdout, 2)
+    current = _snapshot_metadata(server, context.started, context.budget, context.cancel)
+    current == identity || throw(StaleReference("buffer inventory"))
+    [
+        BufferInfo(BufferRef(identity, row[1]), _observed_int(row[2], "buffer_size")) for
+        row in rows
+    ]
+end
+
 """A capture decoding failure with its cause and an owned copy of source bytes."""
 struct CaptureDecodeError <: LibTmuxError
     cause::InvalidUTF8Error
