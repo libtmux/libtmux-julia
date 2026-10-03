@@ -39,6 +39,10 @@ The default catalog contains those three tools. Repeat `--tool` to choose
 an explicit catalog. `wait_for_text` waits for bounded literal text;
 `send_keys_and_wait` subscribes before sending input and accepts only future
 output. Matching text does not establish process completion or exit status.
+Both tools accept a positive `timeoutSeconds` no greater than the application
+timeout. That total budget includes discovery, control attachment and capture;
+batch items also respect the whole batch's remaining deadline. Core and MCP
+share the [stream wait policy](observations.md).
 `run_operations` validates every item against the same target/tool policy
 before performing its finite sequence. A later failure can leave earlier
 effects in place; `failedIndex` identifies the failed item and `atomic` is

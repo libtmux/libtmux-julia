@@ -10,6 +10,7 @@ the default server. `LIBTMUX_TEST_TMUX` can select a specific tmux executable.
 | [shared_windows.jl](shared_windows.jl) | Entities, shared links and local criteria |
 | [control_cancel.jl](control_cancel.jl) | Task cancellation and control ownership |
 | [output_stream.jl](output_stream.jl) | Bounded raw output and an explicit screen reset |
+| [command_completion.jl](command_completion.jl) | Authored completion marker and child exit status |
 
 From the prepared checkout:
 

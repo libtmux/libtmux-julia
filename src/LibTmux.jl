@@ -35,6 +35,7 @@ export TmuxCommand, OperationResult, BatchResult, GroupResult, run_batch, run_gr
 export ObservationEvent, NotificationEvent, PaneOutput, FormatUpdate, ObservationLost
 export ObservationCursor, ObservationStream, notifications, observe_output, subscribe_format
 export observation_cursor, ObservationBaseline, capture_baseline
+export OutputWaitResult, wait_for, wait_for_text, wait_for_quiet
 export format_value
 export Criterion,
     Filters, PaneWhere, WindowWhere, SessionWhere, ClientWhere, WindowLinkWhere
@@ -62,6 +63,7 @@ include("control.jl")
 include("batches.jl")
 include("observation.jl")
 include("control_io.jl")
+include("waits.jl")
 include("control_operations.jl")
 include("control_topology.jl")
 include("control_clients.jl")
