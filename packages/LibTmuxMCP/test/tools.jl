@@ -572,9 +572,11 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                     "wait_for_text",
                     Dict("text"=>"not-emitted", "timeoutSeconds"=>0.1),
                 )
-                deadline_result = limited.is_error &&
-                                  limited.structured_content["error"]["code"] == "deadline"
-                deadline_result || println("unexpected wait result: ", limited.structured_content)
+                deadline_result =
+                    limited.is_error &&
+                    limited.structured_content["error"]["code"] == "deadline"
+                deadline_result ||
+                    println("unexpected wait result: ", limited.structured_content)
                 @test deadline_result
                 @test limited.structured_content["error"]["effects"] == "possible"
                 @test (time_ns() - started) / 1e9 < 0.9

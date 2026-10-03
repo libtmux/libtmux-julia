@@ -20,6 +20,14 @@
             target = Dict("paneId"=>"%0", "generation"=>"sample")
             inputs = (
                 ("list_panes", Dict()),
+                (
+                    "list_panes",
+                    Dict(
+                        "where"=>LibTmux.encode_where(LibTmux.PaneWhere(title="sample")),
+                        "columns"=>["id", "title"],
+                        "scope"=>Dict("windowId"=>"@0", "generation"=>"sample"),
+                    ),
+                ),
                 ("capture_pane", Dict("target"=>target)),
                 ("send_keys", Dict("keys"=>["text", "Enter"])),
                 ("paste_text", Dict("text"=>"λ")),

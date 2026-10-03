@@ -8,6 +8,7 @@ module LibTmuxMCP
 
 import LibTmux
 import JSON
+import SHA
 import ModelContextProtocol as SDK
 using Logging
 using PrecompileTools: @setup_workload, @compile_workload
@@ -17,6 +18,7 @@ export Application, tools, serve, main, install_cli
 include("adapter.jl")
 include("stdio.jl")
 include("tools.jl")
+include("discovery.jl")
 include("cli.jl")
 include("precompile.jl")
 
