@@ -504,6 +504,7 @@ function _control_rows(
     command::AbstractString,
     fields::AbstractVector{<:AbstractString};
     target=nothing,
+    filter=nothing,
     timeout::Real=5.0,
     cancel=nothing,
     _opening::Bool=false,
@@ -521,12 +522,13 @@ function _control_rows(
         allowed =
             command == "display-message" ? target isa Union{SessionRef,WindowRef,PaneRef} :
             command in ("list-windows", "list-clients") ? target isa SessionRef :
-            command == "list-panes" ? target isa WindowRef : false
+            command == "list-panes" ? target isa Union{SessionRef,WindowRef} : false
         allowed ||
             throw(ArgumentError("control row target kind is not admitted for this command"))
         target.server.socket_path == connection.identity.socket_path ||
             throw(CrossServerReference(string(target.id)))
         target.server == connection.identity || throw(StaleReference(string(target.id)))
+        command == "list-panes" && target isa SessionRef && push!(argv, "-s")
         append!(argv, ["-t", string(target.id)])
         if command == "display-message"
             target_field =
@@ -536,6 +538,11 @@ function _control_rows(
         end
     elseif command in ("list-windows", "list-panes")
         push!(argv, "-a")
+    end
+    if filter !== nothing
+        command in ("list-sessions", "list-windows", "list-panes") ||
+            throw(ArgumentError("control row filtering is not admitted for this command"))
+        append!(argv, ["-f", String(filter)])
     end
     prefix = "LIBTMUX\t"
     append!(argv, ["-F", prefix * _format_template(observed_fields)])
