@@ -154,6 +154,115 @@
     end
 end
 
+@testset "inventories retain literals, sparse entries and inheritance" begin
+    @test isdefined(LibTmux, :list_options)
+    @test isdefined(LibTmux, :list_hooks)
+    @test isdefined(LibTmux, :list_environment)
+    if all(
+        name -> isdefined(LibTmux, name),
+        (:list_options, :list_hooks, :list_environment),
+    )
+        with_tmux() do fixture
+            server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
+            target = new_session(server; name="inventory", command=["/bin/cat"])
+            literal = "line\nSECOND=\"fake\"; export SECOND;\n" * raw"$HOME `false` \n"
+            LibTmux.set_option(server, :global_session, "@inventory", literal)
+            LibTmux.set_option(server, target, "status-format", literal; index=7)
+            commands = decode_text(
+                run_command(
+                    server,
+                    "list-commands",
+                    "-F",
+                    "#{command_list_name}\t#{command_list_usage}",
+                ).stdout,
+            )
+            formats = any(
+                line ->
+                    startswith(line, "show-options\t") && occursin("[-F format]", line),
+                split(commands, '\n'),
+            )
+            options = LibTmux.list_options(server, target; inherit=true)
+            entry = only(filter(x -> x.name == "@inventory", options))
+            @test entry.value == literal && entry.inherited && !entry.array
+            sparse = filter(x -> x.name == "status-format", options)
+            @test [(x.index, x.value) for x in sparse] == [(7, literal)]
+            @test all(x -> x.array && !x.inherited, sparse)
+            @test !any(x -> x.name == "@inventory", LibTmux.list_options(server, target))
+            LibTmux.set_hook(
+                server,
+                :global_session,
+                "after-new-window",
+                "display-message inventory";
+                index=9,
+            )
+            hooks = filter(
+                x -> x.name == "after-new-window",
+                LibTmux.list_hooks(server, target; inherit=true),
+            )
+            @test [(x.index, x.inherited) for x in hooks] == [(9, true)]
+            LibTmux.set_hook(server, target, "after-new-window", "")
+            empty_hook = only(
+                filter(
+                    x -> x.name == "after-new-window",
+                    LibTmux.list_hooks(server, target),
+                ),
+            )
+            @test empty_hook.index === nothing && empty_hook.command === nothing
+            unusual = "@source fake\n@invented"
+            run_command(server, "set-option", "-g", "--", unusual, "end")
+            @test LibTmux.get_option(server, :global_session, "@invented") === nothing
+            if formats
+                encoded = LibTmux.list_options(server, :global_session)
+                @test only(filter(x -> x.name == unusual, encoded)).value == "end"
+                @test !any(x -> x.name == "@invented", encoded)
+                run_command(server, "set-hook", "-g", "@custom", "display-message custom")
+                custom_rows(scope; inherit=false) = filter(
+                    row -> row.name == "@custom",
+                    LibTmux.list_hooks(server, scope; inherit),
+                )
+                @test [
+                    (row.index, row.command, row.inherited) for
+                    row in custom_rows(:global_session)
+                ] == [(nothing, "display-message custom", false)]
+                @test !any(
+                    row -> row.name == "@custom",
+                    LibTmux.list_options(server, :global_session),
+                )
+                @test [
+                    (row.command, row.inherited) for
+                    row in custom_rows(target; inherit=true)
+                ] == [("display-message custom", true)]
+                @test isempty(custom_rows(target))
+                run_command(server, "set-hook", "-t", string(target.id), "@custom", "")
+                @test [
+                    (row.command, row.inherited) for
+                    row in custom_rows(target; inherit=true)
+                ] == [("", false)]
+                @test !any(
+                    row -> row.name == "@custom",
+                    LibTmux.list_options(server, target; inherit=true),
+                )
+            else
+                @test_throws Union{UnsupportedCapability,InconsistentSnapshot} LibTmux.list_options(
+                    server,
+                    :global_session,
+                )
+            end
+            LibTmux.set_environment(server, :global, "LIBTMUX_INVENTORY", literal)
+            LibTmux.remove_environment(server, target, "LIBTMUX_INVENTORY")
+            LibTmux.set_environment(server, target, "LIBTMUX_HIDDEN", literal; hidden=true)
+            env = Dict(LibTmux.list_environment(server, target; inherit=true))
+            @test env["LIBTMUX_INVENTORY"].value === nothing
+            @test !env["LIBTMUX_INVENTORY"].inherited
+            @test env["LIBTMUX_HIDDEN"].value == literal && env["LIBTMUX_HIDDEN"].hidden
+            global_env = Dict(LibTmux.list_environment(server, :global))
+            @test global_env["LIBTMUX_INVENTORY"].value == literal
+            run_command(server, "set-environment", "-g", "--", "BAD\nNAME", "value")
+            @test_throws UnsupportedCapability LibTmux.list_environment(server, :global)
+        end
+    end
+end
+
 @testset "configuration rejects invalid arguments before I/O" begin
     server = Server(socket_name="unused", tmux="libtmux-no-such-executable")
     @test_throws ArgumentError LibTmux.get_option(server, :global, "status-left")
