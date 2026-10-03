@@ -1,7 +1,8 @@
 """
     LibTmuxMCP
 
-MCP consumer of LibTmux. Application integration is in progress.
+MCP tools over explicit tmux endpoints with bounded stdio, cancellation
+and application-owned session cleanup.
 """
 module LibTmuxMCP
 

@@ -6,6 +6,41 @@ tool_result(app, name, args=Dict(); kwargs...) =
 pane_target(ref) = Dict("paneId"=>string(ref.id), "generation"=>ref.server.generation)
 
 if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
+    @testset "MCP waits expose per-call total budgets" begin
+        endpoint = Server(socket_path="/tmp/libtmux-julia-uncontacted/s")
+        caller = PaneRef(
+            ServerIdentity(socket_path=endpoint.socket_path, generation="1:1"),
+            "%0",
+        )
+        app = Application(endpoint; caller, allowed_tools=("wait_for_text",), timeout=0.9)
+        try
+            properties = only(tools(app)).input_schema["properties"]
+            @test haskey(properties, "timeoutSeconds")
+            plan = try
+                LibTmuxMCP._plan_tool(
+                    app,
+                    "wait_for_text",
+                    Dict("text"=>"ready", "timeoutSeconds"=>0.05),
+                )
+            catch error
+                error
+            end
+            @test plan isa NamedTuple
+            plan isa NamedTuple && @test plan.args["timeoutSeconds"] == 0.05
+            for invalid in (0, -1, true, NaN, Inf, 1.0)
+                result = tool_result(
+                    app,
+                    "wait_for_text",
+                    Dict("text"=>"ready", "timeoutSeconds"=>invalid),
+                )
+                @test result.is_error &&
+                      result.structured_content["error"]["effects"] == "none"
+            end
+        finally
+            close(app)
+        end
+    end
+
     @testset "MCP failures preserve whole-call I/O admission" begin
         result = CommandResult(UInt8[0x61], UInt8[], 0, 0)
         for failure in (
@@ -511,6 +546,26 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                 @test !baseline.is_error &&
                       baseline.structured_content["source"] == "baseline"
                 @test baseline.structured_content["continuity"] == "reset"
+                for (name, result) in
+                    (("send_keys_and_wait", sent), ("wait_for_text", baseline))
+                    schema =
+                        only(filter(tool -> tool.name == name, tools(app))).output_schema
+                    continuity = schema["anyOf"][1]["properties"]["continuity"]
+                    actual = result.structured_content["continuity"]
+                    @test haskey(continuity, "const") ? actual == continuity["const"] :
+                          actual in continuity["enum"]
+                end
+                started = time_ns()
+                limited = tool_result(
+                    app,
+                    "wait_for_text",
+                    Dict("text"=>"not-emitted", "timeoutSeconds"=>0.1),
+                )
+                @test limited.is_error &&
+                      limited.structured_content["error"]["code"] == "deadline"
+                @test limited.structured_content["error"]["effects"] == "possible"
+                @test (time_ns() - started) / 1e9 < 0.9
+                @test isempty(clients(snapshot(server)))
                 entered = Channel{Any}(2)
                 token = CancellationToken()
                 task = Threads.@spawn begin
