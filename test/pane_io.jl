@@ -7,6 +7,21 @@
             session_ref = LibTmux.new_session(server; name="io", command=["/bin/cat"])
             pane = only(panes(snapshot(server))).ref
             run_command(server, "set-buffer", "-b", "borrowed", "keep")
+            @test isdefined(LibTmux, :list_buffers)
+            if isdefined(LibTmux, :list_buffers)
+                inventory = LibTmux.list_buffers(server)
+                borrowed = only(inventory)
+                @test string(borrowed.ref.id) == "borrowed" && borrowed.size == 4
+                @test LibTmux.save_buffer(server, borrowed.ref) == codeunits("keep")
+                @test_throws OutputLimitExceeded LibTmux.list_buffers(server; max_bytes=1)
+                unusual = " borrowed #{pane_id};%Y雪 "
+                run_command(server, "set-buffer", "-b", unusual, "literal")
+                encoded = LibTmux.list_buffers(server)
+                observed = only(filter(x -> string(x.ref.id) == unusual, encoded))
+                @test observed.size == 7
+                @test LibTmux.save_buffer(server, observed.ref) == codeunits("literal")
+                LibTmux.delete_buffer(server, observed.ref)
+            end
             buffer_names() = split(
                 chomp(
                     decode_text(
