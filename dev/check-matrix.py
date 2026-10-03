@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import os
@@ -11,6 +12,7 @@ from pathlib import Path
 import platform
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -146,47 +148,169 @@ def signal_group(process, number):
         pass
 
 
-def phase(name, argv, *, cwd, env, log, budget):
+class PhaseGroup:
+    """Keep child identities reserved until signalling and final reap finish."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.processes = set()
+        self.cancelled = False
+        self.escalation = None
+
+    def add(self, process):
+        with self.lock:
+            self.processes.add(process)
+            if self.cancelled:
+                signal_group(process, signal.SIGKILL)
+
+    def reap(self, process, *, retire_group=False):
+        # Call only after WNOWAIT observed exit, so wait cannot block this lock.
+        with self.lock:
+            if retire_group or self.cancelled:
+                signal_group(process, signal.SIGKILL)
+            code = process.wait()
+            self.processes.discard(process)
+            return code
+
+    def signal(self, number, process=None):
+        with self.lock:
+            targets = self.processes if process is None else (process,)
+            for child in targets:
+                if child in self.processes:
+                    signal_group(child, number)
+
+    def cancel(self):
+        with self.lock:
+            if self.cancelled:
+                return
+            self.cancelled = True
+        self.signal(signal.SIGINT)
+        # Retire nested groups before the supervisor's 900 ms worker grace ends.
+        self.escalation = threading.Timer(0.8, self.signal, (signal.SIGKILL,))
+        self.escalation.start()
+
+    def close(self):
+        if self.escalation is not None:
+            self.escalation.cancel()
+            self.escalation.join()
+
+
+def phase(name, argv, *, cwd, env, log, budget, group=None):
     """Wait on a child-exit event; retire only this run's process group."""
+    if not callable(getattr(os, "waitid", None)) or not hasattr(os, "WNOWAIT"):
+        raise RuntimeError("owned process retirement needs waitid/WNOWAIT; use Python 3.13+ on macOS")
     start = time.monotonic()
     log.parent.mkdir(parents=True, exist_ok=True)
-    answer = dict(name=name, command=argv, status="NOT RUN", budget_seconds=budget)
+    answer = dict(name=name, command=argv, status="NOT RUN", budget_seconds=budget,
+                  started=False)
+    owned_group = group or PhaseGroup()
     process = None
     waiter = None
     done = threading.Event()
+    observer_errors = []
     try:
+        if owned_group.cancelled:
+            answer["status"] = "CANCELLED"
+            return answer
         with log.open("wb") as output:
             process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                        stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
-            def reap():
+            answer["started"] = True
+            owned_group.add(process)
+            def observe_exit():
                 try:
-                    process.wait()
+                    os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+                except BaseException as error:
+                    observer_errors.append(error)
                 finally:
                     done.set()
-            waiter = threading.Thread(target=reap, name=f"matrix-{name}")
+            waiter = threading.Thread(target=observe_exit, name=f"matrix-{name}")
             waiter.start()
             timed_out = not done.wait(budget)
             if timed_out:
-                signal_group(process, signal.SIGINT)
+                owned_group.signal(signal.SIGINT, process)
                 if not done.wait(0.9):
-                    signal_group(process, signal.SIGKILL)
+                    owned_group.signal(signal.SIGKILL, process)
                     done.wait()
             waiter.join()
-            answer.update(status="TIMEOUT" if timed_out else "PASS" if process.returncode == 0 else "FAIL",
-                          exit_code=process.returncode, direct_child_reaped=True)
+            if observer_errors:
+                raise observer_errors[0]
+            code = owned_group.reap(process, retire_group=timed_out)
+            status = ("TIMEOUT" if timed_out else "CANCELLED" if owned_group.cancelled
+                      else "PASS" if code == 0 else "FAIL")
+            answer.update(status=status,
+                          exit_code=code, direct_child_reaped=True)
             if timed_out:
                 answer["cleanup"] = "owned process group signalled; escaped descendants not proved retired"
     except FileNotFoundError:
         answer["reason"] = "required executable is unavailable"
     finally:
-        if process is not None and process.poll() is None:
-            signal_group(process, signal.SIGKILL)
-            process.wait()
+        if process is not None and process.returncode is None:
+            owned_group.signal(signal.SIGKILL, process)
+            if waiter is None:
+                os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+            else:
+                done.wait()
+            owned_group.reap(process)
         if waiter is not None:
             waiter.join()
+        if group is None:
+            owned_group.close()
         answer["seconds"] = time.monotonic() - start
         answer["log"] = str(log)
     return answer
+
+
+def parallel_mid(commands, *, stage, env, result, save):
+    """Run independent offline phases; receipts and cancellation stay with the worker."""
+    priority = {"core-unit": 0, "mcp-unit": 1, "format": 2, "quality": 3}
+    ordered = sorted(commands, key=lambda item: priority.get(item[0], 4))
+    group = PhaseGroup()
+    pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="matrix-phase")
+    futures = {}
+    completed = set()
+
+    def progress():
+        result["active_phases"] = [item[0] for future, item in futures.items()
+                                   if future.running() and not future.done()]
+        result["pending_phases"] = [item[0] for future, item in futures.items()
+                                    if not future.running() and not future.done()]
+        result["active_phase"] = ",".join(result["active_phases"]) or None
+        save()
+
+    try:
+        for name, argv, budget, _ in ordered:
+            future = pool.submit(phase, name, argv, cwd=ROOT, env=env,
+                                 log=stage / "logs" / f"{name}.log", budget=budget, group=group)
+            futures[future] = (name, argv, budget)
+        progress()
+        for future in as_completed(futures):
+            item = future.result()
+            completed.add(future)
+            result["phases"].append(item)
+            progress()
+            print(f"{item['status']} {item['name']} {item['seconds']:.3f}s", flush=True)
+    except BaseException:
+        group.cancel()
+        raise
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+        for future, (name, argv, budget) in futures.items():
+            if future in completed:
+                continue
+            if future.cancelled():
+                item = dict(name=name, command=argv, status="CANCELLED", started=False,
+                            budget_seconds=budget, seconds=0.0)
+            else:
+                try:
+                    item = future.result()
+                except BaseException as error:
+                    item = dict(name=name, command=argv, status="FAIL",
+                                error_type=type(error).__name__)
+            result["phases"].append(item)
+        progress()
+        group.close()
+        save()
 
 
 PACKAGE_SPECIFICATIONS = r'''
@@ -202,7 +326,8 @@ root, project = ARGS[1:2]
 Pkg.activate(project)
 Pkg.develop([PackageSpec(path=root),
              PackageSpec(path=joinpath(root, "packages", "LibTmuxWorkspace")),
-             PackageSpec(path=joinpath(root, "packages", "LibTmuxMCP"))])
+             PackageSpec(path=joinpath(root, "packages", "LibTmuxMCP")),
+             PackageSpec(path=joinpath(root, "dev", "LibTmuxCheckCompiler"))])
 packages = package_specifications(ARGS[3:end])
 Pkg.add(packages)
 resolved = values(Pkg.dependencies())
@@ -330,10 +455,7 @@ def prepare(args):
 
 def format_warmup_command(args, project):
     return [args.julia, "--startup-file=no", f"--threads={args.threads}",
-            f"--project={project}", "-e", '''using JuliaFormatter
-JuliaFormatter.format_text("function compiler_probe(x)\n    x + 1\nend\n";
-    style=JuliaFormatter.DefaultStyle(), indent=4, margin=92,
-    format_docstrings=false, whitespace_in_kwargs=false)
+            f"--project={project}", "-e", '''using LibTmuxCheckCompiler
 println("PASS formatter compiler preparation; no source files checked")''']
 
 
@@ -427,6 +549,10 @@ def run_checks(args):
             loop_started = command_started
             active_loop = None
             try:
+                if getattr(args, "worker_phase", None) == "mid":
+                    active_loop = "mid"
+                    parallel_mid(commands, stage=stage, env=env, result=result, save=save)
+                    commands = []
                 for name, argv, budget, tier in commands:
                     loop = "outer" if tier == "outer" else "mid"
                     if active_loop is not None and loop != active_loop:
@@ -654,6 +780,163 @@ println("PASS admitted version arguments construct real Pkg specifications")
         from unittest.mock import patch
         from contextlib import redirect_stdout
         from io import StringIO
+        with patch.object(os, "waitid", None), patch.object(subprocess, "Popen") as spawn:
+            try:
+                phase("unsupported", [], cwd=base, env={}, log=base / "unsupported.log", budget=0.9)
+            except RuntimeError as error:
+                assert "Python 3.13+ on macOS" in str(error)
+            else:
+                raise AssertionError("missing WNOWAIT support was accepted")
+            spawn.assert_not_called()
+        barrier = threading.Barrier(4)
+        counter_lock = threading.Lock()
+        counters = dict(active=0, peak=0)
+        def concurrent_phase(name, argv, **kwargs):
+            with counter_lock:
+                counters["active"] += 1
+                counters["peak"] = max(counters["peak"], counters["active"])
+            try:
+                if int(name[1:]) < 4:
+                    barrier.wait(0.9)
+                return dict(name=name, status="FAIL" if name == "p7" else "PASS", seconds=0.01)
+            finally:
+                with counter_lock:
+                    counters["active"] -= 1
+        parallel_result = dict(phases=[])
+        with patch(__name__ + ".phase", side_effect=concurrent_phase), \
+             redirect_stdout(StringIO()):
+            parallel_mid([(f"p{i}", [], 10, "unit") for i in range(9)], stage=base,
+                         env={}, result=parallel_result, save=lambda: None)
+        assert counters == dict(active=0, peak=4)
+        assert {item["name"] for item in parallel_result["phases"]} == {f"p{i}" for i in range(9)}
+        assert [item["name"] for item in parallel_result["phases"] if item["status"] == "FAIL"] == ["p7"]
+        assert not parallel_result["active_phases"] and not parallel_result["pending_phases"]
+        def interrupted_phase(name, argv, **kwargs):
+            if name == "second":
+                raise KeyboardInterrupt()
+            return dict(name=name, status="FAIL", seconds=0.01)
+        interrupted_result = dict(phases=[])
+        with patch(__name__ + ".phase", side_effect=interrupted_phase), \
+             redirect_stdout(StringIO()):
+            try:
+                parallel_mid([("first", [], 10, "unit"), ("second", [], 10, "unit")],
+                             stage=base, env={}, result=interrupted_result, save=lambda: None)
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("parallel interruption was swallowed")
+        assert {item["name"] for item in interrupted_result["phases"]} == {"first", "second"}
+        assert all(item["status"] == "FAIL" for item in interrupted_result["phases"])
+        assert next(item for item in interrupted_result["phases"]
+                    if item["name"] == "second")["error_type"] == "KeyboardInterrupt"
+        release = threading.Event()
+        started = threading.Barrier(5)
+        class InterruptedPool(ThreadPoolExecutor):
+            def shutdown(self, wait=True, *, cancel_futures=False):
+                super().shutdown(wait=False, cancel_futures=cancel_futures)
+                release.set()
+                if wait:
+                    super().shutdown(wait=True, cancel_futures=cancel_futures)
+        def held_phase(name, argv, **kwargs):
+            started.wait(0.9)
+            assert release.wait(0.9)
+            return dict(name=name, status="CANCELLED", started=True, seconds=0.01)
+        def interrupt_pending(futures):
+            started.wait(0.9)
+            raise KeyboardInterrupt()
+        queued_result = dict(phases=[])
+        with patch(__name__ + ".ThreadPoolExecutor", InterruptedPool), \
+             patch(__name__ + ".phase", side_effect=held_phase), \
+             patch(__name__ + ".as_completed", side_effect=interrupt_pending):
+            try:
+                parallel_mid([(f"q{i}", [], 10, "unit") for i in range(9)], stage=base,
+                             env={}, result=queued_result, save=lambda: None)
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("queued interruption was swallowed")
+        assert {item["name"] for item in queued_result["phases"]} == {f"q{i}" for i in range(9)}
+        assert all(item["status"] == "CANCELLED" for item in queued_result["phases"])
+        assert sum(not item["started"] for item in queued_result["phases"]) == 5
+        assert not queued_result["active_phases"] and not queued_result["pending_phases"]
+        # Exit observation reserves the leader PID; signals and final reap share a lock.
+        reserved = subprocess.Popen([sys.executable, "-c", "raise SystemExit(7)"],
+                                    start_new_session=True)
+        ownership = PhaseGroup()
+        ownership.add(reserved)
+        observed = os.waitid(os.P_PID, reserved.pid, os.WEXITED | os.WNOWAIT)
+        assert observed.si_pid == reserved.pid and reserved.returncode is None
+        assert os.waitid(os.P_PID, reserved.pid, os.WEXITED | os.WNOWAIT).si_pid == reserved.pid
+        deliveries = []
+        def guarded_signal(child, number):
+            assert ownership.lock.locked() and child in ownership.processes
+            assert child.returncode is None
+            deliveries.append((child.pid, number))
+        original_wait = reserved.wait
+        def guarded_reap():
+            assert ownership.lock.locked() and reserved in ownership.processes
+            return original_wait()
+        with patch(__name__ + ".signal_group", side_effect=guarded_signal), \
+             patch.object(reserved, "wait", side_effect=guarded_reap):
+            ownership.signal(signal.SIGINT)
+            with ownership.lock:
+                ownership.cancelled = True
+            assert ownership.reap(reserved) == 7
+            ownership.signal(signal.SIGKILL)
+        assert deliveries == [(reserved.pid, signal.SIGINT), (reserved.pid, signal.SIGKILL)]
+        assert not ownership.processes
+        group = PhaseGroup()
+        registered = threading.Event()
+        original_add = group.add
+        def register_child(process):
+            original_add(process)
+            registered.set()
+        with patch.object(group, "add", side_effect=register_child):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(phase, "cancelled", [
+                    sys.executable, "-c", "import threading; threading.Event().wait()"],
+                    cwd=base, env=os.environ.copy(), log=base / "cancelled.log",
+                    budget=0.9, group=group)
+                assert registered.wait(0.9)
+                group.cancel()
+                cancelled = future.result(timeout=0.9)
+        group.close()
+        assert cancelled["status"] == "CANCELLED" and cancelled["direct_child_reaped"]
+        assert not group.processes
+        # A leader may exit on SIGINT while its same-group child ignores it.
+        leaf = ("import signal,socket,sys;signal.signal(signal.SIGINT,signal.SIG_IGN);"
+                "connection=socket.socket(socket.AF_UNIX);connection.connect(sys.argv[1]);"
+                "connection.sendall(b'r');connection.recv(1)")
+        leader = ("import subprocess,sys,threading;"
+                  "subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]]);"
+                  "threading.Event().wait()")
+        for mode in ("timeout", "cancel"):
+            descendants = PhaseGroup()
+            address = str(base / ("descendant-" + mode))
+            with socket.socket(socket.AF_UNIX) as listener:
+                listener.bind(address)
+                listener.listen(1)
+                listener.settimeout(0.9)
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(phase, mode, [sys.executable, "-c", leader, leaf, address],
+                        cwd=base, env=os.environ.copy(), log=base / (mode + ".log"),
+                        budget=0.2 if mode == "timeout" else 0.9, group=descendants)
+                    connection, _ = listener.accept()
+                    with connection:
+                        connection.settimeout(0.9)
+                        try:
+                            assert connection.recv(1) == b"r"
+                            if mode == "cancel":
+                                descendants.cancel()
+                            retired = future.result(timeout=0.9)
+                            assert retired["status"] == ("TIMEOUT" if mode == "timeout" else "CANCELLED")
+                            assert retired["direct_child_reaped"]
+                            assert connection.recv(1) == b"", "same-group descendant survived retirement"
+                        finally:
+                            # The owned connection releases the leaf if a regression leaves it alive.
+                            connection.shutdown(socket.SHUT_RDWR)
+            descendants.close()
+            assert not descendants.processes
         args = SimpleNamespace(stage=str(base), julia="julia", tmux="tmux", threads=1,
                                tier="all", suite="all", expected_julia=None,
                                expected_tmux=None, expected_os=None, expected_arch=None)
@@ -666,8 +949,11 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert budgets["format"] == 10
         warmup = format_warmup_command(args, base)
         assert warmup[:5] == ["julia", "--startup-file=no", "--threads=1", f"--project={base}", "-e"]
-        assert "format_text" in warmup[5] and "compiler_probe" in warmup[5]
+        assert "using LibTmuxCheckCompiler" in warmup[5]
         assert "source_files" not in warmup[5] and "check-quality" not in warmup[5]
+        compiler_source = (ROOT / "dev/LibTmuxCheckCompiler/src/LibTmuxCheckCompiler.jl").read_text()
+        assert "compiler_probe" in compiler_source and "@compile_workload" in compiler_source
+        assert "read(" not in compiler_source and "source_files" not in compiler_source
         partitions = []
         for suite in SUITES:
             args.suite = suite
