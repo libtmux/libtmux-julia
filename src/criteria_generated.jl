@@ -4,6 +4,7 @@ const _CRITERIA_FIELDS = Dict{Tuple{Symbol,Symbol},_CriteriaField}(
     (:client, :name) => _CriteriaField(:String, false, :scalar, :any),
     (:client, :pid) => _CriteriaField(:Integer, false, :scalar, :any),
     (:client, :created) => _CriteriaField(:Integer, false, :scalar, :any),
+    (:client, :activity) => _CriteriaField(:Integer, false, :scalar, :any),
     (:client, :session) => _CriteriaField(:relation, true, :one, :session),
     (:pane, :id) => _CriteriaField(:PaneID, false, :scalar, :any),
     (:pane, :index) => _CriteriaField(:Integer, false, :scalar, :any),
@@ -14,16 +15,30 @@ const _CRITERIA_FIELDS = Dict{Tuple{Symbol,Symbol},_CriteriaField}(
     (:pane, :current_command) => _CriteriaField(:String, true, :scalar, :any),
     (:pane, :current_path) => _CriteriaField(:String, true, :scalar, :any),
     (:pane, :title) => _CriteriaField(:String, false, :scalar, :any),
+    (:pane, :pid) => _CriteriaField(:Integer, false, :scalar, :any),
+    (:pane, :tty) => _CriteriaField(:String, true, :scalar, :any),
+    (:pane, :exit_status) => _CriteriaField(:Integer, true, :scalar, :any),
+    (:pane, :history_size) => _CriteriaField(:Integer, false, :scalar, :any),
+    (:pane, :history_limit) => _CriteriaField(:Integer, false, :scalar, :any),
+    (:pane, :cursor_x) => _CriteriaField(:Integer, false, :scalar, :any),
+    (:pane, :cursor_y) => _CriteriaField(:Integer, false, :scalar, :any),
     (:pane, :window) => _CriteriaField(:relation, false, :one, :window),
     (:session, :id) => _CriteriaField(:SessionID, false, :scalar, :any),
     (:session, :name) => _CriteriaField(:String, false, :scalar, :any),
     (:session, :attached_clients) => _CriteriaField(:Integer, false, :scalar, :any),
+    (:session, :created) => _CriteriaField(:Integer, false, :scalar, :any),
+    (:session, :activity) => _CriteriaField(:Integer, false, :scalar, :any),
+    (:session, :last_attached) => _CriteriaField(:Integer, true, :scalar, :any),
     (:session, :windows) => _CriteriaField(:relation, false, :many, :window),
     (:session, :windowlinks) => _CriteriaField(:relation, false, :many, :windowlink),
     (:window, :id) => _CriteriaField(:WindowID, false, :scalar, :any),
     (:window, :name) => _CriteriaField(:String, false, :scalar, :any),
     (:window, :width) => _CriteriaField(:Integer, false, :scalar, :any),
     (:window, :height) => _CriteriaField(:Integer, false, :scalar, :any),
+    (:window, :layout) => _CriteriaField(:String, false, :scalar, :any),
+    (:window, :visible_layout) => _CriteriaField(:String, false, :scalar, :any),
+    (:window, :zoomed) => _CriteriaField(:Bool, false, :scalar, :any),
+    (:window, :activity) => _CriteriaField(:Integer, false, :scalar, :any),
     (:window, :panes) => _CriteriaField(:relation, false, :many, :pane),
     (:window, :windowlinks) => _CriteriaField(:relation, false, :many, :windowlink),
     (:windowlink, :index) => _CriteriaField(:Integer, false, :scalar, :any),
@@ -37,6 +52,7 @@ const _WIRE_FIELDS = Dict{String,Tuple{Symbol,Symbol}}(
     "tmux.client.name" => (:client, :name),
     "tmux.client.pid" => (:client, :pid),
     "tmux.client.created" => (:client, :created),
+    "tmux.client.activity" => (:client, :activity),
     "tmux.client.session" => (:client, :session),
     "tmux.pane.id" => (:pane, :id),
     "tmux.pane.index" => (:pane, :index),
@@ -47,16 +63,30 @@ const _WIRE_FIELDS = Dict{String,Tuple{Symbol,Symbol}}(
     "tmux.pane.current_command" => (:pane, :current_command),
     "tmux.pane.current_path" => (:pane, :current_path),
     "tmux.pane.title" => (:pane, :title),
+    "tmux.pane.pid" => (:pane, :pid),
+    "tmux.pane.tty" => (:pane, :tty),
+    "tmux.pane.exit_status" => (:pane, :exit_status),
+    "tmux.pane.history_size" => (:pane, :history_size),
+    "tmux.pane.history_limit" => (:pane, :history_limit),
+    "tmux.pane.cursor_x" => (:pane, :cursor_x),
+    "tmux.pane.cursor_y" => (:pane, :cursor_y),
     "tmux.pane.window" => (:pane, :window),
     "tmux.session.id" => (:session, :id),
     "tmux.session.name" => (:session, :name),
     "tmux.session.attached_clients" => (:session, :attached_clients),
+    "tmux.session.created" => (:session, :created),
+    "tmux.session.activity" => (:session, :activity),
+    "tmux.session.last_attached" => (:session, :last_attached),
     "tmux.session.windows" => (:session, :windows),
     "tmux.session.windowlinks" => (:session, :windowlinks),
     "tmux.window.id" => (:window, :id),
     "tmux.window.name" => (:window, :name),
     "tmux.window.width" => (:window, :width),
     "tmux.window.height" => (:window, :height),
+    "tmux.window.layout" => (:window, :layout),
+    "tmux.window.visible_layout" => (:window, :visible_layout),
+    "tmux.window.zoomed" => (:window, :zoomed),
+    "tmux.window.activity" => (:window, :activity),
     "tmux.window.panes" => (:window, :panes),
     "tmux.window.windowlinks" => (:window, :windowlinks),
     "tmux.windowlink.index" => (:windowlink, :index),
@@ -66,22 +96,30 @@ const _WIRE_FIELDS = Dict{String,Tuple{Symbol,Symbol}}(
 )
 const _FIELD_WIRE = Dict(value => key for (key, value) in _WIRE_FIELDS)
 
-_snapshot_integer_fields(::Val{:client}) = ((:pid, false), (:created, false),)
+_snapshot_integer_fields(::Val{:client}) = ((:pid, false), (:created, false), (:activity, false),)
 _numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:client}, ::Val{:pid}) where {SI,WI,PI,CI,LI} = fieldtype(CI, 1)
 _numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:client}, ::Val{:created}) where {SI,WI,PI,CI,LI} = fieldtype(CI, 2)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:client}, ::Val{:activity}) where {SI,WI,PI,CI,LI} = fieldtype(CI, 3)
 Base.@constprop :aggressive function _typed_captured(x::ClientSnapshot{S}, key::Symbol) where {S}
     key === :id && return _captured(x, :id)::ClientID
     key === :name && return _captured(x, :name)::String
     key === :pid && return _captured(x, :pid)::_numeric_type(S, Val(:client), Val(:pid))
     key === :created && return _captured(x, :created)::_numeric_type(S, Val(:client), Val(:created))
+    key === :activity && return _captured(x, :activity)::_numeric_type(S, Val(:client), Val(:activity))
     key === :session_id && return _captured(x, :session_id)::Union{Nothing,SessionID}
     _captured(x, key)
 end
 
-_snapshot_integer_fields(::Val{:pane}) = ((:index, false), (:width, false), (:height, false),)
+_snapshot_integer_fields(::Val{:pane}) = ((:index, false), (:width, false), (:height, false), (:pid, false), (:exit_status, true), (:history_size, false), (:history_limit, false), (:cursor_x, false), (:cursor_y, false),)
 _numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:index}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 1)
 _numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:width}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 2)
 _numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:height}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 3)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:pid}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 4)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:exit_status}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 5)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:history_size}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 6)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:history_limit}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 7)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:cursor_x}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 8)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:cursor_y}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 9)
 Base.@constprop :aggressive function _typed_captured(x::PaneSnapshot{S}, key::Symbol) where {S}
     key === :id && return _captured(x, :id)::PaneID
     key === :index && return _captured(x, :index)::_numeric_type(S, Val(:pane), Val(:index))
@@ -92,27 +130,45 @@ Base.@constprop :aggressive function _typed_captured(x::PaneSnapshot{S}, key::Sy
     key === :current_command && return _captured(x, :current_command)::Union{Nothing,String}
     key === :current_path && return _captured(x, :current_path)::Union{Nothing,String}
     key === :title && return _captured(x, :title)::String
+    key === :pid && return _captured(x, :pid)::_numeric_type(S, Val(:pane), Val(:pid))
+    key === :tty && return _captured(x, :tty)::Union{Nothing,String}
+    key === :exit_status && return _captured(x, :exit_status)::Union{Nothing,_numeric_type(S, Val(:pane), Val(:exit_status))}
+    key === :history_size && return _captured(x, :history_size)::_numeric_type(S, Val(:pane), Val(:history_size))
+    key === :history_limit && return _captured(x, :history_limit)::_numeric_type(S, Val(:pane), Val(:history_limit))
+    key === :cursor_x && return _captured(x, :cursor_x)::_numeric_type(S, Val(:pane), Val(:cursor_x))
+    key === :cursor_y && return _captured(x, :cursor_y)::_numeric_type(S, Val(:pane), Val(:cursor_y))
     key === :window_id && return _captured(x, :window_id)::WindowID
     _captured(x, key)
 end
 
-_snapshot_integer_fields(::Val{:session}) = ((:attached_clients, false),)
+_snapshot_integer_fields(::Val{:session}) = ((:attached_clients, false), (:created, false), (:activity, false), (:last_attached, true),)
 _numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:session}, ::Val{:attached_clients}) where {SI,WI,PI,CI,LI} = fieldtype(SI, 1)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:session}, ::Val{:created}) where {SI,WI,PI,CI,LI} = fieldtype(SI, 2)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:session}, ::Val{:activity}) where {SI,WI,PI,CI,LI} = fieldtype(SI, 3)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:session}, ::Val{:last_attached}) where {SI,WI,PI,CI,LI} = fieldtype(SI, 4)
 Base.@constprop :aggressive function _typed_captured(x::SessionSnapshot{S}, key::Symbol) where {S}
     key === :id && return _captured(x, :id)::SessionID
     key === :name && return _captured(x, :name)::String
     key === :attached_clients && return _captured(x, :attached_clients)::_numeric_type(S, Val(:session), Val(:attached_clients))
+    key === :created && return _captured(x, :created)::_numeric_type(S, Val(:session), Val(:created))
+    key === :activity && return _captured(x, :activity)::_numeric_type(S, Val(:session), Val(:activity))
+    key === :last_attached && return _captured(x, :last_attached)::Union{Nothing,_numeric_type(S, Val(:session), Val(:last_attached))}
     _captured(x, key)
 end
 
-_snapshot_integer_fields(::Val{:window}) = ((:width, false), (:height, false),)
+_snapshot_integer_fields(::Val{:window}) = ((:width, false), (:height, false), (:activity, false),)
 _numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:window}, ::Val{:width}) where {SI,WI,PI,CI,LI} = fieldtype(WI, 1)
 _numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:window}, ::Val{:height}) where {SI,WI,PI,CI,LI} = fieldtype(WI, 2)
+_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:window}, ::Val{:activity}) where {SI,WI,PI,CI,LI} = fieldtype(WI, 3)
 Base.@constprop :aggressive function _typed_captured(x::WindowSnapshot{S}, key::Symbol) where {S}
     key === :id && return _captured(x, :id)::WindowID
     key === :name && return _captured(x, :name)::String
     key === :width && return _captured(x, :width)::_numeric_type(S, Val(:window), Val(:width))
     key === :height && return _captured(x, :height)::_numeric_type(S, Val(:window), Val(:height))
+    key === :layout && return _captured(x, :layout)::String
+    key === :visible_layout && return _captured(x, :visible_layout)::String
+    key === :zoomed && return _captured(x, :zoomed)::Bool
+    key === :activity && return _captured(x, :activity)::_numeric_type(S, Val(:window), Val(:activity))
     _captured(x, key)
 end
 
@@ -127,7 +183,7 @@ Base.@constprop :aggressive function _typed_captured(x::WindowLink{S}, key::Symb
 end
 
 """
-    ClientWhere(; id, name, pid, created, session)
+    ClientWhere(; id, name, pid, created, activity, session)
 
 Match captured `ClientSnapshot` values without I/O. Omitted keywords are
 unconstrained. Explicit `nothing` requires nullable captured absence.
@@ -139,20 +195,21 @@ Keywords:
 - `name` (String): Exact tmux client name.
 - `pid` (Integer): Observed client process ID.
 - `created` (Integer): Observed creation time; not a strict identity guard.
+- `activity` (Integer): Observed client activity time in Unix seconds.
 - `session` (relation): Captured session or known absence; normal acquisition lists attached clients.
 """
 struct ClientWhere <: Criterion
     _clauses::Tuple{Vararg{_FieldClause}}
     ClientWhere(clauses::Tuple{Vararg{_FieldClause}}, ::Val{:validated}) = new(clauses)
 end
-function ClientWhere(; id=_UNCONSTRAINED, name=_UNCONSTRAINED, pid=_UNCONSTRAINED, created=_UNCONSTRAINED, session=_UNCONSTRAINED)
-    ClientWhere(_where_clauses(:client, (; id, name, pid, created, session)), Val(:validated))
+function ClientWhere(; id=_UNCONSTRAINED, name=_UNCONSTRAINED, pid=_UNCONSTRAINED, created=_UNCONSTRAINED, activity=_UNCONSTRAINED, session=_UNCONSTRAINED)
+    ClientWhere(_where_clauses(:client, (; id, name, pid, created, activity, session)), Val(:validated))
 end
 _criterion_entity(::ClientWhere) = :client
 _observation_entity(::Type{<:ClientSnapshot}) = :client
 
 """
-    PaneWhere(; id, index, active, dead, width, height, current_command, current_path, title, window)
+    PaneWhere(; id, index, active, dead, width, height, current_command, current_path, title, pid, tty, exit_status, history_size, history_limit, cursor_x, cursor_y, window)
 
 Match captured `PaneSnapshot` values without I/O. Omitted keywords are
 unconstrained. Explicit `nothing` requires nullable captured absence.
@@ -169,20 +226,27 @@ Keywords:
 - `current_command` (String): Command name observed by tmux.
 - `current_path` (String): Path observed on the tmux host; text matching is lexical.
 - `title` (String): Pane title, including literal format-like text.
+- `pid` (Integer): Observed initial pane process ID; not an identity guard.
+- `tty` (String): Pane PTY path, or captured absence for a pane without a PTY.
+- `exit_status` (Integer): Normal-exit status retained by tmux; live or signal-terminated panes have captured absence.
+- `history_size` (Integer): Retained scrollback lines.
+- `history_limit` (Integer): Configured maximum scrollback lines.
+- `cursor_x` (Integer): Zero-based cursor column in the pane's base screen.
+- `cursor_y` (Integer): Zero-based cursor row in the pane's base screen.
 - `window` (relation): Physical containing window.
 """
 struct PaneWhere <: Criterion
     _clauses::Tuple{Vararg{_FieldClause}}
     PaneWhere(clauses::Tuple{Vararg{_FieldClause}}, ::Val{:validated}) = new(clauses)
 end
-function PaneWhere(; id=_UNCONSTRAINED, index=_UNCONSTRAINED, active=_UNCONSTRAINED, dead=_UNCONSTRAINED, width=_UNCONSTRAINED, height=_UNCONSTRAINED, current_command=_UNCONSTRAINED, current_path=_UNCONSTRAINED, title=_UNCONSTRAINED, window=_UNCONSTRAINED)
-    PaneWhere(_where_clauses(:pane, (; id, index, active, dead, width, height, current_command, current_path, title, window)), Val(:validated))
+function PaneWhere(; id=_UNCONSTRAINED, index=_UNCONSTRAINED, active=_UNCONSTRAINED, dead=_UNCONSTRAINED, width=_UNCONSTRAINED, height=_UNCONSTRAINED, current_command=_UNCONSTRAINED, current_path=_UNCONSTRAINED, title=_UNCONSTRAINED, pid=_UNCONSTRAINED, tty=_UNCONSTRAINED, exit_status=_UNCONSTRAINED, history_size=_UNCONSTRAINED, history_limit=_UNCONSTRAINED, cursor_x=_UNCONSTRAINED, cursor_y=_UNCONSTRAINED, window=_UNCONSTRAINED)
+    PaneWhere(_where_clauses(:pane, (; id, index, active, dead, width, height, current_command, current_path, title, pid, tty, exit_status, history_size, history_limit, cursor_x, cursor_y, window)), Val(:validated))
 end
 _criterion_entity(::PaneWhere) = :pane
 _observation_entity(::Type{<:PaneSnapshot}) = :pane
 
 """
-    SessionWhere(; id, name, attached_clients, windows, windowlinks)
+    SessionWhere(; id, name, attached_clients, created, activity, last_attached, windows, windowlinks)
 
 Match captured `SessionSnapshot` values without I/O. Omitted keywords are
 unconstrained. Explicit `nothing` requires nullable captured absence.
@@ -193,6 +257,9 @@ Keywords:
 - `id` (SessionID): Session identity.
 - `name` (String): Session name.
 - `attached_clients` (Integer): Attached client count observed by tmux.
+- `created` (Integer): Session creation time in Unix seconds.
+- `activity` (Integer): Observed session activity time in Unix seconds.
+- `last_attached` (Integer): Last attachment time in Unix seconds, or captured absence when tmux has no recorded attachment.
 - `windows` (relation): Unique windows reached through complete captured session links.
 - `windowlinks` (relation): Complete captured links including session-specific indices.
 """
@@ -200,14 +267,14 @@ struct SessionWhere <: Criterion
     _clauses::Tuple{Vararg{_FieldClause}}
     SessionWhere(clauses::Tuple{Vararg{_FieldClause}}, ::Val{:validated}) = new(clauses)
 end
-function SessionWhere(; id=_UNCONSTRAINED, name=_UNCONSTRAINED, attached_clients=_UNCONSTRAINED, windows=_UNCONSTRAINED, windowlinks=_UNCONSTRAINED)
-    SessionWhere(_where_clauses(:session, (; id, name, attached_clients, windows, windowlinks)), Val(:validated))
+function SessionWhere(; id=_UNCONSTRAINED, name=_UNCONSTRAINED, attached_clients=_UNCONSTRAINED, created=_UNCONSTRAINED, activity=_UNCONSTRAINED, last_attached=_UNCONSTRAINED, windows=_UNCONSTRAINED, windowlinks=_UNCONSTRAINED)
+    SessionWhere(_where_clauses(:session, (; id, name, attached_clients, created, activity, last_attached, windows, windowlinks)), Val(:validated))
 end
 _criterion_entity(::SessionWhere) = :session
 _observation_entity(::Type{<:SessionSnapshot}) = :session
 
 """
-    WindowWhere(; id, name, width, height, panes, windowlinks)
+    WindowWhere(; id, name, width, height, layout, visible_layout, zoomed, activity, panes, windowlinks)
 
 Match captured `WindowSnapshot` values without I/O. Omitted keywords are
 unconstrained. Explicit `nothing` requires nullable captured absence.
@@ -219,6 +286,10 @@ Keywords:
 - `name` (String): Window name.
 - `width` (Integer): Window width in cells.
 - `height` (Integer): Window height in cells.
+- `layout` (String): Full window layout, including saved layout while zoomed.
+- `visible_layout` (String): Currently visible layout, including the zoomed pane.
+- `zoomed` (Bool): Whether the window is zoomed.
+- `activity` (Integer): Observed window activity time in Unix seconds.
 - `panes` (relation): Complete captured physical pane membership.
 - `windowlinks` (relation): Complete captured links to sessions.
 """
@@ -226,8 +297,8 @@ struct WindowWhere <: Criterion
     _clauses::Tuple{Vararg{_FieldClause}}
     WindowWhere(clauses::Tuple{Vararg{_FieldClause}}, ::Val{:validated}) = new(clauses)
 end
-function WindowWhere(; id=_UNCONSTRAINED, name=_UNCONSTRAINED, width=_UNCONSTRAINED, height=_UNCONSTRAINED, panes=_UNCONSTRAINED, windowlinks=_UNCONSTRAINED)
-    WindowWhere(_where_clauses(:window, (; id, name, width, height, panes, windowlinks)), Val(:validated))
+function WindowWhere(; id=_UNCONSTRAINED, name=_UNCONSTRAINED, width=_UNCONSTRAINED, height=_UNCONSTRAINED, layout=_UNCONSTRAINED, visible_layout=_UNCONSTRAINED, zoomed=_UNCONSTRAINED, activity=_UNCONSTRAINED, panes=_UNCONSTRAINED, windowlinks=_UNCONSTRAINED)
+    WindowWhere(_where_clauses(:window, (; id, name, width, height, layout, visible_layout, zoomed, activity, panes, windowlinks)), Val(:validated))
 end
 _criterion_entity(::WindowWhere) = :window
 _observation_entity(::Type{<:WindowSnapshot}) = :window

@@ -115,8 +115,14 @@ end
         identity;
         acquired=(0, 0),
         complete=true,
-        sessions=[(id="\$0", name="session")],
-        windows=[(id="@1", width=80)],
+        sessions=[(id="\$0", name="session", created=1, activity=2, last_attached=nothing)],
+        windows=[(
+            id="@1",
+            width=80,
+            layout="full",
+            visible_layout="visible",
+            zoomed=false,
+        )],
         panes=[(
             id="%1",
             window_id="@1",
@@ -124,6 +130,11 @@ end
             active=true,
             current_command=nothing,
             title="literal",
+            pid=123,
+            tty=nothing,
+            exit_status=nothing,
+            history_size=0,
+            cursor_x=2,
         )],
         windowlinks=[(session_id="\$0", window_id="@1", index=0)],
     )
@@ -135,6 +146,14 @@ end
     @test @inferred(Union{Nothing,String}, (p -> p.current_command)(pane)) === nothing
     @test @inferred((p -> p.ref)(pane)) == PaneRef(identity, "%1")
     @test @inferred((p -> p.window.width)(pane)) === 80
+    @test @inferred((p -> (p.pid, p.history_size, p.cursor_x))(pane)) === (123, 0, 2)
+    @test @inferred(Union{Nothing,Int}, (p -> p.exit_status)(pane)) === nothing
+    @test @inferred(Union{Nothing,String}, (p -> p.tty)(pane)) === nothing
+    @test @inferred((p -> (p.window.layout, p.window.zoomed))(pane)) === ("full", false)
+    @test @inferred(
+        Tuple{Int,Int,Union{Nothing,Int}},
+        (s -> (s.created, s.activity, s.last_attached))(only(sessions(snap)))
+    ) === (1, 2, nothing)
 
     width = UInt128(typemax(UInt128))
     wide = LibTmux._build_snapshot(
@@ -142,11 +161,12 @@ end
         acquired=(0, 0),
         complete=true,
         windows=[(id="@1",)],
-        panes=[(id="%1", window_id="@1", width=width)],
+        panes=[(id="%1", window_id="@1", width=width, exit_status=width)],
     )
     wide_pane = only(panes(wide))
     @test @inferred((p -> p.width)(wide_pane)) === width
     @test only(project_rows(panes(wide); columns=(:width,))).width === width
+    @test @inferred(Union{Nothing,UInt128}, (p -> p.exit_status)(wide_pane)) === width
 
     heterogeneous = LibTmux._build_snapshot(
         identity;
@@ -161,6 +181,7 @@ end
     @test [p.width for p in panes(heterogeneous)] == [Int8(7), width]
     @test typeof(panes(heterogeneous)[1].width) === Int8
     @test typeof(panes(heterogeneous)[2].width) === UInt128
+    @test_throws SnapshotCoverageError panes(heterogeneous)[1].exit_status
 
     nullable = ((:exit_status, true),)
     absent = [LibTmux._CapturedRecord((exit_status=nothing,))]
