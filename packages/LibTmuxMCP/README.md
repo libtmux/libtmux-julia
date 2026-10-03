@@ -177,6 +177,18 @@ The default catalog contains [`list_panes`][tool_list_panes],
 
 Each tool name links to its page with the full input and output contract.
 
+Every tool can invoke configured tmux hooks or aliases. Waits also attach and
+detach control clients, which can trigger hooks and unattached-session policies.
+The catalog therefore advertises `readOnlyHint: false`, `destructiveHint: true`
+and `idempotentHint: false`, including for listing and capture.
+
+`error.effects: none` means the call failed before external I/O admission, such
+as argument validation, target policy or prior cancellation. Once any stage
+admits tmux I/O, errors report `possible`. This includes earlier batch items,
+control attachment, creation cleanup and truncated results. A later command's
+unsent status cannot erase those effects. `possible` does not assert that a
+change occurred; cancellation and errors never establish rollback.
+
 ### Batches
 
 [`run_operations`][tool_run_operations] validates every item before execution,

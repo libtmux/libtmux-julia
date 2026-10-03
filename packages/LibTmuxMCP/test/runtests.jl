@@ -1,8 +1,8 @@
 using Test
 
 mode = isempty(ARGS) ? "all" : only(ARGS)
-mode in ("unit", "integration", "observation", "old-daemon", "all") ||
-    error("expected unit, integration, observation, old-daemon, or all")
+mode in ("unit", "integration", "observation", "effects", "old-daemon", "all") ||
+    error("expected unit, integration, observation, effects, old-daemon, or all")
 isempty(ARGS) && push!(ARGS, mode)
 
 files = String[]

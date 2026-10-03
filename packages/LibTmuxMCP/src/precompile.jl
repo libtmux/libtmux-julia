@@ -63,7 +63,7 @@
                 LibTmux.StaleReference("%0"),
                 ArgumentError("invalid argument"),
             )
-                JSON.json(_tool_error(cause, "send_keys"))
+                JSON.json(_tool_error(cause, true))
             end
             _cli_options(["--help"])
             _cli_options([
