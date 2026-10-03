@@ -273,19 +273,22 @@ $ rm -rf -- "$consumer_stage"
 
 ## Quality and compatibility
 
-The Python 3.12+ matrix driver prepares exact tooling versions, exports
-immutable consumer packages, and records commands, whole-command times and
-failure states. Preparation can access the network; subsequent checks are
-offline. Source changes invalidate the prepared export.
+The matrix driver requires Python 3.12+ on Linux and Python 3.13+ on macOS.
+It uses `waitid` with `WNOWAIT` to reserve child process identities until
+signalling and final reap finish. CI selects Python 3.13 on both platforms.
+The driver prepares exact tooling versions, exports immutable consumer
+packages, and records commands, whole-command times and failure states.
+Preparation can access the network; subsequent checks are offline. Source
+changes invalidate the prepared export.
 
 The isolated tooling project disables JuliaFormatter's optional package-wide
-precompile workload through its supported preference. The formatter check
-still uses normal compilation and inspects every owned source file. Product
-precompilation is unchanged. Prepared metadata records the preference, and
-the runner rejects preference changes before checking the cell.
-Preparation runs the same read-only formatter check at the selected thread
-count. Subsequent checks still format every source and include that work in
-the complete mid budget.
+precompile workload through its supported preference. During preparation,
+the private [compiler helper](dev/LibTmuxCheckCompiler/src/LibTmuxCheckCompiler.jl)
+formats inert syntax samples with the check's settings to cache compiler work.
+The timed formatter gate uses normal compilation, checks every owned source
+file, and includes the complete corpus work in the mid budget. Prepared
+metadata records the preference, and the runner rejects preference changes
+before checking the cell.
 
 ```console
 $ matrix_stage=$(mktemp -d "${TMPDIR:-/tmp}/ltj-matrix.XXXXXX")
