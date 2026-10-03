@@ -5,22 +5,14 @@ expansion and planning are pure. Applying a plan creates tmux resources and
 can execute shell input. Keep those stages explicit when reviewing an
 untrusted configuration.
 
-From a consumer project directory, add the core and workspace package from the
-same public Git tag:
-
-```console
-$ julia \
-    --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
-```
+Prepare a consumer project with the core and workspace packages from the same
+revision using [Install](installation.md#workspace-loader).
 
 The following executable source example needs a checkout and its own consumer
-environment. Clone the same tag, then enter the checkout:
+environment. Clone the tested public source, then enter the checkout:
 
 ```console
 $ git clone \
-    --branch v0.1.0-alpha.1 \
-    --depth 1 \
     https://github.com/libtmux/libtmux-julia.git
 ```
 
@@ -28,12 +20,16 @@ $ git clone \
 $ cd libtmux-julia
 ```
 
+```console
+$ git checkout 9e3776d07798174a3590a728d28029efcbb52780
+```
+
 Create a local environment for the example:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate(".workspace-env"); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
+    -e 'using Pkg; Pkg.activate(".workspace-env"); Pkg.develop([Pkg.PackageSpec(path="."), Pkg.PackageSpec(path="packages/LibTmuxWorkspace")]); Pkg.instantiate()'
 ```
 
 It loads two panes, checks their layout and focus, freezes the supported

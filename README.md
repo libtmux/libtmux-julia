@@ -188,9 +188,9 @@ loads a configuration and checks its layout, focus and cleanup.
 
 ## Status and development
 
-The four CI cells in [Compatibility](docs/src/compatibility.md) passed the
-complete package suite. Benchmark baselines and an independent guide walkthrough
-remain open. Check the
+[Compatibility](docs/src/compatibility.md) separates baseline correctness from
+current development gates. Complete loop budgets, final installed workflows,
+benchmark limits and independent adoption review remain open. Check the
 [capability manifest](docs/capabilities.toml) and
 [CI results](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
 for current evidence. WSL is a Linux host; native Windows tmux is outside scope.
