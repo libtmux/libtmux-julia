@@ -5,6 +5,9 @@ if QUALITY_PHASE == "quality"
     import Aqua, LibTmux, LibTmuxWorkspace, LibTmuxMCP, JSON, Tables
 elseif QUALITY_PHASE == "format"
     import JuliaFormatter
+    if Base.find_package("LibTmuxCheckCompiler") !== nothing
+        import LibTmuxCheckCompiler
+    end
 end
 
 const QUALITY_ROOT = dirname(@__DIR__)
