@@ -10,7 +10,10 @@ Product compatibility and the MCP/workspace applications remain under
 verification; see [Compatibility](compatibility.md).
 
 The following source is the executable `examples/owned_capture.jl` program.
-It creates a session, captures the initial screen and asserts daemon cleanup.
+It creates a private session, borrows its endpoint for named selection, refuses
+missing or ambiguous panes, and checks owned daemon cleanup. Reuse
+`capture_named_pane` with an explicit `Server` for an existing endpoint. The
+function reads observations and screen content; the caller keeps ownership.
 
 ```@eval
 using Markdown
