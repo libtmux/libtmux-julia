@@ -192,3 +192,16 @@ for current evidence. WSL is a Linux host; native Windows tmux is outside scope.
 [Benchmarks](benchmark/README.md) · [Changelog](CHANGELOG.md).
 
 Core, MCP and workspace packages use the [MIT license](LICENSE).
+
+## Attribution
+
+Please use the following BibTeX template to cite libtmux-julia in scientific discourse:
+
+```bibtex
+@misc{libtmux-julia,
+   author = {Tony Narlock},
+   year = {2026},
+   note = {https://libtmux.org},
+   title = {libtmux-julia: Julia wrapper for tmux}
+}
+```
