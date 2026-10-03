@@ -54,14 +54,65 @@ if ccall(:jl_generating_output, Cint, ()) == 1
     precompile(Tuple{typeof(capture_bytes),ControlConnection,PaneRef})
     let identity = ServerIdentity(socket_path="/precompile/s", generation="1:1")
         rows = (
-            ss=[["\$0", "precompile", "2"]],
-            ws=[["@0", "window", "80", "24", "\$0", "0", "1"]],
-            ps=[["%0", "@0", "0", "1", "0", "80", "24", "cat", "/", "title"]],
+            ss=[["\$0", "precompile", "2", "1", "1", "1"]],
+            ws=[[
+                "@0",
+                "window",
+                "80",
+                "24",
+                "\$0",
+                "0",
+                "1",
+                "layout",
+                "visible",
+                "0",
+                "1",
+            ]],
+            ps=[[
+                "%0",
+                "@0",
+                "0",
+                "1",
+                "0",
+                "80",
+                "24",
+                "cat",
+                "/",
+                "title",
+                "123",
+                "/dev/pts/0",
+                "",
+                "0",
+                "2000",
+                "0",
+                "0",
+            ]],
             cs=Vector{String}[],
         )
         _snapshot_from_rows(identity, rows, (0.0, 0.0))
-        push!(rows.ps, ["%1", "@0", "1", "0", "1", "80", "24", "", "", ""])
-        push!(rows.cs, ["client", "123", "1", "\$0"])
+        push!(
+            rows.ps,
+            [
+                "%1",
+                "@0",
+                "1",
+                "0",
+                "1",
+                "80",
+                "24",
+                "",
+                "",
+                "",
+                "124",
+                "",
+                "7",
+                "0",
+                "2000",
+                "0",
+                "0",
+            ],
+        )
+        push!(rows.cs, ["client", "123", "1", "\$0", "1"])
         _snapshot_from_rows(identity, rows, (0.0, 0.0))
     end
 
