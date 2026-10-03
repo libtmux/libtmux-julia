@@ -6,14 +6,14 @@ tool_result(app, name, args=Dict(); kwargs...) =
 pane_target(ref) = Dict("paneId"=>string(ref.id), "generation"=>ref.server.generation)
 
 if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
-    @testset "MCP failures preserve possible effects after process admission" begin
+    @testset "MCP failures preserve whole-call I/O admission" begin
         result = CommandResult(UInt8[0x61], UInt8[], 0, 0)
         for failure in (
             ProcessIOError(:stdout, EOFError(), result),
             OutputLimitExceeded(:stdout, 1, result),
         )
-            @test LibTmuxMCP._tool_error(failure, "send_keys")["effects"] == "possible"
-            @test LibTmuxMCP._tool_error(failure, "capture_pane")["effects"] == "none"
+            @test LibTmuxMCP._tool_error(failure, true)["effects"] == "possible"
+            @test LibTmuxMCP._tool_error(failure, false)["effects"] == "none"
         end
     end
 
@@ -32,7 +32,7 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
             catalog,
         )
         @test all(tool -> tool.task_support === :forbidden, catalog)
-        @test only(filter(tool->tool.name=="capture_pane", catalog)).annotations["readOnlyHint"]
+        @test !only(filter(tool->tool.name=="capture_pane", catalog)).annotations["readOnlyHint"]
         @test !only(filter(tool->tool.name=="send_keys", catalog)).annotations["idempotentHint"]
         @test all(
             tool -> "target" in tool.input_schema["required"],
@@ -120,6 +120,10 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
         @test close(app) === nothing
     end
 
+end
+
+if isempty(ARGS) || any(arg -> arg in ("effects", "integration", "all"), ARGS)
+    Base.include(@__MODULE__, joinpath(@__DIR__, "effects.jl"))
 end
 
 if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
@@ -295,7 +299,7 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
                     @test success_payload["failedIndex"] === nothing
                     @test success_payload["atomic"] === false
                     @test success_payload["error"]["code"] == "result_limit"
-                    @test success_payload["error"]["effects"] == "none"
+                    @test success_payload["error"]["effects"] == "possible"
                     @test only(success_payload["completed"]) == Dict(
                         "tool"=>"capture_pane",
                         "completed"=>true,
