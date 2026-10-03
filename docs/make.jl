@@ -21,6 +21,7 @@ makedocs(
         "Captured queries"=>"queries.md",
         "Ownership and I/O"=>"ownership.md",
         "Output observations"=>"observations.md",
+        "External coordination"=>"coordination.md",
         "MCP application"=>"mcp.md",
         "Workspace loading"=>"workspaces.md",
         "Compatibility"=>"compatibility.md",

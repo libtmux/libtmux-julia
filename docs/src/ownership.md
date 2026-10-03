@@ -64,6 +64,8 @@ escape hatch; the control allowlist is narrower because raw payloads can
 resemble protocol guards.
 
 Choose the transport explicitly. Unsupported routes have no implicit fallback.
+For named channels, host configuration and terminal handoff, read
+[External coordination](coordination.md).
 
 | Operation | `Server` | `ControlConnection` |
 | --- | --- | --- |
