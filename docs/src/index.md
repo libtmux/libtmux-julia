@@ -4,7 +4,7 @@ LibTmux separates remote operations from captured data. Create an owned
 daemon for a script, or explicitly select a borrowed endpoint. Remote
 functions yield on I/O and work in ordinary Julia Tasks.
 
-This manual follows `v0.1.0-alpha.1`, an unregistered source release. Start
+This manual follows the source revision used to build it. Start
 with [Install](installation.md), then return here for an owned-server program.
 Product compatibility and the MCP/workspace applications remain under
 verification; see [Compatibility](compatibility.md).

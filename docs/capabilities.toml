@@ -6,9 +6,11 @@ julia_development = "1.13.0"
 julia_proposed_floor = "1.10"
 tmux_proposed_floor = "3.2a"
 platforms_proposed = ["Linux x86_64", "macOS arm64", "macOS x86_64"]
-# These complete-suite results apply only to the exact cells below. They do not
-# establish broader platform or version support.
-verified_product_cells = [
+# Baseline correctness predates the complete adoption gates. It does not
+# establish current revision, timing or broader platform support.
+verified_product_cells = []
+baseline_revision = "9e3776d07798174a3590a728d28029efcbb52780"
+baseline_correctness_cells = [
   "Linux x86_64 / Julia 1.10.0 / tmux 3.2a / 1 thread",
   "Linux x86_64 / Julia 1.13.0 / tmux 3.7c / 4 threads",
   "macOS arm64 / Julia 1.13.0 / tmux 3.7c / 1 thread",
@@ -16,20 +18,20 @@ verified_product_cells = [
 ]
 
 [required]
-packages = "partial: core, MCP and workspace external imports, extensions and installed applications pass in recorded cells; v0.1.0-alpha.1 is a Git tag, not a registry package"
+packages = "partial: public source installation and baseline runtime verified; final-revision installed task workflows pending; packages are unregistered"
 server_selection = "implemented: explicit selectors and opt-in ambient discovery"
-entities_links_identity = "partial: physical entities and links verified; strict identity admission pending"
-snapshots_coverage = "partial: captured graph and explicit coverage verified; topology/restart adversaries pending"
+entities_links_identity = "partial: captured indexed lookup, physical entities and contextual links verified; final full gates pending"
+snapshots_coverage = "partial: full and scoped graphs, relation coverage and daemon-restart rejection verified; final full gates pending"
 formats = "partial: typed observations, explicit raw expressions and unverified hints tested current/floor"
-options_environment_hooks = "partial: subprocess and control options/hooks, sparse inheritance and literal values pass in recorded cells; control environment reads explicitly unsupported; broader platform/version coverage pending"
-topology_lifecycle = "partial: typed topology and owned daemon success/failure cleanup pass in recorded cells; broader platform/version coverage pending"
+options_environment_hooks = "partial: bounded inventories, sparse inheritance, literal framing and encoded custom hooks verified in focused floor/current/upstream probes; final full gates pending; control environment reads explicitly unsupported"
+topology_lifecycle = "partial: explicit pane maintenance, topology and owned cleanup verified in focused checks; final full gates and broader platform/version coverage pending"
 capture_keys_paste_buffers = "partial: exact bytes, explicit keys, paste and owned buffers pass over subprocess and control in recorded cells; broader platform/version coverage pending"
-native_criteria = "partial: generated local criteria and real captured relations pass in recorded cells; independent DX walkthrough pending"
+native_criteria = "partial: schema-typed captured accessors, indexed relationships and native collections verified; compiler, benchmark and independent DX acceptance pending"
 wire_adapters = "partial: Julia/JSON plus pinned sibling scalar differentials pass in recorded cells; broader external-consumer coverage pending"
 subprocess = "partial: bytes, bounds, cancellation and process retirement pass in recorded cells"
 control_batches = "partial: owned lanes, batches/groups, strict capture, graph acquisition, topology, clients, buffers, exact option/hook configuration and environment writes pass in recorded cells; broader platform/version coverage pending"
 observation_cursors = "partial: bounded streams and replay pass in recorded cells; reset baseline available; broader platform/version coverage pending"
-mcp = "partial: modern/legacy installed clients, observation tools and cancellation pass in recorded cells; dynamic schemas and effect diagnostics corrected; broader package/version coverage pending"
+mcp = "partial: whole-call effects, scoped native discovery, verified pagination and installed source-backed cancellation/restart workflows pass; immutable final-revision installation and full gates pending"
 workspace = "partial: config/apply/freeze, owned rollback, installed CLI and stopped output-reader retirement pass in recorded cells; broader platform/version coverage pending"
 docs_examples = "partial: Documenter/doctest, contextual and external examples pass in recorded cells; independent human DX gate pending"
 benchmarks = "partial: separate environment and six-mode workload added; baseline measurements and performance limits pending"
