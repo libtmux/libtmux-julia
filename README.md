@@ -32,13 +32,13 @@ workspace configuration:
 
 ## Install
 
-`v0.1.0-alpha.1` is an unregistered source release. From your Julia project's
-directory, add the core from its public Git tag:
+The package is unregistered. From your Julia project's directory, add the
+core from this tested public source revision:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); Pkg.add(Pkg.PackageSpec(url="https://github.com/libtmux/libtmux-julia.git", rev="v0.1.0-alpha.1"))'
+    -e 'using Pkg; Pkg.activate("."); Pkg.add(Pkg.PackageSpec(url="https://github.com/libtmux/libtmux-julia.git", rev="9e3776d07798174a3590a728d28029efcbb52780"))'
 ```
 
 Have `tmux` on your `PATH`. Julia 1.10+ and tmux 3.2a+ are the compatibility
@@ -46,8 +46,8 @@ targets; see [tested platforms and limits](docs/src/compatibility.md). APIs
 may change during alpha development. Pkg records the requested revision and
 package tree in your project's `Manifest.toml`.
 
-Install the MCP or workspace companion with the matching core specification:
-[installation guide](docs/src/installation.md). The alpha is not in General.
+Install the MCP or workspace companion with the matching core revision:
+[installation guide](docs/src/installation.md). The packages are not in General.
 
 Open Julia in that project to run the examples below:
 
@@ -163,13 +163,15 @@ To run the programs, clone the source:
 
 ```console
 $ git clone \
-    --branch v0.1.0-alpha.1 \
-    --depth 1 \
     https://github.com/libtmux/libtmux-julia.git
 ```
 
 ```console
 $ cd libtmux-julia
+```
+
+```console
+$ git checkout 9e3776d07798174a3590a728d28029efcbb52780
 ```
 
 ```console
