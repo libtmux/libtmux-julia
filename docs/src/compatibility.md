@@ -14,8 +14,7 @@ gates remain open; focused correctness checks do not establish full support.
 
 [Baseline CI](https://github.com/libtmux/libtmux-julia/actions/runs/37125764548)
 and [development CI](https://github.com/libtmux/libtmux-julia/actions/runs/37141349711)
-retain their individual results. [Contributing](../../CONTRIBUTING.md) defines
-the complete checks and budgets. An unrun version or platform is not support;
+retain their individual results. An unrun version or platform is not support;
 resolver compatibility declarations are not test evidence.
 
 The minimum tmux release for ordinary operations is 3.3a. The first
@@ -37,9 +36,15 @@ refusal says to upgrade tmux and restart the server, or pin the previous
 libtmux release. CI keeps 3.0a, 3.1c, 3.2a and 3.3 as rejection cells, each
 run behind a 3.3a client, that assert this refusal and that nothing changed.
 
-The repository capability manifest records implemented, deferred, excluded
-and untested surfaces. tmux letter suffixes are meaningful; `3.3a` is not
-silently normalized to `3.3`.
+```@raw html
+<p><a href="../source/CONTRIBUTING.md.html">Contributing</a> defines the complete
+checks and budgets. The
+<a href="../source/docs/capabilities.toml.html">capability manifest</a> records
+implemented, deferred, excluded and untested surfaces. Both files belong to this
+documentation build.</p>
+```
+
+tmux letter suffixes are meaningful; `3.3a` is not silently normalized to `3.3`.
 
 Local POSIX tmux is the initial transport scope. SSH, native Windows tmux,
 private tmux imsg access and Python workspace plugins are excluded. Query
