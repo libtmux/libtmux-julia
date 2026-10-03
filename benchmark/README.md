@@ -16,7 +16,8 @@ $ julia \
 ```
 
 Set `LIBTMUX_TEST_TMUX` to select a different tmux executable. Every driver
-uses a private owned server. None measures against the default server.
+that needs tmux uses a private owned server. None measures against the default
+server.
 Choose a fresh output file for every run; existing measurements are preserved.
 
 ## Fresh process and first use
@@ -39,6 +40,59 @@ flushed. `--profiles normal,o0,minimal` compares compiler settings without
 changing launcher defaults. Failed samples retain their output and timings.
 
 ## Queries and execution modes
+
+### Pure captured graph scaling
+
+```console
+$ julia \
+    --startup-file=no \
+    --project=benchmark \
+    --threads=1 \
+    benchmark/graph_scaling.jl \
+    sizes=16,64,256,1024,4096 \
+    samples=20 \
+    output=benchmark/results/graph-scaling-1
+```
+
+This driver performs no tmux I/O. It builds inert captured graphs through the
+private fixture builder, then measures public collection, scalar, lookup,
+relationship, filter, and projection calls. Each size contains two sessions,
+the requested number of physical windows and panes, and shared links with
+duplicate contextual occurrences. Fixture row generation and snapshot/index
+construction are separate operations.
+
+The fresh output directory contains flushed raw samples and a final report.
+Existing results are never replaced; failures and source changes retain their
+evidence and exit unsuccessfully. The report hashes all core and extension
+source files, the driver, project files, and field schema before core import
+and after measurement. It also binds the active prepared project and manifest.
+Use the normal compiler with its default optimization level; other profiles
+are refused.
+
+First calls use `invokelatest` before semantic validation to include action
+compilation, dispatch, and return boxing. Warm samples use a direct function
+barrier; a no-op control records instrumentation cost without subtraction.
+The first native warm wrapper can compile before its action timer;
+`caller_elapsed_ns`, available compiler counters, and every first warm trial
+remain in the raw evidence. Later sizes reuse compiler caches
+from earlier sizes, so these are first invocations within the process, not
+independent cold processes. Twenty or more randomized warm samples record
+time, allocated bytes, allocation counts, and GC time with nearest-rank p50
+and p95. Validation runs outside each measured call but within whole-script
+time. Retained sizes distinguish a graph, one view, a one-row selection and
+projection that pin the graph, and collected scalar rows.
+RSS observations record process lifetime high-water memory after calls; they
+do not attribute retained memory or memory growth to individual operations.
+
+The pre-report script and package-import timings exclude process startup and
+final report serialization; use
+`startup.py` for that boundary. `sizes=16` is a bounded smoke measurement.
+No regression thresholds are inferred from one run. Driver-only semantic
+checks use `--compile=min -O0` with `benchmark/graph_scaling.jl --self-test`,
+following the contribution loops. They verify allocation counters, source
+hash/set changes, sample bounds, percentiles, and result/failure preservation.
+The 480-second default budget is checked between operations. Use an external
+process deadline to bound a single nonreturning operation and include startup.
 
 ```console
 $ julia \
