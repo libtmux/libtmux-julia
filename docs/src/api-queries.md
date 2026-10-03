@@ -62,14 +62,21 @@ Order = [:module, :type, :function]
 
 Import the qualified operators and combine native criteria:
 
-```julia
-using LibTmux
-import LibTmux.Filters as F
+```jldoctest
+julia> using LibTmux
 
-active_wide = PaneWhere(active=true, width=F.AtLeast(80))
-in_shell = PaneWhere(current_command=F.OneOf(["sh", "bash"]))
-criterion = F.AllOf(active_wide, in_shell)
-wire = encode_where(criterion)
+julia> import LibTmux.Filters as F
+
+julia> active_wide = PaneWhere(active=true, width=F.AtLeast(80));
+
+julia> in_shell = PaneWhere(current_command=F.OneOf(["sh", "bash"]));
+
+julia> criterion = F.AllOf(active_wide, in_shell);
+
+julia> wire = encode_where(criterion);
+
+julia> encode_where(decode_where(wire)) == wire
+true
 ```
 
 | Constructor | Meaning and example |

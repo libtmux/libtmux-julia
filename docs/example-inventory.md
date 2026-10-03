@@ -13,6 +13,7 @@ and program links. It does not establish runtime correctness.
 | [docs/criteria-wire.md](../docs/criteria-wire.md) (2) | executable | snippet doctests | JSON 1.9 criteria codec round trip |
 | [docs/projections.md](../docs/projections.md) (1) | executable | owned-context runner | Owned snapshot passed to pane_rows |
 | [docs/projections.md](../docs/projections.md) (2) | executable | owned-context runner | Owned snapshot passed to pane_columns with Tables 1.14 |
+| [docs/src/api-queries.md](../docs/src/api-queries.md) (1) | executable | snippet doctests | Pure native criterion composition and wire round trip |
 | [docs/src/index.md](../docs/src/index.md) (1) | derived | external example runner | [examples/owned_capture.jl](../examples/owned_capture.jl) |
 | [docs/src/observations.md](../docs/src/observations.md) (1) | derived | external example runner | [examples/output_stream.jl](../examples/output_stream.jl) |
 | [docs/src/observations.md](../docs/src/observations.md) (2) | derived | external example runner | [examples/command_completion.jl](../examples/command_completion.jl) |
@@ -27,7 +28,7 @@ and program links. It does not establish runtime correctness.
 
 ## Executable programs
 
-The external consumer checker discovers and executes all six programs from
+The external consumer checker discovers and executes all programs from
 exported packages. Preparation and normal runtime execution are separate
 from this inventory check.
 
@@ -43,12 +44,12 @@ from this inventory check.
 
 ## Runtime boundaries
 
-`dev/check-doc-examples.jl doctest` runs the four pure fences exactly as
+`dev/check-doc-examples.jl doctest` runs the pure fences exactly as
 shipped through Documenter, with a private copy of the workspace fixture.
 Use the prepared quality project containing Documenter, JSON and both
 consumer packages; dependency resolution stays outside the check.
 
-The five derived fences read their executable programs directly during the
+Derived fences read their executable programs directly during the
 manual build. `dev/check-consumers.jl examples STAGE` supplies their separate
 owned-tmux runtime check. `dev/check-consumers.jl launchers STAGE` checks both
 installed consumer launchers; shell command blocks are not Julia fences.
