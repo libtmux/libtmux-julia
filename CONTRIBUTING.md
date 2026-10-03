@@ -67,8 +67,19 @@ $ /usr/bin/time -p julia \
 Use `--compile=min -O0` for the inner and mid semantic loops, including all
 unit tests. Normal compilation belongs in the outer loop because it includes
 Julia compilation across every public feature. Minimal compilation does not
-replace those normal checks or establish performance. The runner accepts only
-`unit`, `integration`, and `all`; omitting the argument selects `all`.
+replace those normal checks or establish performance. The runner accepts
+`unit`, `integration`, `all`, or one test file stem. Omitting the argument
+selects `all`. For a focused parser check:
+
+```console
+$ /usr/bin/time -p julia \
+    --startup-file=no \
+    --compile=min \
+    -O0 \
+    --project=. \
+    --threads=1 \
+    test/runtests.jl control_protocol
+```
 
 The forced-cleanup case belongs to the outer loop because it deliberately
 stops its owned daemon and waits for the 900 ms shutdown deadline:
@@ -273,7 +284,8 @@ still uses normal compilation and inspects every owned source file. Product
 precompilation is unchanged. Prepared metadata records the preference, and
 the runner rejects preference changes before checking the cell.
 Preparation runs the same read-only formatter check at the selected thread
-count so the timed quality gate keeps its 30-second budget.
+count. Subsequent checks still format every source and include that work in
+the complete mid budget.
 
 ```console
 $ matrix_stage=$(mktemp -d "${TMPDIR:-/tmp}/ltj-matrix.XXXXXX")
@@ -321,8 +333,9 @@ Both must pass at the same source revision to complete a split cell. Use
 `--suite runtime` or `--suite delivery` to run one partition locally; omitting
 the option runs both.
 
-Pull requests run four combined QA cells: Linux floor at one thread, current
-Linux at four threads, and current macOS on each architecture at one thread.
+Pull requests require Linux floor at one thread and current Linux at four
+threads. Current macOS cells on each architecture are supplementary and may
+fail independently; their failures do not excuse a Linux failure.
 Intermediate releases and macOS floor evidence remain explicit compatibility
 work; an unrun release is not support.
 
@@ -349,11 +362,22 @@ MCP/workspace processes. Keep raw results and compiler flags with any claim.
 
 Measure the whole command. Libraries should aim for the stretch budget.
 
-| Loop | Budget | Stretch | Scope |
-| --- | --- | --- | --- |
-| Inner | Under 5 seconds | Under 2 seconds | Focused tests after each edit |
-| Mid | Under 30 seconds | Under 10 seconds | Unit suites, lint, and generated-file checks before handoff |
-| Outer | Under 5 minutes | Under 60 seconds | Types, builds, integration tests, and compatibility checks before commit or PR |
+| Loop | Whole-command budget | Scope |
+| --- | --- | --- |
+| Inner | Under 1 second | Focused tests after each edit |
+| Mid | Under 10 seconds | All unit suites, quality, formatting and generated-file checks |
+| Outer | Under 60 seconds | Complete prepared cell, including normal compilation, integration, documentation and installed consumers |
+
+The matrix runner records aggregate mid and outer durations and fails an
+overrun even when every phase passes. Use `--tier mid` for the complete mid
+scope. The default complete outer includes the preceding mid checks.
+Individual unit/quality and runtime/delivery partitions record incomplete
+scope; they cannot establish a passing complete loop. Retain external
+whole-process timing as well as the runner's orchestration measurements.
+
+Complete timing gates remain open while the existing normal suites and
+installed launcher checks exceed these limits. Passing correctness checks
+do not waive the timing requirement.
 
 The current runnable tiers include unit checks, owned-tmux integration,
 forced-cleanup cases, generated criteria and external imports. Four CI product

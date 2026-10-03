@@ -35,6 +35,7 @@ TOOL_PREFERENCES = "[JuliaFormatter]\nprecompile_workload = false\n"
 DELIVERY_PHASES = frozenset(("extensions", "docs", "doc-snippets", "doc-contextual",
                             "imports", "external-examples", "external-launchers"))
 SUITES = ("runtime", "delivery")
+LOOP_BUDGETS = {"mid": 10, "outer": 60}
 
 TMUX_SHA256 = {
     "3.2a": "551553a4f82beaa8dadc9256800bcc284d7c000081e47aa6ecbb6ff36eacd05f",
@@ -87,7 +88,7 @@ def qa_cells():
         label = f"{os_name}-{arch}-julia{julia}-tmux{tmux}-t{threads}"
         cells.append(dict(label=label, os=os_name, runner=runner, arch=arch,
                           julia=julia, tmux=tmux, threads=threads, suites=tuple(suites),
-                          status="NOT RUN"))
+                          optional=os_name != "Linux", status="NOT RUN"))
 
     add("Linux", "ubuntu-24.04", "x86_64", "1.10.0", "3.2a", suites=("all",))
     add("Linux", "ubuntu-24.04", "x86_64", "1.13.0", "3.7c", 4, ("all",))
@@ -338,34 +339,35 @@ def command_plan(args, stage, metadata):
     commands = []
     def add(name, argv, budget, tier):
         commands.append((name, argv, budget, tier))
-    add("core-unit", [*minimal, "test/runtests.jl", "unit"], 30, "unit")
-    add("workspace-unit", [*minimal, "packages/LibTmuxWorkspace/test/runtests.jl", "unit"], 30, "unit")
-    add("mcp-unit", [*minimal, "packages/LibTmuxMCP/test/runtests.jl", "unit"], 30, "unit")
-    add("quality", [*minimal, "dev/check-quality.jl", "quality"], 30, "quality")
-    add("format", [*normal, "dev/check-quality.jl", "format"], 30, "quality")
-    add("generated", [*minimal, "dev/generate-criteria.jl", "--check"], 30, "quality")
-    add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 30, "quality")
-    add("consumer-diagnostics", [*minimal, "dev/check-consumers.jl", "--self-test"], 30, "quality")
-    add("example-inventory", [*minimal, "dev/check-doc-examples.jl", "check"], 30, "quality")
-    add("core-normal", [*normal, "test/runtests.jl", "all"], 300, "outer")
-    add("workspace-normal", [*normal, "packages/LibTmuxWorkspace/test/runtests.jl", "all"], 300, "outer")
-    add("mcp-normal", [*normal, "packages/LibTmuxMCP/test/runtests.jl", "all"], 300, "outer")
-    add("mcp-product", [*normal, "packages/LibTmuxMCP/test/product.jl"], 300, "outer")
+    add("core-unit", [*minimal, "test/runtests.jl", "unit"], 10, "unit")
+    add("workspace-unit", [*minimal, "packages/LibTmuxWorkspace/test/runtests.jl", "unit"], 10, "unit")
+    add("mcp-unit", [*minimal, "packages/LibTmuxMCP/test/runtests.jl", "unit"], 10, "unit")
+    add("quality", [*minimal, "dev/check-quality.jl", "quality"], 10, "quality")
+    add("format", [*normal, "dev/check-quality.jl", "format"], 10, "quality")
+    add("generated", [*minimal, "dev/generate-criteria.jl", "--check"], 10, "quality")
+    add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 10, "quality")
+    add("consumer-diagnostics", [*minimal, "dev/check-consumers.jl", "--self-test"], 10, "quality")
+    add("example-inventory", [*minimal, "dev/check-doc-examples.jl", "check"], 10, "quality")
+    add("core-normal", [*normal, "test/runtests.jl", "all"], 60, "outer")
+    add("workspace-normal", [*normal, "packages/LibTmuxWorkspace/test/runtests.jl", "all"], 60, "outer")
+    add("mcp-normal", [*normal, "packages/LibTmuxMCP/test/runtests.jl", "all"], 60, "outer")
+    add("mcp-product", [*normal, "packages/LibTmuxMCP/test/product.jl"], 60, "outer")
     add("mcp-stopped-reader", [sys.executable, "packages/LibTmuxMCP/test/stdio_backpressure.py",
                               args.julia, project, "--compile", "normal", "--threads",
-                              str(args.threads)], 300, "outer")
+                              str(args.threads)], 60, "outer")
     extensions = 'using Test, LibTmux; include("test/criteria.jl"); include("test/json_extension.jl"); include("test/tables_extension.jl")'
-    add("extensions", [*normal, "-e", extensions], 300, "outer")
-    add("docs", [*normal, "docs/make.jl"], 300, "outer")
-    add("doc-snippets", [*normal, "dev/check-doc-examples.jl", "doctest"], 300, "outer")
-    add("doc-contextual", [*normal, "dev/check-doc-examples.jl", "contextual"], 300, "outer")
-    add("imports", [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]], 300, "outer")
-    add("external-examples", [*minimal, "dev/check-consumers.jl", "examples", metadata["consumers"]], 300, "outer")
-    add("external-launchers", [*minimal, "dev/check-consumers.jl", "launchers", metadata["consumers"]], 300, "outer")
+    add("extensions", [*normal, "-e", extensions], 60, "outer")
+    add("docs", [*normal, "docs/make.jl"], 60, "outer")
+    add("doc-snippets", [*normal, "dev/check-doc-examples.jl", "doctest"], 60, "outer")
+    add("doc-contextual", [*normal, "dev/check-doc-examples.jl", "contextual"], 60, "outer")
+    add("imports", [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]], 60, "outer")
+    add("external-examples", [*minimal, "dev/check-consumers.jl", "examples", metadata["consumers"]], 60, "outer")
+    add("external-launchers", [*minimal, "dev/check-consumers.jl", "launchers", metadata["consumers"]], 60, "outer")
     return commands
 
 
 def run(args):
+    command_started = time.monotonic()
     stage = checked_stage(args.stage)
     metadata = json.loads((stage / "prepared.json").read_text())
     if metadata["source_digest"] != source_digest():
@@ -380,7 +382,7 @@ def run(args):
                   platform=platform.system(), machine=platform.machine(), kernel=platform.release(),
                   wsl="microsoft" in platform.release().lower(), threads=args.threads,
                   tools=metadata["tools"], status="NOT RUN", phases=[], suite=args.suite,
-                  tier=args.tier, active_phase=None)
+                  tier=args.tier, active_phase=None, loops={})
     suffix = "" if args.suite == "all" else f"-{args.suite}"
     destination = stage / f"results-{args.tier}{suffix}-t{args.threads}.json"
 
@@ -408,8 +410,16 @@ def run(args):
         else:
             commands = selected_commands(args, stage, metadata)
             result.update(status="RUNNING", planned_phases=[item[0] for item in commands])
+            loop_started = command_started
+            active_loop = None
             try:
                 for name, argv, budget, tier in commands:
+                    loop = "outer" if tier == "outer" else "mid"
+                    if active_loop is not None and loop != active_loop:
+                        result["loops"][active_loop] = loop_result(
+                            active_loop, time.monotonic() - loop_started, args)
+                        loop_started = command_started if loop == "outer" else time.monotonic()
+                    active_loop = loop
                     result["active_phase"] = name
                     save()
                     item = phase(name, argv, cwd=ROOT, env=env, log=stage / "logs" / f"{name}.log", budget=budget)
@@ -420,6 +430,12 @@ def run(args):
                 result["status"] = "PASS" if result["phases"] and all(p["status"] == "PASS" for p in result["phases"]) else "FAIL"
                 if metadata["source_digest"] != source_digest():
                     result.update(status="STALE", reason="source changed during checks")
+                if active_loop is not None:
+                    result["loops"][active_loop] = loop_result(
+                        active_loop, time.monotonic() - loop_started, args)
+                if result["status"] == "PASS" and any(
+                        loop["status"] == "FAIL" for loop in result["loops"].values()):
+                    result.update(status="FAIL", reason="aggregate whole-command loop budget exceeded")
             except BaseException as error:
                 result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
                               error_type=type(error).__name__)
@@ -431,9 +447,17 @@ def run(args):
     return 0 if result["status"] == "PASS" else 1
 
 
+def loop_result(name, seconds, args):
+    complete = args.suite == "all" and (
+        args.tier in ("all", "mid") if name == "mid" else args.tier in ("all", "outer"))
+    return dict(seconds=seconds, budget_seconds=LOOP_BUDGETS[name], complete=complete,
+                status="PASS" if seconds < LOOP_BUDGETS[name] else "FAIL")
+
+
 def selected_commands(args, stage, metadata):
     return [item for item in command_plan(args, stage, metadata)
-            if (args.tier == "all" or item[3] == args.tier)
+            if (args.tier == "all" or item[3] == args.tier
+                or args.tier == "mid" and item[3] in ("unit", "quality"))
             and (args.suite == "all" or (item[0] in DELIVERY_PHASES) == (args.suite == "delivery"))]
 
 
@@ -539,6 +563,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert sum(len(cell["suites"]) for cell in cells) == 4
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
+        assert all(cell["optional"] == (cell["os"] != "Linux") for cell in cells)
         from types import SimpleNamespace
         from unittest.mock import patch
         from contextlib import redirect_stdout
@@ -552,7 +577,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         budgets = {
             name: budget for name, _, budget, _ in selected_commands(args, base, metadata)
         }
-        assert budgets["format"] == 30
+        assert budgets["format"] == 10
         assert format_warmup_command(args, base) == [
             "julia", "--startup-file=no", "--threads=1", f"--project={base}",
             str(ROOT / "dev/check-quality.jl"), "format",
@@ -565,6 +590,15 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert set(partitions) == set(all_names)
         assert DELIVERY_PHASES <= set(all_names)
         args.suite = "all"
+        assert loop_result("mid", 10, args)["status"] == "FAIL"
+        assert loop_result("mid", 9.9, args)["status"] == "PASS"
+        assert loop_result("outer", 60, args)["status"] == "FAIL"
+        args.tier = "unit"
+        assert not loop_result("mid", 1, args)["complete"]
+        args.tier = "mid"
+        assert loop_result("mid", 1, args)["complete"]
+        assert {item[3] for item in selected_commands(args, base, metadata)} == {"unit", "quality"}
+        args.tier = "all"
         (base / ".libtmux-julia-matrix").touch()
         (base / "LocalPreferences.toml").write_text(TOOL_PREFERENCES)
         (base / "prepared.json").write_text(json.dumps(metadata))
@@ -585,6 +619,19 @@ println("PASS admitted version arguments construct real Pkg specifications")
         retained = json.loads((base / "results-all-t1.json").read_text())
         assert retained["status"] == "INTERRUPTED" and retained["active_phase"] == "second"
         assert retained["phases"][0]["status"] == "FAIL"
+        with patch(__name__ + ".source_digest", return_value="fixed"), \
+             patch.object(shutil, "which", return_value="binary"), \
+             patch.object(subprocess, "check_output", return_value="version"), \
+             patch(__name__ + ".command_plan", return_value=plan[:1]), \
+             patch(__name__ + ".phase", return_value=dict(name="first", status="PASS", seconds=0.01)), \
+             patch.object(time, "monotonic", side_effect=[0, 12]), \
+             redirect_stdout(StringIO()):
+            assert run(args) == 1
+        retained = json.loads((base / "results-all-t1.json").read_text())
+        assert retained["phases"][0]["status"] == "PASS"
+        assert retained["loops"]["mid"]["complete"]
+        assert retained["loops"]["mid"]["status"] == "FAIL"
+        assert retained["status"] == "FAIL"
     print("PASS owned preparation, phase retirement, suite coverage and interrupted result retention")
 
 
@@ -607,7 +654,7 @@ def main():
     execution.add_argument("--julia", default="julia")
     execution.add_argument("--tmux", default="tmux")
     execution.add_argument("--threads", type=int, choices=(1, 4), default=1)
-    execution.add_argument("--tier", choices=("unit", "quality", "outer", "all"), default="all")
+    execution.add_argument("--tier", choices=("unit", "quality", "mid", "outer", "all"), default="all")
     execution.add_argument("--suite", choices=("all", *SUITES), default="all")
     for option in ("julia", "tmux", "os", "arch"):
         execution.add_argument(f"--expected-{option}")
