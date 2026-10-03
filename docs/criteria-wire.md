@@ -154,3 +154,20 @@ Its pinned executables test both valid and invalid fixtures through two rounds
 of parsing, evaluation, and canonical re-encoding. Rust evaluates derived
 captured scalar rows after validating its actual pane grammar; this does not
 claim equivalent live snapshot acquisition across ports.
+
+## Lua producers
+
+Lua callers can author this Julia-owned profile as inert data and encode it
+with an explicit consumer codec. The named `julia-owned-from-lua/v1` workflow
+has a [paired native differential check](../dev/wire-interop/lua.md) for
+pane scalars, Boolean composition and selected physical/contextual
+relationships.
+It includes false, nullable absence, uncaptured data, empty containers,
+numeric boundaries, duplicate keys and correlated links.
+
+The Lua port's `query.encode_json` uses a different envelope and is refused
+by `read_where_json`. No Lua adapter or runtime dependency is added to core.
+The producer profile uses Julia's stable field identities and operator names;
+it does not promise matching acceptance of arbitrary JSON text, mutable Lua
+records, or live snapshots. Read the explicit numeric and field restrictions
+before extending a consumer.
