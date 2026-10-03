@@ -89,7 +89,30 @@ if ccall(:jl_generating_output, Cint, ()) == 1
             ]],
             cs=Vector{String}[],
         )
-        _snapshot_from_rows(identity, rows, (0.0, 0.0))
+        snapshot_type = typeof(_snapshot_from_rows(identity, rows, (0.0, 0.0)))
+        for (View, Where, collection) in (
+            (SessionSnapshot, SessionWhere, sessions),
+            (WindowSnapshot, WindowWhere, windows),
+            (PaneSnapshot, PaneWhere, panes),
+            (ClientSnapshot, ClientWhere, clients),
+            (WindowLink, WindowLinkWhere, windowlinks),
+        )
+            view_type = View{snapshot_type}
+            selection_type = Selection{view_type}
+            precompile(Tuple{typeof(collection),snapshot_type})
+            precompile(Tuple{typeof(Base.getproperty),view_type,Symbol})
+            precompile(Tuple{typeof(Base.getindex),selection_type,Int})
+            precompile(Tuple{Where,view_type})
+            precompile(Tuple{typeof(Base.filter),Where,selection_type})
+            precompile(Tuple{typeof(encode_where),Where})
+        end
+        precompile(Tuple{typeof(paneoccurrences),snapshot_type})
+        for encoder in (encode_typescript_where, encode_rust_where)
+            precompile(Tuple{typeof(encoder),PaneWhere})
+        end
+        for decoder in (decode_where, decode_typescript_where, decode_rust_where)
+            precompile(Tuple{typeof(decoder),Dict{String,Any}})
+        end
         push!(
             rows.ps,
             [
