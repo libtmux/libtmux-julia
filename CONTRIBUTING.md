@@ -462,12 +462,14 @@ Both must pass at the same source revision to complete a split cell. Use
 `--suite runtime` or `--suite delivery` to run one partition locally; omitting
 the option runs both.
 
-Pull requests require Linux floor (tmux 3.3a), current Linux, and Linux on
-tmux 3.8. Current macOS cells on each architecture are supplementary and may
-fail independently; their failures do not excuse a Linux failure.
-Rejection cells run tmux 3.0a, 3.1c, 3.2a and unpatched 3.3 outside the
-supported matrix. The 3.2a and 3.3 cells run `test/runtests.jl rejection`
-with the release itself and with a 3.3a client. The 3.0a and 3.1c cells run
+Pull requests require four complete Linux boundary cells: floor (tmux 3.3a)
+and current Julia/tmux versions, each at one and four threads. An additional
+Linux cell runs tmux 3.8. Current macOS cells on each architecture are
+supplementary and may fail independently; their failures do not excuse a
+Linux failure. Rejection cells run tmux 3.0a, 3.1c, 3.2a and unpatched 3.3
+outside the supported matrix. The 3.2a and 3.3 cells run
+`test/runtests.jl rejection` with the release itself and with a 3.3a client;
+the 3.0a and 3.1c cells run
 `test/runtests.jl old-daemon` behind a 3.3a client. Both suites assert refusal
 without effects. Every rejection cell also runs the workspace CLI against a
 real daemon of the rejected release, and the 3.0a and 3.1c cells run the MCP
