@@ -1,4 +1,11 @@
-const _SESSION_FIELDS = ["session_id", "session_name", "session_attached"]
+const _SESSION_FIELDS = [
+    "session_id",
+    "session_name",
+    "session_attached",
+    "session_created",
+    "session_activity",
+    "session_last_attached",
+]
 const _WINDOW_FIELDS = [
     "window_id",
     "window_name",
@@ -7,6 +14,10 @@ const _WINDOW_FIELDS = [
     "session_id",
     "window_index",
     "window_active",
+    "window_layout",
+    "window_visible_layout",
+    "window_zoomed_flag",
+    "window_activity",
 ]
 const _PANE_FIELDS = [
     "pane_id",
@@ -19,8 +30,16 @@ const _PANE_FIELDS = [
     "pane_current_command",
     "pane_current_path",
     "pane_title",
+    "pane_pid",
+    "pane_tty",
+    "pane_dead_status",
+    "history_size",
+    "history_limit",
+    "cursor_x",
+    "cursor_y",
 ]
-const _CLIENT_FIELDS = ["client_name", "client_pid", "client_created", "session_id"]
+const _CLIENT_FIELDS =
+    ["client_name", "client_pid", "client_created", "session_id", "client_activity"]
 const _SERVER_FIELDS = ["pid", "start_time", "version", "socket_path"]
 
 struct UnsupportedCapability <: LibTmuxError
@@ -44,6 +63,9 @@ function _observed_bool(value, field)
     isempty(value) && throw(SnapshotCoverageError(:format, nothing, Symbol(field)))
     throw(ArgumentError("invalid Boolean format field $field"))
 end
+
+_observed_optional_int(value, field) =
+    isempty(value) ? nothing : _observed_int(value, field)
 
 function _verify_row_codec(server, started, timeout, cancel)
     probe = raw"#{s|^.*$|A\\B" * "\tC\nD|;" * _format_template(["version"])[3:end]
@@ -136,14 +158,20 @@ function _graph_signature(rows)
         sessions=Set(row[1] for row in rows.ss),
         links=Set((row[5], row[6], row[1]) for row in rows.ws),
         panes=Set((row[1], row[2], row[3]) for row in rows.ps),
-        clients=Set(Tuple(row) for row in rows.cs),
+        clients=Set((row[1], row[2], row[3], row[4]) for row in rows.cs),
     )
 end
 
 function _snapshot_from_rows(identity, rows, acquired)
     ss = [
-        (id=r[1], name=r[2], attached_clients=_observed_int(r[3], "session_attached"))
-        for r in rows.ss
+        (
+            id=r[1],
+            name=r[2],
+            attached_clients=_observed_int(r[3], "session_attached"),
+            created=_observed_int(r[4], "session_created"),
+            activity=_observed_int(r[5], "session_activity"),
+            last_attached=_observed_optional_int(r[6], "session_last_attached"),
+        ) for r in rows.ss
     ]
     ws = [
         (
@@ -151,6 +179,10 @@ function _snapshot_from_rows(identity, rows, acquired)
             name=r[2],
             width=_observed_int(r[3], "window_width"),
             height=_observed_int(r[4], "window_height"),
+            layout=r[8],
+            visible_layout=r[9],
+            zoomed=_observed_bool(r[10], "window_zoomed_flag"),
+            activity=_observed_int(r[11], "window_activity"),
         ) for r in rows.ws
     ]
     ls = [
@@ -172,6 +204,13 @@ function _snapshot_from_rows(identity, rows, acquired)
                 width=_observed_int(r[6], "pane_width"),
                 height=_observed_int(r[7], "pane_height"),
                 title=r[10],
+                pid=_observed_int(r[11], "pane_pid"),
+                tty=isempty(r[12]) ? nothing : r[12],
+                exit_status=_observed_optional_int(r[13], "pane_dead_status"),
+                history_size=_observed_int(r[14], "history_size"),
+                history_limit=_observed_int(r[15], "history_limit"),
+                cursor_x=_observed_int(r[16], "cursor_x"),
+                cursor_y=_observed_int(r[17], "cursor_y"),
             ),
             isempty(r[8]) ? (;) : (current_command=r[8],),
             isempty(r[9]) ? (;) : (current_path=r[9],),
@@ -184,6 +223,7 @@ function _snapshot_from_rows(identity, rows, acquired)
             pid=_observed_int(r[2], "client_pid"),
             created=_observed_int(r[3], "client_created"),
             session_id=isempty(r[4]) ? nothing : r[4],
+            activity=_observed_int(r[5], "client_activity"),
         ) for r in rows.cs
     ]
     _build_snapshot(
