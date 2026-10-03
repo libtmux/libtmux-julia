@@ -5,6 +5,19 @@ unique physical panes; `paneoccurrences(snap)` follows each session/window
 link and may contain the same pane more than once. Filtering preserves the
 source's order and multiplicity.
 
+To inspect one exact session or window, pass its reference to
+`snapshot(server, ref)` or `snapshot(connection, ref)`. The returned captured
+view supports local navigation, such as `panes(snapshot(server, window_ref))`.
+A session capture includes its window links and panes. A window capture
+includes its panes, all links to sessions, and those sessions' scalar fields.
+Neither form acquires attached clients.
+
+`snapshotof(view)` retains that partial graph. Its server-wide collections
+raise [`SnapshotCoverageError`](@ref). A session capture cannot prove a shared
+window's links to other sessions; a window capture cannot prove each linked
+session's other windows. Criteria that need those uncaptured relations raise
+the same error. Use a full `snapshot(server)` when the query needs them.
+
 [`PaneWhere`](@ref), [`WindowWhere`](@ref), [`SessionWhere`](@ref),
 [`WindowLinkWhere`](@ref) and [`ClientWhere`](@ref) are callable criteria.
 Use them with Base `filter`, `count`, `any`, `all`, `findall` and
