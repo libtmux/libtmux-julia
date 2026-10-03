@@ -174,3 +174,98 @@
         end
     end
 end
+
+@testset "pane maintenance preserves process and explicit link identity" begin
+    with_tmux() do fixture
+        server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
+        anchor = new_session(server; name="maintenance-anchor", command=["/bin/cat"])
+        open_control(server, anchor) do connection
+            for (transport, mode) in ((server, "subprocess"), (connection, "control"))
+                alpha =
+                    new_session(transport; name="maintenance-$mode", command=["/bin/cat"])
+                beta =
+                    new_session(transport; name="destination-$mode", command=["/bin/cat"])
+                graph = snapshot(transport)
+                source =
+                    only(windowlinks(only(filter(s -> s.ref == alpha, sessions(graph)))))
+                link = WindowLinkRef(source)
+                pane = only(panes(window(source))).ref
+                sibling = split_window(transport, pane; command=["/bin/cat"])
+                readfield(target, name) =
+                    only(read_formats(transport, target, FormatField(name))).value
+                before = readfield(pane, "pane_pid")
+                set_title(transport, pane, "literal #{pane_id};")
+                @test readfield(pane, "pane_title") == "literal #{pane_id};"
+                set_zoom(transport, pane, true)
+                @test readfield(pane, "window_zoomed_flag") == "1"
+                set_zoom(transport, sibling, true)
+                @test readfield(sibling, "pane_active") == "1"
+                set_zoom(transport, sibling, false)
+                @test readfield(pane, "window_zoomed_flag") == "0"
+                ids = Set((pane.id, sibling.id))
+                rotate_panes(transport, link.window; direction=:up)
+                cycle_layout(transport, link.window; direction=:next)
+                @test Set(
+                    x.id for x in panes(
+                        only(
+                            filter(w -> w.ref == link.window, windows(snapshot(transport))),
+                        ),
+                    )
+                ) == ids
+                moved = break_pane(transport, pane, link, beta; index=7)
+                @test readfield(pane, "window_id") == string(moved.id)
+                @test readfield(pane, "pane_pid") == before
+                @test length(
+                    panes(
+                        only(
+                            filter(w -> w.ref == link.window, windows(snapshot(transport))),
+                        ),
+                    ),
+                ) == 1
+                @test_throws ArgumentError rotate_panes(
+                    transport,
+                    moved;
+                    direction=:sideways,
+                )
+
+                quote_shell(s) = "'" * replace(s, "'" => "'\\''") * "'"
+                wait_command(channel; signal=false) = join(
+                    quote_shell.([
+                        fixture.tmux,
+                        "-S",
+                        fixture.socket,
+                        "wait-for",
+                        (signal ? ["-S", channel] : [channel])...,
+                    ]),
+                    " ",
+                )
+                release, ready = "history-release-$mode", "history-ready-$mode"
+                output = repeat("history\r\n", 80)
+                producer =
+                    wait_command(release) *
+                    "; printf '%s\\n' " *
+                    join(fill("history", 80), " ") *
+                    "; exec cat"
+                history_window =
+                    new_window(transport, alpha; command=["/bin/sh", "-c", producer])
+                history_pane = PaneRef(alpha.server, readfield(history_window, "pane_id"))
+                file = joinpath(fixture.directory, "history-$mode")
+                pipe_pane(
+                    transport,
+                    history_pane,
+                    "dd bs=1 count=$(ncodeunits(output)) of=$(quote_shell(file)) 2>/dev/null; " *
+                    wait_command(ready; signal=true),
+                )
+                run_command(server, "wait-for", "-S", release)
+                run_command(server, "wait-for", ready; timeout=0.9)
+                @test read(file) == codeunits(output)
+                @test parse(Int, readfield(history_pane, "history_size")) > 0
+                clear_history(transport, history_pane)
+                @test readfield(history_pane, "history_size") == "0"
+                pipe_pane(transport, history_pane)
+                @test readfield(history_pane, "pane_pipe") == "0"
+            end
+        end
+        @test isempty(run_command(server, "list-clients").stdout)
+    end
+end
