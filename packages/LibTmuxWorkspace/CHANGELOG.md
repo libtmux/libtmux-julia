@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+#### Source installation
+
+Install the workspace package from a resolvable public source revision.
+The guide includes executable setup commands and states the available
+installation and compatibility evidence. (#5)
+
 ## 0.1.0-alpha.1 - 2026-09-21
 
 #### Initial workspace loader and CLI
