@@ -546,6 +546,17 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                 @test !baseline.is_error &&
                       baseline.structured_content["source"] == "baseline"
                 @test baseline.structured_content["continuity"] == "reset"
+                callback_failure = tool_result(
+                    app,
+                    "wait_for_text",
+                    Dict("text"=>"reply:λ-ready");
+                    progress=phase -> error("progress callback stopped"),
+                )
+                @test callback_failure.is_error &&
+                      callback_failure.structured_content["error"]["code"] ==
+                      "operation_failed" &&
+                      callback_failure.structured_content["error"]["effects"] == "possible"
+                @test isempty(clients(snapshot(server)))
                 for (name, result) in
                     (("send_keys_and_wait", sent), ("wait_for_text", baseline))
                     schema =
@@ -561,8 +572,10 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                     "wait_for_text",
                     Dict("text"=>"not-emitted", "timeoutSeconds"=>0.1),
                 )
-                @test limited.is_error &&
-                      limited.structured_content["error"]["code"] == "deadline"
+                deadline_result = limited.is_error &&
+                                  limited.structured_content["error"]["code"] == "deadline"
+                deadline_result || println("unexpected wait result: ", limited.structured_content)
+                @test deadline_result
                 @test limited.structured_content["error"]["effects"] == "possible"
                 @test (time_ns() - started) / 1e9 < 0.9
                 @test isempty(clients(snapshot(server)))

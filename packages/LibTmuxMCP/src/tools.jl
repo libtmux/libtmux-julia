@@ -40,6 +40,14 @@ struct _ApplicationCall
     finished::Base.Event
 end
 
+struct _ToolContext
+    started::UInt64
+    budget::Float64
+    cancel::LibTmux.CancellationToken
+    progress::Function
+    effects::Base.RefValue{Bool}
+end
+
 """
     Application(server; caller=nothing, allowed_tools=("list_panes", "capture_pane", "send_keys"),
                 allowed_panes=nothing, allow_create=false, timeout=5.0,
@@ -852,8 +860,13 @@ function _execute_tool(app, plan, context)
     end
     if name in ("wait_for_text", "send_keys_and_wait")
         elapsed = (time_ns() - context.started) / 1e9
-        context =
-            merge(context, (; budget=min(context.budget, elapsed + args["timeoutSeconds"])))
+        context = _ToolContext(
+            context.started,
+            min(context.budget, elapsed + args["timeoutSeconds"]),
+            context.cancel,
+            context.progress,
+            context.effects,
+        )
     end
     ref = _resolve_target(app, args["target"], context)
     name == "capture_pane" && return _capture(app, ref, args, context)
@@ -1039,7 +1052,11 @@ function _invoke_tool(
         plan = _plan_tool(app, name, input)
         _application_call(app, cancel) do context
             budget = min(context.budget, get(plan.args, "timeoutSeconds", context.budget))
-            _execute_tool(app, plan, merge(context, (; progress, effects, budget)))
+            _execute_tool(
+                app,
+                plan,
+                _ToolContext(context.started, budget, context.cancel, progress, effects),
+            )
         end
     catch error
         Dict("error"=>_tool_error(error, effects[]))
