@@ -17,6 +17,13 @@ ordinary Julia collections. A selection pins its snapshot; keeping one pane
 can therefore retain the whole captured graph. Refreshing acquires a new
 snapshot and never changes existing selections.
 
+Use `snap[reference]` to look up a captured session, window, pane or client.
+`get(snap, reference, nothing)` returns `nothing` for proven absence. Both
+validate the reference against the captured server identity; they do not
+contact the current daemon. Indexing a proven missing key raises `KeyError`.
+A missing key in a partial graph raises `SnapshotCoverageError` because its
+absence was not observed. Client references also retain their incarnation.
+
 The complete shared-window example is included directly from its tested
 source:
 
