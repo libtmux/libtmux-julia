@@ -1,7 +1,8 @@
 # Lua producers for Julia criteria
 
 Lua callers can author the Julia-owned criteria document and submit it to
-`read_where_json`, or submit its parsed `whereWire` object to MCP `list_panes`.
+`read_where_json`, or submit the parsed document as MCP `list_panes`'s `where`
+argument.
 The named consumer profile is `julia-owned-from-lua/v1`. It uses the existing
 `libtmux.julia.where` version 1 envelope; it adds no production translator,
 predicate evaluator, or Lua runtime dependency to Julia.
