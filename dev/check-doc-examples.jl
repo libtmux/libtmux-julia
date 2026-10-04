@@ -50,7 +50,7 @@ const DOC_SNIPPETS = Dict(
     ("README.md", 1) => (
         kind=:executable,
         gate=:context,
-        fingerprint="2865ecf6edfbc339066e8bcf889af438c96d7eb36d61a0d971a5a1a095708d45",
+        fingerprint="2c6440bbf88e40247cefa7e4085b8831a475950bf67b97b2777c6f31a7269d11",
         source="",
         note="Private server, captured screen and retained snapshot",
     ),
