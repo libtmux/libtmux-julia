@@ -370,14 +370,33 @@ Measure the whole command. Libraries should aim for the stretch budget.
 | --- | --- | --- |
 | Inner | Under 1 second | Focused tests after each edit |
 | Mid | Under 10 seconds | All unit suites, quality, formatting and generated-file checks |
-| Outer | Under 120 seconds | Complete prepared cell, including normal compilation, integration, documentation and installed consumers |
+| Outer | Under 60 seconds | Complete prepared cell, including normal compilation, integration, documentation and installed consumers |
 
-The matrix runner records aggregate mid and outer durations and fails an
-overrun even when every phase passes. Use `--tier mid` for the complete mid
-scope. The default complete outer includes the preceding mid checks.
+The matrix runner records aggregate mid and outer durations. A soft overrun
+fails the check while work continues. A completed failing mid worker still
+runs the outer checks; an interrupted, incomplete or stale worker stops them.
+Use `--tier mid` for the complete mid scope. The default complete outer
+includes the preceding mid checks.
 Individual unit/quality and runtime/delivery partitions record incomplete
 scope; they cannot establish a passing complete loop. Retain external
 whole-process timing as well as the runner's orchestration measurements.
+The aggregate clock starts after Python imports and argument parsing and
+ends before the supervisor's final receipt write and process exit.
+
+Hard limits stop work after 30 seconds for mid or 180 seconds for the complete
+outer command, including mid. Every admitted phase shares its worker's
+absolute deadline. Expired deadlines admit no new work. These diagnostic
+allowances do not change the soft acceptance limits above.
+Version probes use the same deadline and owned process retirement as test
+commands. Receipts must explicitly describe their active, pending and planned
+phases; malformed progress blocks further work while retaining known failures.
+
+Exit observation and timer joins share a separate two-second allowance. The
+runner records direct-child reap and retained identities when observation
+cannot finish. File writes, ownership locks and worker-pool shutdown are not
+covered by that wait bound. Escaped descendants and tmux fixtures still need
+their own cleanup evidence. The supervisor and CI job remain the external
+stop guards; CI preserves logs and receipts after a failed check.
 
 Complete timing gates remain open while the existing normal suites and
 installed launcher checks exceed these limits. Passing correctness checks
