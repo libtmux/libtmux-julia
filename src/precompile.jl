@@ -113,6 +113,12 @@ if ccall(:jl_generating_output, Cint, ()) == 1
         for decoder in (decode_where, decode_typescript_where, decode_rust_where)
             precompile(Tuple{typeof(decoder),Dict{String,Any}})
         end
+        # Live panes and never-attached sessions retain absent numeric values.
+        rows.ss[1][6] = ""
+        rows.ps[1][13] = ""
+        _snapshot_from_rows(identity, rows, (0.0, 0.0))
+        rows.ss[1][6] = "1"
+        rows.ps[1][13] = "0"
         push!(
             rows.ps,
             [
