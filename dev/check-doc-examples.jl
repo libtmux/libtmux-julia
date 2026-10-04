@@ -47,6 +47,20 @@ function document_fences(text, path)
 end
 
 const DOC_SNIPPETS = Dict(
+    ("WRITING.md", 1) => (
+        kind=:illustrative,
+        gate=:none,
+        fingerprint="627ab0c5444ef39183f823b88c3de81d322d948e198a12061333f695a50c13db",
+        source="",
+        note="Writing guide: the over-width line to avoid",
+    ),
+    ("WRITING.md", 2) => (
+        kind=:illustrative,
+        gate=:none,
+        fingerprint="e1961b974f1e084e53c8ceab04e56041d2b84f63ef624828acdc876c7ea109f8",
+        source="",
+        note="Writing guide: the named-value rewrite",
+    ),
     ("README.md", 1) => (
         kind=:executable,
         gate=:context,
