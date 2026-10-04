@@ -69,7 +69,7 @@ if isempty(ARGS) || any(arg -> arg in ("integration", "discovery", "all"), ARGS)
             "TERM"=>"xterm-256color",
             "SHELL"=>"/bin/sh",
         )
-        with_server(; env=environment) do server
+        with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do server
             owned[] = dirname(server.socket_path)
             work = new_session(server; name="work", command=["/bin/cat"])
             first_scope = snapshot(server, work)
