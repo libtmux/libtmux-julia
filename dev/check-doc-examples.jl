@@ -134,7 +134,7 @@ const DOC_SNIPPETS = Dict(
     ("docs/src/workspaces.md", 1) => (
         kind=:derived,
         gate=:external,
-        fingerprint="30416c46d48606ae135881798533f750bf53a945e194283b8509f3683b911d95",
+        fingerprint="97f9941b27e6fb0c3ecdef4fdc9139041126b1e7667f42a962fc673edefb39a5",
         source="packages/LibTmuxWorkspace/examples/owned_load.jl",
         note="",
     ),
