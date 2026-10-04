@@ -147,6 +147,7 @@ jobs:
             ${{ env.MATRIX_STAGE }}/logs/*.log
 
       - name: Inspect failed cell with actor-restricted SSH
+        id: runner_debug
         if: >-
           failure() &&
           github.event_name == 'workflow_dispatch' &&
@@ -159,6 +160,34 @@ jobs:
           limit-access-to-actor: true
           wait-timeout-minutes: 3
           upterm-version: v0.34.0
+          detached: true
+      - name: Record actor-restricted debug access
+        id: debug_access
+        if: failure() && steps.runner_debug.outputs.ssh-command != ''
+        env:
+          DEBUG_SSH_COMMAND: ${{ steps.runner_debug.outputs.ssh-command }}
+          DEBUG_CELL: ${{ matrix.job_label }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, pathlib, subprocess
+          checkout = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          assert checkout == os.environ["GITHUB_SHA"]
+          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "libtmux-julia-debug-access.json"
+          with path.open("x") as output:
+              path.chmod(0o600)
+              json.dump(dict(schema=1, checkout=checkout, run_id=os.environ["GITHUB_RUN_ID"],
+                             run_attempt=os.environ["GITHUB_RUN_ATTEMPT"], cell=os.environ["DEBUG_CELL"],
+                             ssh_command=os.environ["DEBUG_SSH_COMMAND"]), output)
+              output.write("\n")
+          PYTHON
+      - name: Preserve actor-restricted debug access
+        if: failure() && steps.debug_access.conclusion == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.job_label }}-debug-access
+          retention-days: 1
+          if-no-files-found: error
+          path: ${{ runner.temp }}/libtmux-julia-debug-access.json
 
   tag-install:
     name: Verify public tag install
