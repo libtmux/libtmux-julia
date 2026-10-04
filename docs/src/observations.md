@@ -10,7 +10,8 @@ that a command started, finished or succeeded.
 
 ```@eval
 using Markdown
-Markdown.parse("```julia\n" * read(joinpath(@__DIR__, "..", "..", "examples", "output_stream.jl"), String) * "\n```")
+example = joinpath(@__DIR__, "..", "..", "examples", "output_stream.jl")
+Markdown.parse("```julia\n" * read(example, String) * "\n```")
 ```
 
 Each stream has one consumer and independent item/byte limits. A slow
