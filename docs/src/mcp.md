@@ -35,7 +35,9 @@ versioned inert `where` criteria filter captured panes, and explicit scalar
 report contexts from that session; window scopes report all observed window
 links. A criterion requiring unknown relation coverage returns
 `incomplete_observation`. Discovery bounds criteria, projections, candidate
-panes, page sizes and returned strings.
+panes, page sizes and returned strings. Filtering, projection validation and
+fingerprinting cooperatively check the acquisition call's cancellation token and
+total deadline. Processing errors after tmux I/O admission retain `effects: possible`.
 
 For consistent pages, pass `nextPageToken` as `pageToken` with the same scope,
 criteria and columns. Every continuation re-observes candidate membership,

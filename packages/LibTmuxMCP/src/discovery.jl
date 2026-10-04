@@ -184,19 +184,15 @@ function _discovery_capture(app, scope, context)
     end
     items = LibTmux.PaneSnapshot[]
     seen = Set{LibTmux.PaneID}()
+    control = _discovery_control(context)
     for window in LibTmux.windows(parent), pane in LibTmux.panes(window)
+        LibTmux._criterion_checkpoint!(control)
         pane.id in seen && continue
         push!(seen, pane.id)
         push!(items, pane)
     end
+    LibTmux._criterion_checkpoint!(control; force=true)
     captured, LibTmux.Selection(items; snapshot=captured), parent, "session_scope"
-end
-
-function _discovery_links(pane, parent)
-    if parent isa LibTmux.SessionSnapshot
-        return filter(link -> link.window_id == pane.window.id, LibTmux.windowlinks(parent))
-    end
-    LibTmux.windowlinks(pane.window)
 end
 
 function _discovery_contexts(links; clipped)
@@ -213,8 +209,11 @@ end
 _discovery_value(value::LibTmux.EntityID) = string(value)
 _discovery_value(value) = value
 
-function _discovery_row(pane, links, caller, projection; clipped)
-    contexts = _discovery_contexts(clipped ? Iterators.take(links, 8) : links; clipped)
+function _discovery_row(pane, links, caller, projection; clipped, contexts=nothing)
+    contexts === nothing && (
+        contexts =
+            _discovery_contexts(clipped ? Iterators.take(links, 8) : links; clipped)
+    )
     row = Dict{String,Any}(
         "target"=>_target_wire(pane.ref),
         "caller"=>pane.ref == caller,
@@ -255,22 +254,169 @@ function _discovery_row(pane, links, caller, projection; clipped)
     row
 end
 
-function _canonical_json(value)
-    if value isa AbstractDict
-        entries = sort!(collect(pairs(value)); by=first)
-        return "{" *
-               join(
-                   (
-                       JSON.json(String(key)) * ":" * _canonical_json(item) for
-                       (key, item) in entries
-                   ),
-                   ",",
-               ) *
-               "}"
-    elseif value isa Union{AbstractVector,Tuple}
-        return "[" * join((_canonical_json(item) for item in value), ",") * "]"
+struct _DiscoveryCheckpoint <: Function
+    context::_ToolContext
+end
+function (checkpoint::_DiscoveryCheckpoint)()
+    context = checkpoint.context
+    LibTmux.iscancelled(context.cancel) && throw(LibTmux.RequestCancelled(false))
+    _tool_remaining(context)
+    nothing
+end
+
+
+_discovery_control(context) = LibTmux._CriterionTraversal{Function}(
+    _DiscoveryCheckpoint(context),
+    0,
+    nothing,
+    nothing,
+)
+
+# This cache belongs to one captured snapshot and scope. Physical-window indices
+# preserve contextual link order; equal IDs from another capture cannot share it.
+struct _DiscoveryWindowFacets
+    links::LibTmux.Selection
+    contexts::Vector{Dict{String,Any}}
+    clipped::Vector{Dict{String,Any}}
+end
+struct _DiscoveryRows <: AbstractVector{Dict{String,Any}}
+    captured::LibTmux.Snapshot
+    selected::LibTmux.Selection
+    parent::Union{Nothing,LibTmux.SessionSnapshot,LibTmux.WindowSnapshot}
+    caller::Union{Nothing,LibTmux.PaneRef}
+    projection::Union{Nothing,LibTmux.RowProjection}
+    windows::Dict{Int,_DiscoveryWindowFacets}
+    control::LibTmux._CriterionTraversal{Function}
+    session_links::Union{Nothing,Dict{Int,LibTmux.Selection}}
+end
+function _DiscoveryRows(captured, selected, parent, caller, projection, windows, control)
+    groups = nothing
+    if parent isa LibTmux.SessionSnapshot
+        items = Dict{Int,Vector{LibTmux.WindowLink}}()
+        for link in LibTmux.windowlinks(parent)
+            LibTmux._criterion_checkpoint!(control)
+            group = get!(items, getfield(link.window, :_index)) do
+                LibTmux.WindowLink[]
+            end
+            push!(group, link)
+        end
+        groups = Dict{Int,LibTmux.Selection}()
+        for (index, links) in items
+            LibTmux._criterion_checkpoint!(control)
+            groups[index] = LibTmux.Selection(links; snapshot=captured)
+        end
     end
-    JSON.json(value)
+    _DiscoveryRows(captured, selected, parent, caller, projection, windows, control, groups)
+end
+Base.size(rows::_DiscoveryRows) = size(rows.selected)
+Base.IndexStyle(::Type{_DiscoveryRows}) = IndexLinear()
+function _discovery_window(rows::_DiscoveryRows, pane)
+    LibTmux.snapshotof(pane) === rows.captured || error("discovery capture changed")
+    window = pane.window
+    get!(rows.windows, getfield(window, :_index)) do
+        links = if rows.session_links === nothing
+            LibTmux.windowlinks(window)
+        else
+            selected = get(rows.session_links, getfield(window, :_index), nothing)
+            selected === nothing ?
+            LibTmux.Selection(LibTmux.WindowLink[]; snapshot=rows.captured) : selected
+        end
+        raw, clipped = Dict{String,Any}[], Dict{String,Any}[]
+        for (index, link) in enumerate(links)
+            LibTmux._criterion_checkpoint!(rows.control)
+            push!(raw, only(_discovery_contexts((link,); clipped=false)))
+            index <= 8 && push!(clipped, only(_discovery_contexts((link,); clipped=true)))
+        end
+        _DiscoveryWindowFacets(links, raw, clipped)
+    end
+end
+function _discovery_row_at(rows::_DiscoveryRows, index; clipped)
+    LibTmux._criterion_checkpoint!(rows.control)
+    pane = rows.selected[index]
+    window = _discovery_window(rows, pane)
+    _discovery_row(
+        pane,
+        window.links,
+        rows.caller,
+        rows.projection === nothing ? nothing : rows.projection[index];
+        clipped,
+        contexts=clipped ? window.clipped : window.contexts,
+    )
+end
+Base.getindex(rows::_DiscoveryRows, index::Int) =
+    _discovery_row_at(rows, index; clipped=false)
+
+mutable struct _DiscoveryDigest
+    hash::SHA.SHA2_256_CTX
+    buffer::Vector{UInt8}
+    used::Int
+    control::LibTmux._CriterionTraversal{Function}
+end
+function _discovery_digest_flush!(state::_DiscoveryDigest)
+    state.used == 0 && return nothing
+    LibTmux._criterion_checkpoint!(state.control; force=true)
+    SHA.update!(state.hash, state.buffer, state.used)
+    state.used = 0
+    LibTmux._criterion_checkpoint!(state.control; force=true)
+    nothing
+end
+function _discovery_digest_write!(state::_DiscoveryDigest, bytes::AbstractVector{UInt8})
+    offset = 1
+    while offset <= length(bytes)
+        count = min(length(state.buffer) - state.used, length(bytes) - offset + 1)
+        copyto!(state.buffer, state.used + 1, bytes, offset, count)
+        state.used += count
+        offset += count
+        state.used == length(state.buffer) && _discovery_digest_flush!(state)
+    end
+    nothing
+end
+_discovery_digest_write!(state::_DiscoveryDigest, text::AbstractString) =
+    _discovery_digest_write!(state, codeunits(text))
+
+function _canonical_digest_string!(state::_DiscoveryDigest, value::AbstractString)
+    _discovery_digest_write!(state, "\"")
+    start = firstindex(value)
+    while start <= ncodeunits(value)
+        stop = prevind(value, min(start + 32768, ncodeunits(value) + 1))
+        encoded = JSON.json(SubString(value, start, stop))
+        _discovery_digest_write!(state, @view codeunits(encoded)[2:(end-1)])
+        start = nextind(value, stop)
+        LibTmux._criterion_checkpoint!(state.control; force=ncodeunits(value) > 32768)
+    end
+    _discovery_digest_write!(state, "\"")
+    nothing
+end
+function _canonical_digest!(state::_DiscoveryDigest, value)
+    LibTmux._criterion_checkpoint!(state.control)
+    if value isa AbstractDict
+        _discovery_digest_write!(state, "{")
+        for (index, (key, item)) in enumerate(sort!(collect(pairs(value)); by=first))
+            index == 1 || _discovery_digest_write!(state, ",")
+            _canonical_digest_string!(state, String(key))
+            _discovery_digest_write!(state, ":")
+            _canonical_digest!(state, item)
+        end
+        _discovery_digest_write!(state, "}")
+    elseif value isa Union{AbstractVector,Tuple}
+        _discovery_digest_write!(state, "[")
+        for (index, item) in enumerate(value)
+            index == 1 || _discovery_digest_write!(state, ",")
+            _canonical_digest!(state, item)
+        end
+        _discovery_digest_write!(state, "]")
+    elseif value isa AbstractString
+        _canonical_digest_string!(state, value)
+    else
+        _discovery_digest_write!(state, JSON.json(value))
+    end
+    nothing
+end
+function _discovery_fingerprint(value, control)
+    state = _DiscoveryDigest(SHA.SHA2_256_CTX(), Vector{UInt8}(undef, 65536), 0, control)
+    _canonical_digest!(state, value)
+    _discovery_digest_flush!(state)
+    bytes2hex(SHA.digest!(state.hash))
 end
 
 function _list_panes(app, args, context)
@@ -281,48 +427,58 @@ function _list_panes(app, args, context)
             "observation exceeds 4096 panes; select a session or window scope",
         ),
     )
-    selected = filter(
-        pane -> _pane_permitted(
+    control = _discovery_control(context)
+    items = eltype(candidates)[]
+    for pane in candidates
+        LibTmux._criterion_checkpoint!(control)
+        _pane_permitted(
             app,
             (; paneId=string(pane.id), generation=captured.identity.generation),
-        ),
-        candidates,
+        ) && push!(items, pane)
+    end
+    selected = LibTmux.Selection(items; snapshot=captured)
+    LibTmux._criterion_checkpoint!(control; force=true)
+    args["where"] === nothing || (
+        selected = LibTmux._filter_where(
+            args["where"],
+            selected,
+            _DiscoveryCheckpoint(context),
+        )
     )
-    _tool_remaining(context)
-    args["where"] === nothing || (selected = filter(args["where"], selected))
-    _tool_remaining(context)
+    LibTmux._criterion_checkpoint!(control; force=true)
     projection =
         args["columns"] === nothing ? nothing :
-        LibTmux.project_rows(selected; columns=args["columns"])
-    links = [_discovery_links(pane, parent) for pane in selected]
-    raw = [
-        _discovery_row(
-            pane,
-            links[i],
-            app.caller,
-            projection === nothing ? nothing : projection[i];
-            clipped=false,
-        ) for (i, pane) in enumerate(selected)
-    ]
+        LibTmux._project_rows(selected, args["columns"], _DiscoveryCheckpoint(context))
+    raw = _DiscoveryRows(
+        captured,
+        selected,
+        parent,
+        app.caller,
+        projection,
+        Dict{Int,_DiscoveryWindowFacets}(),
+        control,
+    )
+    candidate_ids = String[]
+    for pane in candidates
+        LibTmux._criterion_checkpoint!(control)
+        push!(candidate_ids, string(pane.id))
+    end
     scope = args["scope"]
-    fingerprint = bytes2hex(
-        SHA.sha256(
-            _canonical_json(
-                Dict(
-                    "generation"=>captured.identity.generation,
-                    "scope"=>scope === nothing ? nothing :
-                             Dict(
-                        "kind"=>String(scope.kind),
-                        "id"=>scope.id,
-                        "generation"=>scope.generation,
-                    ),
-                    "where"=>args["whereWire"],
-                    "columns"=>args["columns"],
-                    "candidateIds"=>[string(pane.id) for pane in candidates],
-                    "rows"=>raw,
-                ),
+    fingerprint = _discovery_fingerprint(
+        Dict{String,Any}(
+            "generation"=>captured.identity.generation,
+            "scope"=>scope === nothing ? nothing :
+                     Dict(
+                "kind"=>String(scope.kind),
+                "id"=>scope.id,
+                "generation"=>scope.generation,
             ),
+            "where"=>args["whereWire"],
+            "columns"=>args["columns"],
+            "candidateIds"=>candidate_ids,
+            "rows"=>raw,
         ),
+        control,
     )
     prior = args["pageFingerprint"]
     prior === nothing ||
@@ -336,16 +492,7 @@ function _list_panes(app, args, context)
     offset, limit = args["offset"], args["limit"]
     rows = Dict{String,Any}[]
     for i = (offset+1):min(length(selected), offset+limit)
-        push!(
-            rows,
-            _discovery_row(
-                selected[i],
-                links[i],
-                app.caller,
-                projection === nothing ? nothing : projection[i];
-                clipped=true,
-            ),
-        )
+        push!(rows, _discovery_row_at(raw, i; clipped=true))
     end
     next = offset + length(rows)
     more = next < length(selected)
