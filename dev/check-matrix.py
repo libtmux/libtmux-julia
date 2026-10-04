@@ -40,7 +40,7 @@ TOOL_PREFERENCES = "[JuliaFormatter]\nprecompile_workload = false\n"
 DELIVERY_PHASES = frozenset(("extensions", "docs", "doc-snippets", "doc-contextual",
                             "imports", "external-examples", "external-launchers"))
 SUITES = ("runtime", "delivery")
-LOOP_BUDGETS = {"mid": 10, "outer": 90}
+LOOP_BUDGETS = {"mid": 10, "outer": 120}
 
 TMUX_SHA256 = {
     "3.2a": "551553a4f82beaa8dadc9256800bcc284d7c000081e47aa6ecbb6ff36eacd05f",
