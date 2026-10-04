@@ -31,7 +31,15 @@ same public Git tag:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
+    -e '
+    using Pkg
+    Pkg.activate(".")
+    repo = "https://github.com/libtmux/libtmux-julia.git"
+    tag = "v0.1.0-alpha.1"
+    Pkg.add([
+        Pkg.PackageSpec(url=repo, rev=tag),
+        Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace"),
+    ])'
 ```
 
 Install a launcher bound to that environment:
@@ -67,7 +75,10 @@ $ workspace_stage=$(mktemp -d "${TMPDIR:-/tmp}/ltj-workspace.XXXXXX")
 $ julia \
     --startup-file=no \
     --project="$workspace_stage" \
-    -e 'using Pkg; Pkg.develop([PackageSpec(path="../.."), PackageSpec(path=".")]); Pkg.precompile()'
+    -e '
+    using Pkg
+    Pkg.develop([PackageSpec(path="../.."), PackageSpec(path=".")])
+    Pkg.precompile()'
 ```
 
 ## Inspect a workspace
