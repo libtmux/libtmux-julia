@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
+import ctypes
+import errno
+from functools import cache
 import hashlib
 import json
 import os
@@ -149,28 +152,122 @@ def signal_group(process, number):
         pass
 
 
+class _DarwinBSDInfo(ctypes.Structure):
+    # libproc's PROC_PIDTBSDINFO ABI, including its microsecond start identity.
+    _fields_ = [("flags", ctypes.c_uint32), ("state", ctypes.c_uint32),
+                ("exit_status", ctypes.c_uint32), ("pid", ctypes.c_uint32),
+                ("parent", ctypes.c_uint32), ("credentials", ctypes.c_uint32 * 7),
+                ("command", ctypes.c_char * 16), ("name", ctypes.c_char * 32),
+                ("files", ctypes.c_uint32), ("group", ctypes.c_uint32),
+                ("job_control", ctypes.c_uint32 * 3), ("nice", ctypes.c_int32),
+                ("start_seconds", ctypes.c_uint64), ("start_microseconds", ctypes.c_uint64)]
+
+
+@cache
+def _darwin_libproc():
+    library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    library.proc_pidinfo.argtypes = (ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                    ctypes.c_void_p, ctypes.c_int)
+    library.proc_listpids.argtypes = (ctypes.c_uint32, ctypes.c_uint32,
+                                    ctypes.c_void_p, ctypes.c_int)
+    library.proc_pidinfo.restype = library.proc_listpids.restype = ctypes.c_int
+    return library
+
+
+def _darwin_process_info(pid):
+    info = _DarwinBSDInfo()
+    ctypes.set_errno(0)
+    # The nonzero argument also admits unreaped zombies to PROC_PIDTBSDINFO.
+    size = _darwin_libproc().proc_pidinfo(pid, 3, 1, ctypes.byref(info), ctypes.sizeof(info))
+    if size != ctypes.sizeof(info):
+        raise OSError(ctypes.get_errno() or errno.EIO, "incomplete Darwin process identity")
+    return dict(pid=info.pid, parent=info.parent, group=info.group, state=info.state,
+                start=(info.start_seconds, info.start_microseconds))
+
+
+def _darwin_group_pids(group):
+    library = _darwin_libproc()
+    ctypes.set_errno(0)
+    required = library.proc_listpids(2, group, None, 0)
+    item_size = ctypes.sizeof(ctypes.c_int)
+    if required <= 0 or required % item_size:
+        raise OSError(ctypes.get_errno() or errno.EIO, "unknown Darwin process group")
+    buffer = (ctypes.c_int * (required // item_size + 16))()
+    ctypes.set_errno(0)
+    filled = library.proc_listpids(2, group, buffer, ctypes.sizeof(buffer))
+    if (filled < 0 or filled >= ctypes.sizeof(buffer) or filled % item_size or
+            (filled == 0 and ctypes.get_errno())):
+        raise OSError(ctypes.get_errno() or errno.EIO, "incomplete Darwin process group")
+    members = tuple(sorted(buffer[:filled // item_size]))
+    if len(set(members)) != len(members) or any(pid <= 0 for pid in members):
+        raise OSError(errno.EIO, "invalid Darwin process group members")
+    return members
+
+
 class PhaseGroup:
     """Keep child identities reserved until signalling and final reap finish."""
 
     def __init__(self):
         self.lock = threading.Lock()
         self.processes = set()
+        self.identities = {}
         self.cancelled = False
         self.escalation = None
 
     def add(self, process):
         with self.lock:
             self.processes.add(process)
+            if sys.platform == "darwin":
+                info = _darwin_process_info(process.pid)
+                if (info["pid"] != process.pid or info["parent"] != os.getpid() or
+                        info["group"] != process.pid or info["start"][0] <= 0 or
+                        not 0 <= info["start"][1] < 1000000):
+                    raise RuntimeError("Darwin phase leader identity is not owned")
+                self.identities[process] = {key: info[key]
+                                            for key in ("pid", "parent", "group", "start")}
             if self.cancelled:
-                signal_group(process, signal.SIGKILL)
+                self._signal(process, signal.SIGKILL)
+
+    def _zombie_group(self, process):
+        identity = self.identities.get(process)
+        if (not self.lock.locked() or process not in self.processes or
+                identity is None or process.returncode is not None):
+            return False
+        try:
+            observed = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+            if observed is None or observed.si_pid != process.pid:
+                return False
+            leader = _darwin_process_info(process.pid)
+            if leader["state"] != 5 or any(leader[key] != value for key, value in identity.items()):
+                return False
+            members = _darwin_group_pids(process.pid)
+            if process.pid not in members:
+                return False
+            infos = [_darwin_process_info(pid) for pid in members]
+            if any(info["pid"] != pid or info["group"] != process.pid or info["state"] != 5
+                   for pid, info in zip(members, infos)):
+                return False
+            return (all(_darwin_process_info(pid) == info for pid, info in zip(members, infos))
+                    and _darwin_group_pids(process.pid) == members)
+        except OSError:
+            return False
+
+    def _signal(self, process, number):
+        try:
+            signal_group(process, number)
+        except PermissionError as error:
+            # XNU skips SZOMB members and returns EPERM when none can be signalled.
+            if error.errno != errno.EPERM or sys.platform != "darwin" or not self._zombie_group(process):
+                raise
 
     def reap(self, process, *, retire_group=False):
         # Call only after WNOWAIT observed exit, so wait cannot block this lock.
         with self.lock:
             if retire_group or self.cancelled:
-                signal_group(process, signal.SIGKILL)
+                self._signal(process, signal.SIGKILL)
             code = process.wait()
             self.processes.discard(process)
+            self.identities.pop(process, None)
             return code
 
     def signal(self, number, process=None):
@@ -178,7 +275,7 @@ class PhaseGroup:
             targets = self.processes if process is None else (process,)
             for child in targets:
                 if child in self.processes:
-                    signal_group(child, number)
+                    self._signal(child, number)
 
     def cancel(self):
         with self.lock:
@@ -912,6 +1009,73 @@ println("PASS admitted version arguments construct real Pkg specifications")
         from unittest.mock import patch
         from contextlib import redirect_stdout
         from io import StringIO
+        assert ctypes.sizeof(_DarwinBSDInfo) == 136
+        assert (_DarwinBSDInfo.pid.offset, _DarwinBSDInfo.group.offset,
+                _DarwinBSDInfo.start_seconds.offset, _DarwinBSDInfo.start_microseconds.offset) == (12, 100, 120, 128)
+        zombie = dict(pid=4321, parent=os.getpid(), group=4321,
+                      start=(123, 456), state=5)
+        class OwnedChild:
+            pid = 4321
+            returncode = None
+            def wait(self):
+                self.returncode = 7
+                return 7
+        for members in ((4321,), (4321, 4322)):
+            child = OwnedChild()
+            def zombie_info(pid):
+                return dict(zombie, pid=pid, start=(123, pid))
+            with patch.object(sys, "platform", "darwin"), \
+                 patch(__name__ + "._darwin_process_info", side_effect=zombie_info), \
+                 patch(__name__ + "._darwin_group_pids", return_value=members), \
+                 patch.object(os, "waitid", return_value=SimpleNamespace(si_pid=4321)), \
+                 patch.object(os, "killpg", side_effect=PermissionError(errno.EPERM, "denied")):
+                zombies = PhaseGroup()
+                zombies.add(child)
+                assert zombies.reap(child, retire_group=True) == 7
+                assert child.returncode == 7 and not zombies.processes and not zombies.identities
+        for case in ("live-leader", "live-member", "unknown-member", "unknown-group",
+                     "changed-start", "changed-member-start", "changed-inventory",
+                     "unobserved", "reaped", "other-os", "other-error"):
+            child = OwnedChild()
+            member_reads = 0
+            def member_info(pid):
+                nonlocal member_reads
+                if pid == 4321:
+                    return zombie
+                if case == "unknown-member":
+                    raise ProcessLookupError(errno.ESRCH, "member disappeared")
+                if case == "changed-member-start":
+                    member_reads += 1
+                    return dict(zombie, pid=pid, parent=4321, start=(123, member_reads))
+                return dict(zombie, pid=pid, parent=4321, state=1)
+            members = (4321, 4322) if case in ("live-member", "unknown-member", "changed-member-start") else (4321,)
+            error = PermissionError(errno.EACCES if case == "other-error" else errno.EPERM, "denied")
+            with patch.object(sys, "platform", "linux" if case == "other-os" else "darwin"), \
+                 patch(__name__ + "._darwin_process_info", side_effect=member_info), \
+                 patch(__name__ + "._darwin_group_pids", return_value=members) as inventory, \
+                 patch.object(os, "waitid", return_value=None if case == "unobserved"
+                              else SimpleNamespace(si_pid=4321)), \
+                 patch.object(os, "killpg", side_effect=error):
+                zombies = PhaseGroup()
+                zombies.add(child)
+                if case == "live-leader":
+                    zombie["state"] = 1
+                elif case == "changed-start":
+                    zombie["start"] = (123, 457)
+                elif case == "unknown-group":
+                    inventory.side_effect = OSError(errno.EIO, "inventory truncated")
+                elif case == "changed-inventory":
+                    inventory.side_effect = [members, (4321, 4322)]
+                elif case == "reaped":
+                    child.returncode = 7
+                try:
+                    zombies.signal(signal.SIGKILL)
+                except PermissionError as observed:
+                    assert observed is error
+                else:
+                    raise AssertionError("Darwin retirement accepted " + case)
+                finally:
+                    zombie.update(state=5, start=(123, 456))
         with patch.object(os, "waitid", None), patch.object(subprocess, "Popen") as spawn:
             try:
                 phase("unsupported", [], cwd=base, env={}, log=base / "unsupported.log", budget=0.9)
