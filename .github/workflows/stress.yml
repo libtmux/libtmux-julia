@@ -1,0 +1,91 @@
+name: Stress
+
+# Repeats the core real-tmux suite (the phase that exercises the fixtures, control engine and lifecycle) and reports each phase's failure
+# count, so a flake shows up as a rate rather than as one red run.
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: Repetitions of the core real-tmux suite per lane
+        default: '10'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: julia-stress-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stress:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - {label: linux-control, runner: ubuntu-latest}
+          - {label: macos, runner: macos-latest}
+    env:
+      TMPDIR: /tmp
+      REPEAT: ${{ inputs.repeat || '10' }}
+      JULIA_VERSION: '1.13.0'
+      TMUX_VERSION: '3.7c'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: '1.13.0'
+          arch: ${{ runner.arch == 'ARM64' && 'aarch64' || 'x64' }}
+      - name: Prepare Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libevent-dev libncurses-dev bison
+      - name: Prepare macOS build dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install libevent ncurses pkg-config utf8proc jemalloc
+          {
+            echo "PKG_CONFIG_PATH=$(brew --prefix libevent)/lib/pkgconfig:$(brew --prefix ncurses)/lib/pkgconfig:$(brew --prefix utf8proc)/lib/pkgconfig:$(brew --prefix jemalloc)/lib/pkgconfig"
+            echo "CPPFLAGS=-I$(brew --prefix utf8proc)/include"
+            echo "LDFLAGS=-L$(brew --prefix utf8proc)/lib"
+          } >> "$GITHUB_ENV"
+      - name: Choose owned stage
+        run: echo "MATRIX_STAGE=$RUNNER_TEMP/libtmux-julia-matrix" >> "$GITHUB_ENV"
+      - name: Prepare pinned tmux release
+        run: python3 dev/check-matrix.py build-tmux "$MATRIX_STAGE" "$TMUX_VERSION"
+      - name: Prepare Julia tools and external consumers
+        run: python3 dev/check-matrix.py prepare "$MATRIX_STAGE" --threads 1
+      - name: Repeat the core real-tmux suite
+        run: |
+          mkdir -p "$RUNNER_TEMP/stress"
+          for n in $(seq 1 "$REPEAT"); do
+            python3 dev/check-matrix.py run "$MATRIX_STAGE" \
+              --tmux "$MATRIX_STAGE/tmux/$TMUX_VERSION/bin/tmux" \
+              --threads 1 --tier outer --suite runtime --only core-normal || true
+            cp "$MATRIX_STAGE/results-outer-runtime-t1.json" "$RUNNER_TEMP/stress/run-$n.json"
+            cp "$MATRIX_STAGE/logs/core-normal.log" "$RUNNER_TEMP/stress/log-$n.txt"
+          done
+      - name: Report failure counts
+        if: always()
+        run: python3 dev/summarize-stress.py "$RUNNER_TEMP/stress" '${{ matrix.label }}'
+      - name: Preserve stress evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stress-${{ matrix.label }}
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/stress/*.json
+            ${{ runner.temp }}/stress/failure-counts.csv
+            ${{ runner.temp }}/stress/testset-failure-counts.csv
+            ${{ runner.temp }}/stress/log-*.txt
+            ${{ env.MATRIX_STAGE }}/logs/*.log

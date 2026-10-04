@@ -478,7 +478,8 @@ def run(args):
 def selected_commands(args, stage, metadata):
     return [item for item in command_plan(args, stage, metadata)
             if (args.tier == "all" or item[3] == args.tier)
-            and (args.suite == "all" or (item[0] in DELIVERY_PHASES) == (args.suite == "delivery"))]
+            and (args.suite == "all" or (item[0] in DELIVERY_PHASES) == (args.suite == "delivery"))
+            and (not getattr(args, "only", None) or item[0] in args.only)]
 
 
 def self_test(julia=None):
@@ -689,6 +690,8 @@ def main():
     execution.add_argument("--threads", type=int, choices=(1, 4), default=1)
     execution.add_argument("--tier", choices=("unit", "quality", "outer", "all"), default="all")
     execution.add_argument("--suite", choices=("all", *SUITES), default="all")
+    execution.add_argument("--only", nargs="+", metavar="PHASE",
+                           help="run only these phases, for repeated stress runs")
     for option in ("julia", "tmux", "os", "arch"):
         execution.add_argument(f"--expected-{option}")
     args = parser.parse_args()
