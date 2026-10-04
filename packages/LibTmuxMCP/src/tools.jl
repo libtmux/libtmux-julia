@@ -173,15 +173,15 @@ function _application_call(f, app, upstream)
 end
 
 function _tool_remaining(context)
+    context.cancel === nothing ||
+        !LibTmux.iscancelled(context.cancel) ||
+        throw(LibTmux.RequestCancelled(false))
     remaining = context.budget - (time_ns() - context.started) / 1e9
     remaining > 0 || throw(LibTmux.DeadlineExceeded(context.budget, false, nothing))
     remaining
 end
 function _tool_kwargs(context)
     timeout = _tool_remaining(context)
-    context.cancel === nothing ||
-        !LibTmux.iscancelled(context.cancel) ||
-        throw(LibTmux.RequestCancelled(false))
     # Hooks, aliases and client attachment can mutate even observation calls.
     # Keep admission monotonic across every stage and sequential batch item.
     hasproperty(context, :effects) && (context.effects[] = true)
