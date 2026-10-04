@@ -6,8 +6,10 @@ requested work.
 ## Which policy applies
 
 - Setup, checks, and pull requests: [CONTRIBUTING.md](CONTRIBUTING.md).
-- Documentation, user-facing text, comments, and commit messages:
-  [WRITING.md](WRITING.md).
+- Documentation, user-facing text, comments, commit messages, and any code
+  example (example programs, doctests, Markdown code blocks):
+  [WRITING.md](WRITING.md), and its [Examples](WRITING.md#examples) section for
+  code a reader sees.
 
 Each guide is the single home for its subject.
 
