@@ -10,6 +10,7 @@ import errno
 from functools import cache
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -40,7 +41,13 @@ TOOL_PREFERENCES = "[JuliaFormatter]\nprecompile_workload = false\n"
 DELIVERY_PHASES = frozenset(("extensions", "docs", "doc-snippets", "doc-contextual",
                             "imports", "external-examples", "external-launchers"))
 SUITES = ("runtime", "delivery")
-LOOP_BUDGETS = {"mid": 10, "outer": 120}
+LOOP_BUDGETS = {"mid": 10, "outer": 60}
+HARD_LIMITS = {"mid": 30, "outer": 180}
+CLEANUP_SECONDS = 2.0
+
+
+def remaining(deadline):
+    return max(0.0, deadline - time.monotonic())
 
 TMUX_SHA256 = {
     "3.2a": "551553a4f82beaa8dadc9256800bcc284d7c000081e47aa6ecbb6ff36eacd05f",
@@ -285,59 +292,115 @@ class PhaseGroup:
         self.signal(signal.SIGINT)
         # Retire nested groups before the supervisor's 900 ms worker grace ends.
         self.escalation = threading.Timer(0.8, self.signal, (signal.SIGKILL,))
+        self.escalation.daemon = True
         self.escalation.start()
 
-    def close(self):
+    def close(self, deadline=None):
+        deadline = time.monotonic() + CLEANUP_SECONDS if deadline is None else deadline
         if self.escalation is not None:
             self.escalation.cancel()
-            self.escalation.join()
+            self.escalation.join(timeout=remaining(deadline))
+            return not self.escalation.is_alive()
+        return True
 
 
-def phase(name, argv, *, cwd, env, log, budget, group=None):
+def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, deadline=None):
     """Wait on a child-exit event; retire only this run's process group."""
     if not callable(getattr(os, "waitid", None)) or not hasattr(os, "WNOWAIT"):
         raise RuntimeError("owned process retirement needs waitid/WNOWAIT; use Python 3.13+ on macOS")
+    if not math.isfinite(budget) or budget < 0:
+        raise ValueError("hard allowance must be finite and nonnegative")
+    if soft_budget is not None and (not math.isfinite(soft_budget) or soft_budget < 0):
+        raise ValueError("soft allowance must be finite and nonnegative")
     start = time.monotonic()
+    deadline = min(start + budget, deadline) if deadline is not None else start + budget
     log.parent.mkdir(parents=True, exist_ok=True)
     answer = dict(name=name, command=argv, status="NOT RUN", budget_seconds=budget,
-                  started=False)
+                  started=False, soft_limit_seconds=soft_budget, soft_limit_exceeded=False,
+                  hard_deadline=deadline, direct_child_reaped=False, cleanup_status="NOT NEEDED")
     owned_group = group or PhaseGroup()
     process = None
     waiter = None
     done = threading.Event()
+    observed_exit = threading.Event()
     observer_errors = []
+    cleanup_deadline = None
+
+    def cleanup_time():
+        nonlocal cleanup_deadline
+        if cleanup_deadline is None:
+            cleanup_deadline = min(time.monotonic() + CLEANUP_SECONDS, deadline + CLEANUP_SECONDS)
+        return remaining(cleanup_deadline)
+
+    def observe_exit():
+        try:
+            observed = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+            if observed is None or observed.si_pid != process.pid:
+                raise RuntimeError("owned leader exit identity was not observed")
+            observed_exit.set()
+        except BaseException as error:
+            observer_errors.append(error)
+        finally:
+            done.set()
+
+    def unretired(reason):
+        answer.update(status="UNRETIRED", semantic_status="UNRETIRED",
+                      cleanup_status="UNRETIRED", reason=reason,
+                      owned_identity_reserved=process in owned_group.processes,
+                      leader_exit_observed=observed_exit.is_set())
+
     try:
         if owned_group.cancelled:
             answer["status"] = "CANCELLED"
             return answer
         with log.open("wb") as output:
+            if remaining(deadline) == 0:
+                answer["reason"] = "hard deadline expired before phase admission"
+                return answer
             process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                        stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
             answer["started"] = True
+            answer.update(pid=process.pid, process_group=process.pid)
             owned_group.add(process)
-            def observe_exit():
-                try:
-                    os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
-                except BaseException as error:
-                    observer_errors.append(error)
-                finally:
-                    done.set()
-            waiter = threading.Thread(target=observe_exit, name=f"matrix-{name}")
+            answer.update(owned_identity_reserved=True,
+                          owned_identity=owned_group.identities.get(process, dict(
+                              pid=process.pid, parent=os.getpid(), group=process.pid,
+                              reservation="direct child retained until WNOWAIT reap")))
+            waiter = threading.Thread(target=observe_exit, name=f"matrix-{name}", daemon=True)
             waiter.start()
-            timed_out = not done.wait(budget)
+            if soft_budget is not None:
+                soft_deadline = start + soft_budget
+                if not done.wait(min(remaining(deadline), remaining(soft_deadline))):
+                    answer["soft_limit_exceeded"] = time.monotonic() >= soft_deadline
+                    if answer["soft_limit_exceeded"]:
+                        record = json.dumps(dict(event="soft-limit", phase=name, pid=process.pid,
+                            seconds=time.monotonic() - start, soft_limit_seconds=soft_budget,
+                            hard_deadline=deadline))
+                        output.write((record + "\n").encode())
+                        output.flush()
+                        print(record, flush=True)
+            timed_out = not done.wait(remaining(deadline))
             if timed_out:
                 owned_group.signal(signal.SIGINT, process)
-                if not done.wait(0.9):
+                if not done.wait(min(0.9, cleanup_time())):
                     owned_group.signal(signal.SIGKILL, process)
-                    done.wait()
-            waiter.join()
+                    if not done.wait(cleanup_time()):
+                        unretired("owned leader exit was not observed after SIGKILL")
+                        return answer
+            waiter.join(timeout=cleanup_time())
+            if waiter.is_alive():
+                unretired("owned exit observer exceeded its cleanup allowance")
+                return answer
             if observer_errors:
                 raise observer_errors[0]
+            if not observed_exit.is_set():
+                raise RuntimeError("cannot reap an unobserved owned leader")
             code = owned_group.reap(process, retire_group=timed_out)
             status = ("TIMEOUT" if timed_out else "CANCELLED" if owned_group.cancelled
                       else "PASS" if code == 0 else "FAIL")
-            answer.update(status=status,
-                          exit_code=code, direct_child_reaped=True)
+            answer.update(status=status, semantic_status=status,
+                          exit_code=code, direct_child_reaped=True, cleanup_status="REAPED",
+                          owned_identity_reserved=False, leader_exit_observed=True)
             if timed_out:
                 answer["cleanup"] = "owned process group signalled; escaped descendants not proved retired"
     except FileNotFoundError:
@@ -346,26 +409,45 @@ def phase(name, argv, *, cwd, env, log, budget, group=None):
         if process is not None and process.returncode is None and waiter is not None:
             # Let an owned worker retire its separately grouped children and receipt.
             owned_group.signal(signal.SIGINT, process)
-            done.wait(0.9)
+            done.wait(min(0.9, cleanup_time()))
         raise
     finally:
-        if process is not None and process.returncode is None:
+        if process is not None and process.returncode is None and answer["status"] != "UNRETIRED":
             owned_group.signal(signal.SIGKILL, process)
             if waiter is None:
-                os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+                waiter = threading.Thread(target=observe_exit, name=f"matrix-{name}", daemon=True)
+                waiter.start()
+            if done.wait(cleanup_time()) and observed_exit.is_set() and not observer_errors:
+                owned_group.reap(process)
+                answer.update(direct_child_reaped=True, cleanup_status="REAPED",
+                              owned_identity_reserved=False, leader_exit_observed=True)
             else:
-                done.wait()
-            owned_group.reap(process)
+                unretired("owned identity remains reserved after bounded cleanup")
         if waiter is not None:
-            waiter.join()
+            waiter.join(timeout=cleanup_time())
+            answer["exit_observer_retired"] = not waiter.is_alive()
         if group is None:
-            owned_group.close()
+            cleanup_time()
+            if not owned_group.close(cleanup_deadline):
+                unretired("owned escalation timer did not retire before cleanup expired")
         answer["seconds"] = time.monotonic() - start
+        if soft_budget is not None and answer["seconds"] >= soft_budget:
+            answer["soft_limit_exceeded"] = True
+            if answer["status"] == "PASS":
+                answer["status"] = "FAIL"
         answer["log"] = str(log)
     return answer
 
 
-def parallel_mid(commands, *, stage, env, result, save):
+def version_probe(name, argv, *, env, log, deadline):
+    answer = phase(name, argv, cwd=ROOT, env=env, log=log,
+                   budget=remaining(deadline), deadline=deadline)
+    if answer["status"] == "PASS":
+        answer["version"] = log.read_text().strip()
+    return answer
+
+
+def parallel_mid(commands, *, stage, env, result, save, deadline=None):
     """Run independent offline phases; receipts and cancellation stay with the worker."""
     priority = {"core-unit": 0, "mcp-unit": 1, "format": 2, "quality": 3}
     ordered = sorted(commands, key=lambda item: priority.get(item[0], 4))
@@ -373,6 +455,7 @@ def parallel_mid(commands, *, stage, env, result, save):
     pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="matrix-phase")
     futures = {}
     completed = set()
+    deadline = time.monotonic() + HARD_LIMITS["mid"] if deadline is None else deadline
 
     def progress():
         result["active_phases"] = [item[0] for future, item in futures.items()
@@ -384,8 +467,13 @@ def parallel_mid(commands, *, stage, env, result, save):
 
     try:
         for name, argv, budget, _ in ordered:
+            if remaining(deadline) == 0:
+                result["phases"].append(dict(name=name, command=argv, status="NOT RUN",
+                    started=False, seconds=0.0, reason="hard deadline expired before phase admission"))
+                continue
             future = pool.submit(phase, name, argv, cwd=ROOT, env=env,
-                                 log=stage / "logs" / f"{name}.log", budget=budget, group=group)
+                                 log=stage / "logs" / f"{name}.log", budget=HARD_LIMITS["mid"],
+                                 soft_budget=budget, deadline=deadline, group=group)
             futures[future] = (name, argv, budget)
         progress()
         for future in as_completed(futures):
@@ -404,7 +492,7 @@ def parallel_mid(commands, *, stage, env, result, save):
                 continue
             if future.cancelled():
                 item = dict(name=name, command=argv, status="CANCELLED", started=False,
-                            budget_seconds=budget, seconds=0.0)
+                            budget_seconds=HARD_LIMITS["mid"], soft_limit_seconds=budget, seconds=0.0)
             else:
                 try:
                     item = future.result()
@@ -413,11 +501,12 @@ def parallel_mid(commands, *, stage, env, result, save):
                                 error_type=type(error).__name__)
             result["phases"].append(item)
         progress()
-        group.close()
+        if not group.close(deadline + CLEANUP_SECONDS):
+            result["cleanup_status"] = "UNRETIRED"
         save()
 
 
-def parallel_outer(commands, *, stage, env, result, save):
+def parallel_outer(commands, *, stage, env, result, save, deadline=None):
     priority = {"core-normal": 0, "workspace-normal": 1, "mcp-normal": 2, "imports": 3,
                 "external-examples": 3, "external-launchers": 3}
     pending = sorted(commands, key=lambda item: priority.get(item[0], 4))
@@ -427,6 +516,7 @@ def parallel_outer(commands, *, stage, env, result, save):
     group = PhaseGroup()
     pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="matrix-outer")
     running, futures, completed, finished = {}, {}, set(), set()
+    deadline = time.monotonic() + HARD_LIMITS["outer"] if deadline is None else deadline
 
     def progress():
         result["active_phases"] = [item[0] for future, item in running.items()
@@ -438,6 +528,14 @@ def parallel_outer(commands, *, stage, env, result, save):
 
     def admit():
         while len(running) < 4:
+            if remaining(deadline) == 0:
+                for name, argv, _, _ in pending:
+                    result["phases"].append(dict(name=name, command=argv, status="NOT RUN",
+                        started=False, seconds=0.0, reason="hard deadline expired before phase admission"))
+                pending.clear()
+                if running:
+                    group.cancel()
+                break
             index = next((i for i, item in enumerate(pending)
                           if dependencies.get(item[0], set()) <= finished), None)
             if index is None:
@@ -445,14 +543,18 @@ def parallel_outer(commands, *, stage, env, result, save):
             item = pending.pop(index)
             name, argv, budget, _ = item
             future = pool.submit(phase, name, argv, cwd=ROOT, env=env,
-                                 log=stage / "logs" / f"{name}.log", budget=budget, group=group)
+                                 log=stage / "logs" / f"{name}.log", budget=HARD_LIMITS["outer"],
+                                 soft_budget=budget, deadline=deadline, group=group)
             running[future] = futures[future] = item
         progress()
 
     try:
         admit()
         while running:
-            ready, _ = wait(running, return_when=FIRST_COMPLETED)
+            ready, _ = wait(running, timeout=remaining(deadline), return_when=FIRST_COMPLETED)
+            if not ready:
+                group.cancel()
+                break
             for future in ready:
                 item = future.result()
                 completed.add(future)
@@ -460,7 +562,7 @@ def parallel_outer(commands, *, stage, env, result, save):
                 result["phases"].append(item)
                 print(f"{item['status']} {item['name']} {item['seconds']:.3f}s", flush=True)
             admit()
-        if pending:
+        if pending and remaining(deadline) > 0:
             raise RuntimeError("outer phase dependencies cannot be satisfied")
     except BaseException:
         group.cancel()
@@ -472,7 +574,7 @@ def parallel_outer(commands, *, stage, env, result, save):
                 continue
             if future.cancelled():
                 item = dict(name=name, command=argv, status="CANCELLED", started=False,
-                            budget_seconds=budget, seconds=0.0)
+                            budget_seconds=HARD_LIMITS["outer"], soft_limit_seconds=budget, seconds=0.0)
             else:
                 try:
                     item = future.result()
@@ -482,11 +584,13 @@ def parallel_outer(commands, *, stage, env, result, save):
             result["phases"].append(item)
         for name, argv, budget, _ in pending:
             result["phases"].append(dict(name=name, command=argv, status="CANCELLED",
-                                        started=False, budget_seconds=budget, seconds=0.0))
+                                        started=False, budget_seconds=HARD_LIMITS["outer"],
+                                        soft_limit_seconds=budget, seconds=0.0))
         running.clear()
         pending.clear()
         progress()
-        group.close()
+        if not group.close(deadline + CLEANUP_SECONDS):
+            result["cleanup_status"] = "UNRETIRED"
         save()
 
 
@@ -701,6 +805,10 @@ def result_path(stage, args, *, worker=False):
 
 def run_checks(args):
     command_started = time.monotonic()
+    batch = "outer" if getattr(args, "worker_phase", None) == "outer" or (
+        not getattr(args, "worker", False) and args.tier in ("all", "outer")) else "mid"
+    deadline = min(command_started + HARD_LIMITS[batch],
+                   getattr(args, "deadline", None) or command_started + HARD_LIMITS[batch])
     stage = checked_stage(args.stage)
     metadata = json.loads((stage / "prepared.json").read_text())
     if metadata["source_digest"] != source_digest():
@@ -715,7 +823,8 @@ def run_checks(args):
                   platform=platform.system(), machine=platform.machine(), kernel=platform.release(),
                   wsl="microsoft" in platform.release().lower(), threads=args.threads,
                   tools=metadata["tools"], status="NOT RUN", phases=[], suite=args.suite,
-                  tier=args.tier, active_phase=None, loops={},
+                  tier=args.tier, active_phase=None, active_phases=[], pending_phases=[],
+                  planned_phases=[], probes=[], loops={}, completion_status="INCOMPLETE",
                   invocation=getattr(args, "invocation", None))
     destination = result_path(stage, args, worker=getattr(args, "worker", False))
 
@@ -727,11 +836,31 @@ def run_checks(args):
     save()
     for key, argv in (("julia", [args.julia, "--startup-file=no", "--version"]),
                       ("tmux", [args.tmux, "-V"])):
+        if remaining(deadline) == 0:
+            result.update(status="FAIL", reason="hard deadline expired before version probe admission")
+            break
         resolved = shutil.which(argv[0])
         if resolved is None:
             result["reason"] = f"{key} executable is unavailable"
             break
-        result[key] = subprocess.check_output(argv, env=env, text=True).strip()
+        result["active_phase"] = f"{key}-version"
+        save()
+        try:
+            probe = version_probe(result["active_phase"], argv, env=env,
+                log=stage / "logs" / f"{key}-version-{getattr(args, 'worker_phase', None) or 'direct'}.log",
+                deadline=deadline)
+            result["probes"].append(probe)
+            if probe["status"] != "PASS":
+                result.update(status="FAIL", reason=f"{key} version probe did not finish successfully")
+                break
+            result[key] = probe["version"]
+        except BaseException as error:
+            result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
+                          error_type=type(error).__name__)
+            raise
+        finally:
+            result["active_phase"] = None
+            save()
     else:
         expected = ((args.expected_julia, result["julia"].removeprefix("julia version "), "Julia"),
                     (args.expected_tmux, result["tmux"].removeprefix("tmux "), "tmux"),
@@ -750,11 +879,11 @@ def run_checks(args):
             try:
                 if getattr(args, "worker_phase", None) == "mid":
                     active_loop = "mid"
-                    parallel_mid(commands, stage=stage, env=env, result=result, save=save)
+                    parallel_mid(commands, stage=stage, env=env, result=result, save=save, deadline=deadline)
                     commands = []
                 elif getattr(args, "worker_phase", None) == "outer":
                     active_loop = "outer"
-                    parallel_outer(commands, stage=stage, env=env, result=result, save=save)
+                    parallel_outer(commands, stage=stage, env=env, result=result, save=save, deadline=deadline)
                     commands = []
                 for name, argv, budget, tier in commands:
                     loop = "outer" if tier == "outer" else "mid"
@@ -765,7 +894,8 @@ def run_checks(args):
                     active_loop = loop
                     result["active_phase"] = name
                     save()
-                    item = phase(name, argv, cwd=ROOT, env=env, log=stage / "logs" / f"{name}.log", budget=budget)
+                    item = phase(name, argv, cwd=ROOT, env=env, log=stage / "logs" / f"{name}.log",
+                                 budget=HARD_LIMITS[loop], soft_budget=budget, deadline=deadline)
                     result["phases"].append(item)
                     result["active_phase"] = None
                     save()
@@ -779,11 +909,15 @@ def run_checks(args):
                 if result["status"] == "PASS" and any(
                         loop["status"] == "FAIL" for loop in result["loops"].values()):
                     result.update(status="FAIL", reason="aggregate whole-command loop budget exceeded")
+                if result.get("cleanup_status") == "UNRETIRED":
+                    result.update(status="FAIL", reason="owned escalation timer did not retire")
             except BaseException as error:
                 result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
                               error_type=type(error).__name__)
                 raise
             finally:
+                result["completion_status"] = "COMPLETE" if phases_finished(
+                    result, result["planned_phases"]) else "INCOMPLETE"
                 save()
     save()
     print(f"{result['status']} matrix result: {destination}")
@@ -795,6 +929,72 @@ def loop_result(name, seconds, args):
         args.tier in ("all", "mid", "outer") if name == "mid" else args.tier in ("all", "outer"))
     return dict(seconds=seconds, budget_seconds=LOOP_BUDGETS[name], complete=complete,
                 status="PASS" if seconds < LOOP_BUDGETS[name] else "FAIL")
+
+
+def receipt_issues(details):
+    """Critical progress fields must be explicit before admitting more work."""
+    statuses = {"PASS", "FAIL", "NOT RUN", "RUNNING", "STALE", "INTERRUPTED",
+                "TIMEOUT", "CANCELLED", "UNRETIRED"}
+    issues = []
+    if not isinstance(details.get("status"), str) or details["status"] not in statuses:
+        issues.append("status")
+    if "active_phase" not in details or not (
+            details["active_phase"] is None or isinstance(details["active_phase"], str)):
+        issues.append("active_phase")
+    for field in ("active_phases", "pending_phases", "planned_phases"):
+        values = details.get(field)
+        if not isinstance(values, list) or any(not isinstance(value, str) or not value for value in values):
+            issues.append(field)
+        elif len(values) != len(set(values)):
+            issues.append(field)
+    phases = details.get("phases")
+    if not isinstance(phases, list) or any(not isinstance(item, dict)
+            or not isinstance(item.get("name"), str) or not item["name"]
+            or not isinstance(item.get("status"), str) or item["status"] not in statuses for item in phases):
+        issues.append("phases")
+    return issues
+
+
+def phases_finished(details, expected):
+    """Every selected command finalized; assertion coverage is recorded separately."""
+    if details.get("receipt_status") == "INVALID" or receipt_issues(details):
+        return False
+    phases = details.get("phases", [])
+    names = [item.get("name") for item in phases]
+    return (details.get("status") in ("PASS", "FAIL")
+            and details.get("cleanup_status") != "UNRETIRED"
+            and details.get("active_phase") is None
+            and not details.get("active_phases") and not details.get("pending_phases")
+            and details.get("planned_phases") == expected
+            and len(names) == len(set(names)) == len(expected)
+            and set(names) == set(expected)
+            and all(item.get("status") in ("PASS", "FAIL")
+                    and item.get("started") is True and item.get("direct_child_reaped") is True
+                    and item.get("cleanup_status") != "UNRETIRED" for item in phases))
+
+
+def worker_receipt(path, invocation, digest):
+    """Read only this invocation's source-bound receipt."""
+    try:
+        details = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(details, dict) or details.get("invocation") != invocation or details.get("source_digest") != digest:
+        return {}
+    issues = receipt_issues(details)
+    if issues:
+        # Preserve named source-bound failures, but never use malformed progress to admit work.
+        phases = details.get("phases", [])
+        details["phases"] = [item for item in phases if isinstance(item, dict)
+                            and isinstance(item.get("name"), str) and item["name"]] \
+            if isinstance(phases, list) else []
+        details.update(status="FAIL", receipt_status="INVALID", receipt_errors=issues)
+        if "active_phase" in issues:
+            details["active_phase"] = None
+        for field in ("active_phases", "pending_phases", "planned_phases"):
+            if field in issues:
+                details.pop(field, None)
+    return details
 
 
 def selected_commands(args, stage, metadata):
@@ -834,44 +1034,60 @@ def run(args):
     result = dict(schema_version=3, status="RUNNING", phases=[], loops={},
                   tier=args.tier, suite=args.suite, threads=args.threads,
                   invocation=invocation, workers=[], active_phase=None,
+                  source_digest=metadata["source_digest"],
+                  soft_limits=LOOP_BUDGETS, hard_limits=HARD_LIMITS, cleanup_seconds=CLEANUP_SECONDS,
                   required_phases=[item[0] for item in plan],
                   timing_boundary="worker launch through exit; outer includes supervisor orchestration")
     destination = result_path(stage, args)
+    def save():
+        temporary = destination.with_suffix(".tmp")
+        temporary.write_text(json.dumps(result, indent=2) + "\n")
+        temporary.replace(destination)
+    save()
     for batch in batches:
+        deadline = started + HARD_LIMITS[batch]
+        cancellation = dict(planned_phases=[item[0] for item in plan
+                                           if (item[3] == "outer") == (batch == "outer")])
+        details = {}
+        if remaining(deadline) == 0:
+            result.update(status="FAIL", reason=f"hard deadline expired before {batch} admission")
+            for pending in batches[batches.index(batch):]:
+                result["loops"][pending] = dict(status="NOT RUN", complete=False, seconds=None,
+                    budget_seconds=LOOP_BUDGETS[pending], reason="hard deadline expired before admission")
+            cancellation["planned_phases"] = []
+            break
         argv = [sys.executable, str(Path(__file__).resolve()), "run", str(stage),
                 "--julia", args.julia, "--tmux", args.tmux, "--threads", str(args.threads),
                 "--tier", args.tier, "--suite", args.suite, "--worker",
-                "--worker-phase", batch, "--invocation", invocation]
+                "--worker-phase", batch, "--invocation", invocation, "--deadline", repr(deadline)]
         for name in ("julia", "tmux", "os", "arch"):
             value = getattr(args, f"expected_{name}")
             if value is not None:
                 argv.extend((f"--expected-{name}", value))
-        budget = LOOP_BUDGETS[batch]
-        if batch == "outer":
-            budget = max(0.001, budget - (time.monotonic() - started))
+        budget = remaining(deadline)
+        soft_budget = max(0.0, started + LOOP_BUDGETS[batch] - time.monotonic())
         worker_args = argparse.Namespace(**(vars(args) | dict(worker=True, worker_phase=batch)))
         receipt = result_path(stage, worker_args, worker=True)
-        cancellation = dict(planned_phases=[item[0] for item in plan
-                                           if (item[3] == "outer") == (batch == "outer")])
         try:
             worker = phase(batch, argv, cwd=ROOT, env=os.environ.copy(),
-                           log=stage / "logs" / f"whole-{batch}-t{args.threads}.log", budget=budget)
+                           log=stage / "logs" / f"whole-{batch}-t{args.threads}.log",
+                           budget=budget, soft_budget=soft_budget, deadline=deadline)
         except BaseException as error:
             result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
                           active_phase=batch, error_type=type(error).__name__,
                           supervisor_seconds=time.monotonic() - started)
-            details = json.loads(receipt.read_text()) if receipt.is_file() else {}
-            if details.get("invocation") == invocation:
+            details = worker_receipt(receipt, invocation, metadata["source_digest"])
+            if details:
                 result["phases"].extend(details["phases"])
                 result["active_phase"] = details["active_phase"] or batch
                 cancelled_receipts(result, cancellation | details)
             else:
                 cancelled_receipts(result, cancellation)
-            destination.write_text(json.dumps(result, indent=2) + "\n")
+            save()
             raise
         result["workers"].append(worker)
-        details = json.loads(receipt.read_text()) if receipt.is_file() else {}
-        if details.get("invocation") == invocation:
+        details = worker_receipt(receipt, invocation, metadata["source_digest"])
+        if details:
             result["phases"].extend(details["phases"])
             result["active_phase"] = details["active_phase"]
             for name in ("source_digest", "platform", "machine", "kernel", "wsl", "tools", "julia", "tmux"):
@@ -881,22 +1097,29 @@ def run(args):
             worker.update(status="FAIL", reason="worker did not retain a receipt for this invocation")
         seconds = time.monotonic() - started
         result["loops"][batch] = loop_result(batch, seconds, args)
-        result["loops"][batch]["complete"] &= worker["status"] == "PASS"
-        if worker["status"] != "PASS":
+        complete = (worker["status"] in ("PASS", "FAIL")
+                    and worker.get("direct_child_reaped") is True
+                    and worker.get("cleanup_status") != "UNRETIRED"
+                    and phases_finished(details, cancellation["planned_phases"]))
+        result["loops"][batch]["complete"] &= complete
+        if worker["status"] != "PASS" or details.get("status") != "PASS" or any(
+                item.get("status") != "PASS" for item in details.get("phases", [])):
+            result["loops"][batch]["status"] = "FAIL"
+        if not complete:
             result.update(status="FAIL", reason=f"complete {batch} worker failed or exceeded its budget")
-            for remaining in batches[batches.index(batch) + 1:]:
-                result["loops"][remaining] = dict(status="NOT RUN", complete=False,
-                    seconds=None, budget_seconds=LOOP_BUDGETS[remaining])
+            for later in batches[batches.index(batch) + 1:]:
+                result["loops"][later] = dict(status="NOT RUN", complete=False,
+                    seconds=None, budget_seconds=LOOP_BUDGETS[later])
             break
+        save()
     else:
-        result["status"] = "PASS" if all(loop["status"] == "PASS" for loop in result["loops"].values()) else "FAIL"
+        result["status"] = "PASS" if all(loop["status"] == "PASS" for loop in result["loops"].values()) \
+            and all(worker["status"] == "PASS" for worker in result["workers"]) else "FAIL"
     if result["status"] != "PASS":
         cancelled_receipts(result, cancellation | details
-                           if details.get("invocation") == invocation else cancellation)
+                           if details else cancellation)
     result["supervisor_seconds"] = time.monotonic() - started
-    temporary = destination.with_suffix(".tmp")
-    temporary.write_text(json.dumps(result, indent=2) + "\n")
-    temporary.replace(destination)
+    save()
     print(f"{result['status']} supervised matrix result: {destination}")
     return 0 if result["status"] == "PASS" else 1
 
@@ -990,6 +1213,60 @@ println("PASS admitted version arguments construct real Pkg specifications")
         timed = phase("deadline", [sys.executable, "-c", "import threading; threading.Event().wait()"],
                       cwd=base, env=os.environ.copy(), log=base / "deadline.log", budget=0.05)
         assert timed["status"] == "TIMEOUT" and timed["direct_child_reaped"]
+        soft = phase("soft-overrun", [sys.executable, "-c",
+            "import signal,sys,threading;signal.signal(signal.SIGINT,lambda *_:sys.exit(17));"
+            "threading.Event().wait(0.035);print('completed')"], cwd=base,
+            env=os.environ.copy(), log=base / "soft.log", budget=0.4, soft_budget=0.01)
+        assert soft["status"] == "FAIL" and soft["semantic_status"] == "PASS"
+        assert soft["soft_limit_exceeded"] and soft["exit_code"] == 0 and soft["direct_child_reaped"]
+        assert "completed" in (base / "soft.log").read_text().splitlines()
+        assert any(json.loads(line).get("event") == "soft-limit" for line in
+                   (base / "soft.log").read_text().splitlines() if line.startswith("{"))
+        version = version_probe("julia-version", [sys.executable, "-c",
+            "print('julia version 1.13.0')"], env=os.environ.copy(),
+            log=base / "version.log", deadline=time.monotonic() + 0.9)
+        assert version["status"] == "PASS" and version["direct_child_reaped"]
+        assert version["version"] == "julia version 1.13.0"
+        from unittest.mock import patch
+        with patch.object(subprocess, "Popen") as launch:
+            expired = phase("expired", [], cwd=base, env={}, log=base / "expired.log",
+                            budget=1, deadline=time.monotonic() - 1)
+            launch.assert_not_called()
+        assert expired["status"] == "NOT RUN" and not expired["started"]
+        release_observer, exit_seen = threading.Event(), threading.Event()
+        original_waitid = os.waitid
+        ownership = PhaseGroup()
+        owned = []
+        original_add = ownership.add
+        def remember(child):
+            original_add(child)
+            owned.append(child)
+        def stalled_waitid(kind, pid, flags):
+            if not flags & os.WNOHANG:
+                release_observer.wait()
+            observed = original_waitid(kind, pid, flags)
+            if not flags & os.WNOHANG:
+                exit_seen.set()
+            return observed
+        try:
+            with patch.object(ownership, "add", side_effect=remember), \
+                 patch.object(os, "waitid", side_effect=stalled_waitid), \
+                 patch(__name__ + ".CLEANUP_SECONDS", 0.08):
+                stalled = phase("stalled-observer", [sys.executable, "-c",
+                    "import signal,threading;signal.signal(signal.SIGINT,signal.SIG_IGN);"
+                    "threading.Event().wait()"], cwd=base, env=os.environ.copy(),
+                    log=base / "stalled.log", budget=0.03, group=ownership)
+            assert stalled["status"] == "UNRETIRED" and not stalled["direct_child_reaped"]
+            assert stalled["seconds"] < 0.5 and stalled["owned_identity_reserved"]
+            assert stalled["pid"] == owned[0].pid == stalled["process_group"]
+            assert stalled["owned_identity"]["pid"] == owned[0].pid
+            assert owned[0] in ownership.processes
+        finally:
+            release_observer.set()
+            assert exit_seen.wait(0.9), "control did not observe its owned child exit"
+            ownership.reap(owned[0], retire_group=True)
+            ownership.close()
+        assert not ownership.processes
         cells = qa_cells()
         assert [
             (cell["os"], cell["arch"], cell["julia"], cell["tmux"], cell["threads"])
@@ -1007,7 +1284,6 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert all(cell["status"] == "NOT RUN" for cell in cells)
         assert all(cell["optional"] == (cell["os"] != "Linux") for cell in cells)
         from types import SimpleNamespace
-        from unittest.mock import patch
         from contextlib import redirect_stdout
         from io import StringIO
         assert ctypes.sizeof(_DarwinBSDInfo) == 136
@@ -1278,7 +1554,8 @@ println("PASS admitted version arguments construct real Pkg specifications")
         args.suite = "all"
         assert loop_result("mid", 10, args)["status"] == "FAIL"
         assert loop_result("mid", 9.9, args)["status"] == "PASS"
-        assert loop_result("outer", LOOP_BUDGETS["outer"], args)["status"] == "FAIL"
+        assert loop_result("outer", 60, args)["status"] == "FAIL"
+        assert loop_result("outer", 59.9, args)["status"] == "PASS"
         args.tier = "unit"
         assert not loop_result("mid", 1, args)["complete"]
         args.tier = "mid"
@@ -1323,10 +1600,22 @@ println("PASS admitted version arguments construct real Pkg specifications")
                 path.write_text("original")
                 assert source_digest() == fingerprint
         (base / "prepared.json").write_text(json.dumps(metadata))
+        expired_args = SimpleNamespace(**(vars(args) | dict(
+            worker=True, worker_phase="mid", invocation="expired-worker", deadline=time.monotonic() - 1)))
+        with patch(__name__ + ".source_digest", return_value="fixed"), \
+             patch(__name__ + ".version_probe") as probe, \
+             patch(__name__ + ".phase") as launch, \
+             redirect_stdout(StringIO()):
+            assert run_checks(expired_args) == 1
+            probe.assert_not_called()
+            launch.assert_not_called()
+        retained = json.loads(result_path(base, expired_args, worker=True).read_text())
+        assert retained["status"] == "FAIL" and retained["completion_status"] == "INCOMPLETE"
+        assert not retained["probes"] and not retained["phases"]
         plan = [("first", [], 30, "unit"), ("second", [], 30, "unit")]
         with patch(__name__ + ".source_digest", return_value="fixed"), \
              patch.object(shutil, "which", return_value="binary"), \
-             patch.object(subprocess, "check_output", return_value="version"), \
+             patch(__name__ + ".version_probe", return_value=dict(status="PASS", version="version")), \
              patch(__name__ + ".command_plan", return_value=plan), \
              patch(__name__ + ".phase", side_effect=[
                  dict(name="first", status="FAIL", seconds=0.01), KeyboardInterrupt()]), \
@@ -1340,12 +1629,16 @@ println("PASS admitted version arguments construct real Pkg specifications")
         retained = json.loads((base / "results-all-t1.json").read_text())
         assert retained["status"] == "INTERRUPTED" and retained["active_phase"] == "second"
         assert retained["phases"][0]["status"] == "FAIL"
+        clock = [0.0]
+        def slow_check(name, argv, **kwargs):
+            clock[0] = 12.0
+            return dict(name=name, status="PASS", seconds=0.01)
         with patch(__name__ + ".source_digest", return_value="fixed"), \
              patch.object(shutil, "which", return_value="binary"), \
-             patch.object(subprocess, "check_output", return_value="version"), \
+             patch(__name__ + ".version_probe", return_value=dict(status="PASS", version="version")), \
              patch(__name__ + ".command_plan", return_value=plan[:1]), \
-             patch(__name__ + ".phase", return_value=dict(name="first", status="PASS", seconds=0.01)), \
-             patch.object(time, "monotonic", side_effect=[0, 12]), \
+             patch(__name__ + ".phase", side_effect=slow_check), \
+             patch.object(time, "monotonic", side_effect=lambda: clock[0]), \
              redirect_stdout(StringIO()):
             assert run_checks(args) == 1
         retained = json.loads((base / "results-all-t1.json").read_text())
@@ -1359,13 +1652,22 @@ println("PASS admitted version arguments construct real Pkg specifications")
         def complete_worker(name, argv, **kwargs):
             invocation = argv[argv.index("--invocation") + 1]
             worker_args = SimpleNamespace(**(vars(args) | dict(worker_phase=name)))
+            expected = [item[0] for item in selected_commands(args, base, metadata)
+                        if (item[3] == "outer") == (name == "outer")]
             result_path(base, worker_args, worker=True).write_text(json.dumps(dict(
-                invocation=invocation, phases=[dict(name="first", status="PASS", seconds=0.01)],
-                active_phase=None, loops={"mid": dict(seconds=0.01, status="PASS")},
+                invocation=invocation, source_digest=metadata["source_digest"], status="PASS",
+                phases=[dict(name=case, status="PASS", seconds=0.01, started=True,
+                             direct_child_reaped=True) for case in expected],
+                active_phase=None, active_phases=[], pending_phases=[], planned_phases=expected,
             )))
-            return dict(name=name, status="PASS", seconds=12)
-        with patch(__name__ + ".phase", side_effect=complete_worker), \
-             patch.object(time, "monotonic", side_effect=[0, 12, 12]), \
+            return dict(name=name, status="PASS", seconds=12, direct_child_reaped=True)
+        clock = [0.0]
+        def aged_complete_worker(*call_args, **kwargs):
+            answer = complete_worker(*call_args, **kwargs)
+            clock[0] = 12.0
+            return answer
+        with patch(__name__ + ".phase", side_effect=aged_complete_worker), \
+             patch.object(time, "monotonic", side_effect=lambda: clock[0]), \
              redirect_stdout(StringIO()):
             assert run(args) == 1
         retained = json.loads(result_path(base, args).read_text())
@@ -1378,11 +1680,106 @@ println("PASS admitted version arguments construct real Pkg specifications")
             assert run(args) == 1
         retained = json.loads(result_path(base, args).read_text())
         assert retained["workers"][0]["reason"] == "worker did not retain a receipt for this invocation"
+        # A completed failing worker must not hide the remaining outer checks.
+        continuation_args = SimpleNamespace(**(vars(args) | dict(tier="all")))
+        continuation_plan = [("mid-case", [], 10, "unit"), ("outer-case", [], 60, "outer")]
+        admitted = []
+        def completed_failure(name, argv, **kwargs):
+            admitted.append(name)
+            invocation = argv[argv.index("--invocation") + 1]
+            case = "mid-case" if name == "mid" else "outer-case"
+            status = "FAIL" if name == "mid" else "PASS"
+            worker_args = SimpleNamespace(**(vars(continuation_args) | dict(worker_phase=name)))
+            result_path(base, worker_args, worker=True).write_text(json.dumps(dict(
+                invocation=invocation, source_digest=metadata["source_digest"], status=status,
+                phases=[dict(name=case, status=status, seconds=0.01, started=True,
+                             direct_child_reaped=True)],
+                active_phase=None, active_phases=[], pending_phases=[], planned_phases=[case],
+            )))
+            return dict(name=name, status=status, seconds=0.01, direct_child_reaped=True)
+        with patch(__name__ + ".command_plan", return_value=continuation_plan), \
+             patch(__name__ + ".phase", side_effect=completed_failure), \
+             redirect_stdout(StringIO()):
+            assert run(continuation_args) == 1
+        retained = json.loads(result_path(base, continuation_args).read_text())
+        assert admitted == ["mid", "outer"], "completed mid failure suppressed outer checks"
+        assert retained["loops"]["mid"]["complete"]
+        assert retained["loops"]["outer"]["complete"] and retained["status"] == "FAIL"
+        admitted.clear()
+        def contradictory_worker(*call_args, **kwargs):
+            answer = completed_failure(*call_args, **kwargs)
+            answer["status"] = "PASS"
+            return answer
+        with patch(__name__ + ".command_plan", return_value=continuation_plan), \
+             patch(__name__ + ".phase", side_effect=contradictory_worker), \
+             redirect_stdout(StringIO()):
+            assert run(continuation_args) == 1
+        retained = json.loads(result_path(base, continuation_args).read_text())
+        assert admitted == ["mid", "outer"] and retained["loops"]["mid"]["complete"]
+        assert retained["status"] == "FAIL" and retained["phases"][0]["status"] == "FAIL"
+        for invalid in ("stale", "stale-source", "incomplete", "unretired", "malformed",
+                        "missing-active", "malformed-active", "missing-pending", "malformed-plan"):
+            admitted.clear()
+            def stopped_worker(name, argv, **kwargs):
+                answer = completed_failure(name, argv, **kwargs)
+                worker_args = SimpleNamespace(**(vars(continuation_args) | dict(worker_phase=name)))
+                receipt = result_path(base, worker_args, worker=True)
+                details = json.loads(receipt.read_text())
+                if invalid == "stale":
+                    details["invocation"] = "older-invocation"
+                elif invalid == "stale-source":
+                    details["source_digest"] = "other-source"
+                elif invalid == "incomplete":
+                    details.update(active_phase="mid-case", phases=[])
+                elif invalid == "unretired":
+                    answer["cleanup_status"] = "UNRETIRED"
+                elif invalid == "missing-active":
+                    details.pop("active_phase")
+                elif invalid == "malformed-active":
+                    details["active_phase"] = []
+                elif invalid == "missing-pending":
+                    details.pop("pending_phases")
+                elif invalid == "malformed-plan":
+                    details["planned_phases"] = [dict(name="mid-case")]
+                receipt.write_text("{" if invalid == "malformed" else json.dumps(details))
+                return answer
+            with patch(__name__ + ".command_plan", return_value=continuation_plan), \
+                 patch(__name__ + ".phase", side_effect=stopped_worker), \
+                 redirect_stdout(StringIO()):
+                assert run(continuation_args) == 1
+            retained = json.loads(result_path(base, continuation_args).read_text())
+            assert admitted == ["mid"] and not retained["loops"]["mid"]["complete"], invalid
+            assert retained["loops"]["outer"]["status"] == "NOT RUN" and retained["status"] == "FAIL"
+            if invalid in ("missing-active", "malformed-active", "missing-pending", "malformed-plan"):
+                assert retained["phases"][0]["status"] == "FAIL", "known source-bound failure was lost"
+        admitted.clear()
+        clock = [0.0]
+        def delayed_supervisor(*call_args, **kwargs):
+            answer = completed_failure(*call_args, **kwargs)
+            clock[0] = 181.0
+            return answer
+        with patch(__name__ + ".command_plan", return_value=continuation_plan), \
+             patch(__name__ + ".phase", side_effect=delayed_supervisor), \
+             patch.object(time, "monotonic", side_effect=lambda: clock[0]), \
+             redirect_stdout(StringIO()):
+            assert run(continuation_args) == 1
+        retained = json.loads(result_path(base, continuation_args).read_text())
+        assert admitted == ["mid"] and retained["loops"]["outer"]["status"] == "NOT RUN"
+        assert retained["phases"][-1]["status"] == "NOT RUN" and not retained["phases"][-1]["started"]
+        for runner in (parallel_mid, parallel_outer):
+            expired_result = dict(phases=[])
+            with patch(__name__ + ".phase") as launch:
+                runner(continuation_plan, stage=base, env={}, result=expired_result,
+                       save=lambda: None, deadline=time.monotonic() - 1)
+                launch.assert_not_called()
+            assert len(expired_result["phases"]) == 2
+            assert all(item["status"] == "NOT RUN" and not item["started"] for item in expired_result["phases"])
         def interrupted_worker(name, argv, **kwargs):
             complete_worker(name, argv, **kwargs)
             worker_args = SimpleNamespace(**(vars(args) | dict(worker_phase=name)))
             receipt = result_path(base, worker_args, worker=True)
             details = json.loads(receipt.read_text())
+            details["phases"] = details["phases"][:1]
             details["phases"][0]["status"] = "FAIL"
             details["active_phase"] = "second"
             details["active_phases"] = ["second"]
@@ -1448,10 +1845,13 @@ def main():
     execution.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     execution.add_argument("--worker-phase", choices=("mid", "outer"), help=argparse.SUPPRESS)
     execution.add_argument("--invocation", help=argparse.SUPPRESS)
+    execution.add_argument("--deadline", type=float, help=argparse.SUPPRESS)
     for option in ("julia", "tmux", "os", "arch"):
         execution.add_argument(f"--expected-{option}")
     args = parser.parse_args()
     try:
+        if getattr(args, "deadline", None) is not None and (not math.isfinite(args.deadline) or args.deadline <= 0):
+            raise ValueError("worker deadline must be finite and positive")
         if args.command == "matrix":
             cells = qa_cells()
             if args.split:
