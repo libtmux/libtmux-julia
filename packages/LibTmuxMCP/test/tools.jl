@@ -86,6 +86,27 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
             @test LibTmuxMCP._tool_error(failure, true)["effects"] == "possible"
             @test LibTmuxMCP._tool_error(failure, false)["effects"] == "none"
         end
+        @testset "cancelled expired calls preserve admission" begin
+            token = CancellationToken()
+            cancel!(token)
+            for admitted in (false, true)
+                effects = Ref(admitted)
+                context = LibTmuxMCP._ToolContext(
+                    time_ns() - UInt64(1_000_000_000),
+                    0.1,
+                    token,
+                    identity,
+                    effects,
+                )
+                failure = try
+                    LibTmuxMCP._tool_kwargs(context)
+                catch error
+                    error
+                end
+                @test failure isa RequestCancelled
+                @test effects[] === admitted
+            end
+        end
     end
 
     @testset "MCP application catalog is pure and policy is copied" begin
