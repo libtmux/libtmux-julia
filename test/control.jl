@@ -379,5 +379,73 @@
             @test_throws StaleReference LibTmux.open_control(server, stale)
             @test run_command(server, "has-session", "-t", string(session.id)).exitcode == 0
         end
+
+        @testset "opening interruptions retain typed errors" begin
+            mktempdir(; prefix="ltj-control-open-") do directory
+                socket = joinpath(directory, "s")
+                shim = joinpath(directory, "tmux")
+                write(
+                    shim,
+                    "#!/bin/sh\nprintf '%s\\n' \"\$\$\" > \"\$LTJ_CONTROL_OPEN_PID\"\nexec /bin/cat\n",
+                )
+                chmod(shim, 0o700)
+                identity = ServerIdentity(; socket_path=socket, generation="opening-probe")
+                session = SessionRef(identity, "\$0")
+                server = Server(; socket_path=socket, tmux=shim)
+                pidfile = joinpath(directory, "deadline-pid")
+                withenv(
+                    "TMUX"=>nothing,
+                    "TMUX_PANE"=>nothing,
+                    "LTJ_CONTROL_OPEN_PID"=>pidfile,
+                ) do
+                    @test_throws DeadlineExceeded open_control(
+                        server,
+                        session;
+                        timeout=0.05,
+                    )
+                end
+                pid = parse(Int, strip(read(pidfile, String)))
+                # ESRCH is 3 on the supported Linux/macOS hosts; EPERM is not retirement.
+                @test ccall(:kill, Cint, (Cint, Cint), pid, 0) == -1 &&
+                      Base.Libc.errno() == 3
+
+                pidfile = joinpath(directory, "cancel-pid")
+                monitor = OwnedTmux.FolderMonitor(directory)
+                token = CancellationToken()
+                watcher = Threads.@spawn begin
+                    while !ispath(pidfile) || filesize(pidfile) == 0
+                        wait(monitor)
+                    end
+                    cancel!(token)
+                end
+                timer, timer_task = LibTmux._owned_timer(0.9) do
+                    close(monitor)
+                end
+                try
+                    withenv(
+                        "TMUX"=>nothing,
+                        "TMUX_PANE"=>nothing,
+                        "LTJ_CONTROL_OPEN_PID"=>pidfile,
+                    ) do
+                        @test_throws RequestCancelled open_control(
+                            server,
+                            session;
+                            timeout=0.9,
+                            cancel=token,
+                        )
+                    end
+                    wait(watcher)
+                    pid = parse(Int, strip(read(pidfile, String)))
+                    @test ccall(:kill, Cint, (Cint, Cint), pid, 0) == -1 &&
+                          Base.Libc.errno() == 3
+                finally
+                    close(timer)
+                    wait(timer_task)
+                    close(monitor)
+                    wait(watcher)
+                end
+                @test !ispath(socket)
+            end
+        end
     end
 end
