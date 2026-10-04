@@ -1,7 +1,12 @@
 @testset "configuration scopes and values" begin
     with_tmux() do fixture
         server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-        session_ref = new_session(server; name="configuration", command=["/bin/cat"])
+        session_ref = new_session(
+            server;
+            name="configuration",
+            command=["/bin/cat"],
+            timeout=HANG_GUARD,
+        )
         captured = snapshot(server)
         window_ref = only(windows(captured)).ref
         pane_ref = only(panes(captured)).ref
@@ -85,7 +90,7 @@
         @test all(h -> h.inherited, hooks)
         @test occursin("@hook-first", hooks[1].command)
         @test LibTmux.get_option(server, :global_session, "@hook-first") === nothing
-        new_window(server, session_ref; command=["/bin/cat"])
+        new_window(server, session_ref; command=["/bin/cat"], timeout=HANG_GUARD)
         @test LibTmux.get_option(server, :global_session, "@hook-first") ==
               "literal #{pane_id};"
         @test LibTmux.get_option(server, :global_session, "@hook-second") == "second"

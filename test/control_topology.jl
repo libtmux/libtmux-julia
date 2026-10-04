@@ -6,8 +6,13 @@
     if admitted
         with_tmux() do fixture
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-            anchor = new_session(server; name="control-topology", command=["/bin/cat"])
-            open_control(server, anchor) do connection
+            anchor = new_session(
+                server;
+                name="control-topology",
+                command=["/bin/cat"],
+                timeout=HANG_GUARD,
+            )
+            open_control(server, anchor; timeout=HANG_GUARD) do connection
                 field(target, name) =
                     only(read_formats(connection, target, FormatField(name))).value
                 graph = snapshot(connection)
@@ -44,6 +49,7 @@
                     connection;
                     name="beta-#{literal};雪;",
                     command=["/bin/cat"],
+                    timeout=HANG_GUARD,
                 )
                 @test beta_session.server == connection.identity
                 @test field(beta_session, "session_name") == "beta-#{literal};雪;"
@@ -69,6 +75,7 @@
                     first_pane;
                     direction=:right,
                     command=["/bin/cat"],
+                    timeout=HANG_GUARD,
                 )
                 resize_pane(connection, first_pane; width=30)
                 @test field(first_pane, "pane_width") == "30"
@@ -144,6 +151,7 @@
                     sibling;
                     kill_running=true,
                     command=["/bin/cat"],
+                    timeout=HANG_GUARD,
                 ) isa ControlResult
                 @test respawn_window(
                     connection,
@@ -173,9 +181,15 @@
                     connection,
                     PaneRef(connection.identity, "%999999"),
                 )
-                extra = new_window(connection, anchor; command=["/bin/cat"])
+                extra =
+                    new_window(connection, anchor; command=["/bin/cat"], timeout=HANG_GUARD)
                 extra_pane = PaneRef(connection.identity, field(extra, "pane_id"))
-                killed = split_window(connection, extra_pane; command=["/bin/cat"])
+                killed = split_window(
+                    connection,
+                    extra_pane;
+                    command=["/bin/cat"],
+                    timeout=HANG_GUARD,
+                )
                 @test kill_pane(connection, killed) isa ControlResult
                 @test kill_window(connection, extra) isa ControlResult
                 @test kill_session(connection, beta_session) isa ControlResult

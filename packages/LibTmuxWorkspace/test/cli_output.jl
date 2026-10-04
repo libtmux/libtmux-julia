@@ -56,7 +56,7 @@ end
             run_before_script(
                 command;
                 base_directory=directory,
-                timeout=30.0,
+                timeout=HANG_GUARD,
                 cancel=owner.cancel,
                 on_output=(stream, bytes) -> notify(script_ready),
             )

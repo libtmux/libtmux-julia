@@ -124,7 +124,12 @@ end
 
 @testset "installed workspace launcher uses a named owned socket" begin
     NamedTmux.with_named_tmux() do fixture
-        LibTmux.new_session(fixture.server; name="borrowed", command=["/bin/cat"])
+        LibTmux.new_session(
+            fixture.server;
+            name="borrowed",
+            command=["/bin/cat"],
+            timeout=HANG_GUARD,
+        )
         @test only(LibTmux.sessions(LibTmux.snapshot(fixture.server))).name == "borrowed"
         launcher = install_cli(
             joinpath(fixture.directory, "bin");

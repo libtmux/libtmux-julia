@@ -1,6 +1,6 @@
 function await_observation(predicate, connection, message)
     expired = Ref(false)
-    timer, task = LibTmux._owned_timer(30.0) do
+    timer, task = LibTmux._owned_timer(HANG_GUARD) do
         lock(connection.lock) do
             expired[] = true
             notify(connection.changed; all=true)
@@ -21,7 +21,7 @@ end
 
 Base.@noinline function drop_format_observation(connection, pane)
     stream = LibTmux.subscribe_format(connection, pane, "pane_dead")
-    take!(stream; timeout=2.0)
+    take!(stream; timeout=HANG_GUARD)
     lock(() -> connection.submitted, connection.lock)
 end
 
@@ -36,9 +36,10 @@ end
         isdefined(Main, :OwnedTmux) || include("support/owned_tmux.jl")
         OwnedTmux.with_tmux() do fixture
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-            session = new_session(server; name="observation", command=["cat"])
+            session =
+                new_session(server; name="observation", command=["cat"], timeout=HANG_GUARD)
             pane = only(panes(snapshot(server))).ref
-            connection = open_control(server, session)
+            connection = open_control(server, session; timeout=HANG_GUARD)
             beginning = nothing
             try
                 names = (Symbol("pane-mode-changed"),)
@@ -99,7 +100,7 @@ end
                 send_keys(server, pane, String(copy(wanted)); literal=true)
                 got = UInt8[]
                 while length(got) < length(wanted)
-                    append!(got, take!(output; timeout=30.0).bytes)
+                    append!(got, take!(output; timeout=HANG_GUARD).bytes)
                 end
                 @test got == wanted
                 position = LibTmux.observation_cursor(output)
@@ -126,8 +127,8 @@ end
 
                 reset = LibTmux.observe_output(connection, pane)
                 before_reset = LibTmux.observation_cursor(reset)
-                split_window(server, pane; command=["cat"])
-                @test_throws LibTmux.ObservationLost take!(reset; timeout=30.0)
+                split_window(server, pane; command=["cat"], timeout=HANG_GUARD)
+                @test_throws LibTmux.ObservationLost take!(reset; timeout=HANG_GUARD)
                 close(reset)
                 @test_throws LibTmux.ObservationLost LibTmux.observe_output(
                     connection,
@@ -138,19 +139,25 @@ end
                 # The real format-subscription cadence is approximately one
                 # second; this belongs to integration, not the pure inner tier.
                 format = LibTmux.subscribe_format(connection, pane, "pane_dead")
-                update = take!(format; timeout=2.0)
+                update = take!(format; timeout=HANG_GUARD)
                 @test update isa LibTmux.FormatUpdate && update.bytes == codeunits("0")
                 @test update.session == session &&
                       update.pane == pane &&
                       update.window_index == 0
                 set_option(server, pane, "remain-on-exit", "on")
-                respawn_pane(server, pane; kill_running=true, command=["true"])
-                @test take!(format; timeout=2.0).bytes == codeunits("1")
+                respawn_pane(
+                    server,
+                    pane;
+                    kill_running=true,
+                    command=["true"],
+                    timeout=HANG_GUARD,
+                )
+                @test take!(format; timeout=HANG_GUARD).bytes == codeunits("1")
                 close(format)
                 @test format.cleanup_done
 
                 dropped = LibTmux.subscribe_format(connection, pane, "pane_dead")
-                @test take!(dropped; timeout=2.0) isa LibTmux.FormatUpdate
+                @test take!(dropped; timeout=HANG_GUARD) isa LibTmux.FormatUpdate
                 cleanup_before = lock(() -> connection.submitted, connection.lock)
                 lock(connection.lock) do
                     Base.finalize(dropped)
@@ -225,7 +232,7 @@ end
                 close(connection)
             end
             @test istaskdone(connection.observation.worker)
-            lost = open_control(server, session)
+            lost = open_control(server, session; timeout=HANG_GUARD)
             try
                 @test_throws LibTmux.ObservationLost LibTmux.notifications(
                     lost;
@@ -233,7 +240,7 @@ end
                 )
                 events = LibTmux.notifications(lost)
                 kill(lost.process, Base.SIGKILL)
-                @test_throws LibTmux.ObservationLost take!(events; timeout=30.0)
+                @test_throws LibTmux.ObservationLost take!(events; timeout=HANG_GUARD)
             finally
                 close(lost)
             end

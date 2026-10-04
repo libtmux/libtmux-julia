@@ -49,7 +49,7 @@ end
                 Dict{String,String}(),
                 token,
                 time_ns(),
-                0.9;
+                HANG_GUARD;
                 _cancel_subscribe=subscribe,
             )
         catch error

@@ -6,7 +6,8 @@
         end
         OwnedTmux.with_tmux() do fixture
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-            session = new_session(server; name="control", command=["cat"])
+            session =
+                new_session(server; name="control", command=["cat"], timeout=HANG_GUARD)
             @test_throws ArgumentError LibTmux.open_control(
                 server,
                 session;
@@ -14,7 +15,8 @@
             )
             @test_throws ArgumentError LibTmux.open_control(server, session; capacity=true)
             @test isempty(run_command(server, "list-clients", "-F", "#{client_pid}").stdout)
-            connection = LibTmux.open_control(server, session; capacity=1)
+            connection =
+                LibTmux.open_control(server, session; capacity=1, timeout=HANG_GUARD)
             try
                 @test isopen(connection)
                 @test repr(connection) ==
@@ -185,10 +187,10 @@
             close(connection)
             @test run_command(server, "has-session", "-t", string(session.id)).exitcode == 0
 
-            closing = LibTmux.open_control(server, session; capacity=1)
+            closing = LibTmux.open_control(server, session; capacity=1, timeout=HANG_GUARD)
             signal = LibTmux.control_signal(closing)
             blocked = Threads.@spawn try
-                wait(signal)
+                wait(signal; timeout=HANG_GUARD)
             catch error
                 error
             end
@@ -207,7 +209,7 @@
                 String(run_command(server, "list-clients", "-F", "#{client_pid}").stdout),
             )
 
-            lost = LibTmux.open_control(server, session)
+            lost = LibTmux.open_control(server, session; timeout=HANG_GUARD)
             kill(lost.process, Base.SIGKILL)
             wait(lost.supervisor)
             wait(lost.cleanup.supervisor)
@@ -218,7 +220,7 @@
             interrupted_signal = nothing
             cleanup_before = 0
             combined = try
-                LibTmux.open_control(server, session) do owned
+                LibTmux.open_control(server, session; timeout=HANG_GUARD) do owned
                     interrupted = owned
                     interrupted_signal = LibTmux.control_signal(owned)
                     interrupted_wait = Threads.@spawn try
@@ -250,7 +252,7 @@
             @test process_exited(interrupted.cleanup.process)
             @test istaskdone(interrupted.cleanup_worker)
 
-            hooked = LibTmux.open_control(server, session)
+            hooked = LibTmux.open_control(server, session; timeout=HANG_GUARD)
             try
                 run_command(
                     server,
@@ -270,7 +272,8 @@
             end
             @test !isopen(hooked)
 
-            concurrent = LibTmux.open_control(server, session; capacity=4)
+            concurrent =
+                LibTmux.open_control(server, session; capacity=4, timeout=HANG_GUARD)
             try
                 jobs = map(1:8) do index
                     Threads.@spawn begin
@@ -293,7 +296,7 @@
                 earlier, later =
                     LibTmux.control_signal(concurrent), LibTmux.control_signal(concurrent)
                 first_wait = Threads.@spawn try
-                    wait(earlier; timeout=30.0)
+                    wait(earlier; timeout=HANG_GUARD)
                 catch error
                     error
                 end
@@ -303,7 +306,7 @@
                     end
                 end
                 second_wait = Threads.@spawn try
-                    wait(later; timeout=30.0)
+                    wait(later; timeout=HANG_GUARD)
                 catch error
                     error
                 end
@@ -361,7 +364,7 @@
                     @test isempty(stream.queue)
                     run_command(server, "rename-window", "-t", window, "after-registration")
                     @test endswith(
-                        String(take!(stream; timeout=30.0).bytes),
+                        String(take!(stream; timeout=HANG_GUARD).bytes),
                         " after-registration",
                     )
                 end

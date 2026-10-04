@@ -13,7 +13,7 @@ end
 
 @testset "owned server lifecycle" begin
     tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
-    owned = LibTmux.open_server(; tmux, env=lifecycle_environment())
+    owned = LibTmux.open_server(; tmux, env=lifecycle_environment(), timeout=HANG_GUARD)
     process = getfield(owned, :_process)
     directory = dirname(owned.server.socket_path)
     try
@@ -54,7 +54,11 @@ end
     @test close(owned) === nothing
 
     endpoint = Ref{Server}()
-    result = LibTmux.with_server(; tmux, env=lifecycle_environment()) do server
+    result = LibTmux.with_server(;
+        tmux,
+        env=lifecycle_environment(),
+        timeout=HANG_GUARD,
+    ) do server
         endpoint[] = server
         new_session(server; name="owned", command=["/bin/cat"])
         :completed
@@ -62,7 +66,7 @@ end
     @test result === :completed && !ispath(dirname(endpoint[].socket_path))
     sentinel = ErrorException("body failed")
     failure = try
-        LibTmux.with_server(; tmux, env=lifecycle_environment()) do server
+        LibTmux.with_server(; tmux, env=lifecycle_environment(), timeout=HANG_GUARD) do server
             endpoint[] = server
             throw(sentinel)
         end
@@ -72,13 +76,13 @@ end
     @test failure === sentinel
     @test !ispath(dirname(endpoint[].socket_path))
 
-    owned = LibTmux.open_server(; tmux, env=lifecycle_environment())
+    owned = LibTmux.open_server(; tmux, env=lifecycle_environment(), timeout=HANG_GUARD)
     tasks = [Threads.@spawn(close(owned)) for _ = 1:4]
     @test all(task -> fetch(task) === nothing, tasks)
     @test process_exited(getfield(owned, :_process)) &&
           !ispath(dirname(owned.server.socket_path))
 
-    owned = LibTmux.open_server(; tmux, env=lifecycle_environment())
+    owned = LibTmux.open_server(; tmux, env=lifecycle_environment(), timeout=HANG_GUARD)
     directory = dirname(owned.server.socket_path)
     try
         write(joinpath(directory, "owner"), "replaced-marker")
@@ -124,7 +128,11 @@ end
             write(executable, "#!/bin/sh\nprintf 'startup diagnostic' >&2\nexit 7\n")
             chmod(executable, 0o700)
             failure = try
-                LibTmux.open_server(tmux=executable, env=lifecycle_environment())
+                LibTmux.open_server(
+                    tmux=executable,
+                    env=lifecycle_environment();
+                    timeout=HANG_GUARD,
+                )
             catch error
                 error
             end
@@ -135,7 +143,11 @@ end
 
             write(executable, "#!/bin/sh\nprintf '%070000d' 0 >&2\nexit 7\n")
             failure = try
-                LibTmux.open_server(tmux=executable, env=lifecycle_environment())
+                LibTmux.open_server(
+                    tmux=executable,
+                    env=lifecycle_environment();
+                    timeout=HANG_GUARD,
+                )
             catch error
                 error
             end
@@ -162,7 +174,12 @@ end
             )
             token = CancellationToken()
             operation = Threads.@spawn try
-                LibTmux.open_server(tmux=executable, env=environment, cancel=token)
+                LibTmux.open_server(
+                    tmux=executable,
+                    env=environment,
+                    cancel=token;
+                    timeout=HANG_GUARD,
+                )
             catch error
                 error
             end
@@ -199,7 +216,7 @@ end
 if get(ENV, "LIBTMUX_TEST_LIFECYCLE_ESCALATION", "0") == "1"
     @testset "owned lifecycle forced cleanup" begin
         tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
-        owned = LibTmux.open_server(; tmux, env=lifecycle_environment())
+        owned = LibTmux.open_server(; tmux, env=lifecycle_environment(), timeout=HANG_GUARD)
         process = getfield(owned, :_process)
         directory = dirname(owned.server.socket_path)
         try
@@ -217,7 +234,11 @@ if get(ENV, "LIBTMUX_TEST_LIFECYCLE_ESCALATION", "0") == "1"
         sentinel = ErrorException("body failed before forced cleanup")
         endpoint = Ref{Server}()
         failure = try
-            LibTmux.with_server(; tmux, env=lifecycle_environment()) do server
+            LibTmux.with_server(;
+                tmux,
+                env=lifecycle_environment(),
+                timeout=HANG_GUARD,
+            ) do server
                 endpoint[] = server
                 pid = parse(
                     Int,

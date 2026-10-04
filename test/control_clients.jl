@@ -6,10 +6,19 @@
     if admitted
         with_tmux() do fixture
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-            anchor = new_session(server; name="client-anchor", command=["/bin/cat"])
-            destination =
-                new_session(server; name="client-destination", command=["/bin/cat"])
-            open_control(server, anchor) do connection
+            anchor = new_session(
+                server;
+                name="client-anchor",
+                command=["/bin/cat"],
+                timeout=HANG_GUARD,
+            )
+            destination = new_session(
+                server;
+                name="client-destination",
+                command=["/bin/cat"],
+                timeout=HANG_GUARD,
+            )
+            open_control(server, anchor; timeout=HANG_GUARD) do connection
                 identity = connection.identity
                 unknown = ClientRef(identity, ClientID("unknown", "1:1"))
                 stale = ClientRef(
@@ -85,7 +94,7 @@
                 )
                 close(input_pipe.out)
                 try
-                    run_command(server, "wait-for", "client-ready"; timeout=30.0)
+                    run_command(server, "wait-for", "client-ready"; timeout=HANG_GUARD)
                     graph = snapshot(connection)
                     client = only(filter(c -> c.pid == getpid(victim), clients(graph))).ref
                     old = ClientRef(identity, ClientID(client.id.name, "stale"))

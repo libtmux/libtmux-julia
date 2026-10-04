@@ -4,8 +4,10 @@
     if isdefined(LibTmux, :WindowLinkRef) && isdefined(LibTmux, :move_pane)
         with_tmux() do fixture
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-            alpha = new_session(server; name="alpha", command=["/bin/cat"])
-            beta = new_session(server; name="beta", command=["/bin/cat"])
+            alpha =
+                new_session(server; name="alpha", command=["/bin/cat"], timeout=HANG_GUARD)
+            beta =
+                new_session(server; name="beta", command=["/bin/cat"], timeout=HANG_GUARD)
             initial = snapshot(server)
             alpha_link = LibTmux.WindowLinkRef(
                 only(windowlinks(only(filter(s -> s.ref == alpha, sessions(initial))))),
@@ -64,7 +66,13 @@
             @test field(alpha_link.window, "window_name") == "window-#{literal};"
             LibTmux.resize_window(server, alpha_link.window; width=100, height=40)
             @test field(alpha_link.window, "window_width") == "100"
-            sibling = split_window(server, source; direction=:right, command=["/bin/cat"])
+            sibling = split_window(
+                server,
+                source;
+                direction=:right,
+                command=["/bin/cat"],
+                timeout=HANG_GUARD,
+            )
             LibTmux.resize_pane(server, source; width=30)
             @test field(source, "pane_width") == "30"
             LibTmux.move_pane(server, sibling, destination; direction=:right, size=20)
@@ -82,7 +90,13 @@
                 sibling;
                 command=["/bin/cat"],
             )
-            LibTmux.respawn_pane(server, sibling; kill_running=true, command=["/bin/cat"])
+            LibTmux.respawn_pane(
+                server,
+                sibling;
+                kill_running=true,
+                command=["/bin/cat"],
+                timeout=HANG_GUARD,
+            )
             @test field(sibling, "pane_id") == string(sibling.id)
             LibTmux.respawn_window(
                 server,
@@ -157,7 +171,7 @@
             )
             close(input_pipe.out)
             try
-                run_command(server, "wait-for", "client-attached"; timeout=30.0)
+                run_command(server, "wait-for", "client-attached"; timeout=HANG_GUARD)
                 client = only(clients(snapshot(server))).ref
                 old_client = ClientRef(client.server, ClientID(client.id.name, "stale"))
                 @test_throws StaleReference LibTmux.detach_client(server, old_client)
