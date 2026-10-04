@@ -9,6 +9,8 @@ and program links. It does not establish runtime correctness.
 | [README.md](../README.md) (1) | executable | owned-context runner | Private server, captured screen and retained snapshot |
 | [README.md](../README.md) (2) | executable | owned-context runner | Captured predicates without a live daemon |
 | [README.md](../README.md) (3) | executable | owned-context runner | Task-based captures and scoped control cleanup |
+| [WRITING.md](../WRITING.md) (1) | illustrative | exact snippet not executed | Writing guide: the over-width line to avoid |
+| [WRITING.md](../WRITING.md) (2) | illustrative | exact snippet not executed | Writing guide: the named-value rewrite |
 | [docs/criteria-wire.md](../docs/criteria-wire.md) (1) | executable | snippet doctests | Pure criteria wire round trip |
 | [docs/criteria-wire.md](../docs/criteria-wire.md) (2) | executable | snippet doctests | JSON 1.9 criteria codec round trip |
 | [docs/projections.md](../docs/projections.md) (1) | executable | owned-context runner | Owned snapshot passed to pane_rows |
