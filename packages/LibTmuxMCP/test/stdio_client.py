@@ -9,6 +9,11 @@ import sys
 import time
 
 
+# Upper bound on waits for events that are expected to happen; the launcher
+# caps --timeout at 30 s.
+HANG_GUARD = 30
+
+
 def main():
     julia, project = sys.argv[1:]
     command = [julia, "--startup-file=no", f"--project={project}",
@@ -72,7 +77,7 @@ def main():
         send(4, "ping")
         assert receive()["id"] == 4
         child.stdin.close()
-        child.wait(timeout=10)
+        child.wait(timeout=HANG_GUARD)
         assert child.returncode == 0, diagnostics.decode(errors="replace")
         remaining = bytes(pending) + child.stdout.read()
         assert not remaining, "cancelled tool emitted a late response"

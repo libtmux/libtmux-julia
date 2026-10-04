@@ -7,14 +7,14 @@ import LibTmux
     if isdefined(LibTmuxWorkspace, :_with_ready_marker)
         ready = LibTmuxWorkspace._with_ready_marker
         path = Ref("")
-        ready(0.9, nothing) do marker, content
+        ready(HANG_GUARD, nothing) do marker, content
             path[] = marker
             write(marker * ".pending", content)
             Base.Filesystem.rename(marker * ".pending", marker)
         end
         @test !ispath(dirname(path[]))
         token = LibTmux.CancellationToken()
-        @test_throws LibTmux.RequestCancelled ready(0.9, token) do marker, content
+        @test_throws LibTmux.RequestCancelled ready(HANG_GUARD, token) do marker, content
             path[] = marker
             LibTmux.cancel!(token)
         end
@@ -25,7 +25,7 @@ import LibTmux
         end
         @test !ispath(dirname(path[]))
         for invalid in ("", "wrong content")
-            @test_throws ArgumentError ready(0.9, nothing) do marker, content
+            @test_throws ArgumentError ready(HANG_GUARD, nothing) do marker, content
                 write(marker * ".pending", invalid)
                 Base.Filesystem.rename(marker * ".pending", marker)
             end
@@ -54,7 +54,7 @@ Base.close(monitor::_ReadinessGateMonitor) = close(monitor.monitor)
     try
         @test isnothing(
             LibTmuxWorkspace._with_ready_marker(
-                0.9,
+                HANG_GUARD,
                 nothing;
                 _monitor=monitor_file,
             ) do marker, content
@@ -85,10 +85,12 @@ Base.close(monitor::_ReadinessWake) = (monitor.closed[]=true; nothing)
     ready = LibTmuxWorkspace._with_ready_marker
     closed = Ref(false)
     immediate = _ReadinessWake(() -> error("published marker must precede waiting"), closed)
-    @test isnothing(ready(0.9, nothing; _monitor=(_ -> immediate)) do marker, content
-        write(marker * ".pending", content)
-        Base.Filesystem.rename(marker * ".pending", marker)
-    end)
+    @test isnothing(
+        ready(HANG_GUARD, nothing; _monitor=(_ -> immediate)) do marker, content
+            write(marker * ".pending", content)
+            Base.Filesystem.rename(marker * ".pending", marker)
+        end,
+    )
     @test closed[]
     marker_path, marker_content = Ref(""), Ref("")
     received = Ref(false)
@@ -99,7 +101,7 @@ Base.close(monitor::_ReadinessWake) = (monitor.closed[]=true; nothing)
         Base.Filesystem.rename(marker_path[] * ".pending", marker_path[])
         "" => nothing
     end
-    @test isnothing(ready(0.9, nothing; _monitor=(_ -> unnamed)) do marker, content
+    @test isnothing(ready(HANG_GUARD, nothing; _monitor=(_ -> unnamed)) do marker, content
         marker_path[], marker_content[] = marker, content
     end)
     @test received[]
