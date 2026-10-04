@@ -771,8 +771,13 @@ function _open_control_lane(
             notify(connection.changed; all=true)
         end
         connection
-    catch
+    catch error
         _close_control_lane(connection)
+        if error isa ControlConnectionError
+            error.reason === :open_timeout &&
+                throw(DeadlineExceeded(budget, error.sent, nothing))
+            error.reason === :open_cancelled && throw(RequestCancelled(error.sent))
+        end
         rethrow()
     finally
         close(timer)
