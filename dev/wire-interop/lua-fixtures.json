@@ -1,0 +1,1099 @@
+{
+  "profile": "julia-owned-from-lua/v1",
+  "lua_revision": "c98a000354d7cef8e1db5160c3a700110896e509",
+  "codec_revision": "250afac121df831f449d6370ddf406673f6f9c2b",
+  "valid": [
+    {
+      "name": "false-is-value",
+      "entity": "pane",
+      "lua": {
+        "active": false
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.pane.active",
+              "match": {
+                "op": "eq",
+                "value": false
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "%2"
+      ]
+    },
+    {
+      "name": "captured-null",
+      "entity": "pane",
+      "lua": {
+        "current_command": null
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.pane.current_command",
+              "match": {
+                "op": "eq",
+                "value": null
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "%2"
+      ]
+    },
+    {
+      "name": "non-null",
+      "entity": "pane",
+      "lua": {
+        "current_command": {
+          "is_null": false
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.pane.current_command",
+              "match": {
+                "op": "ne",
+                "value": null
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "%1",
+        "%3"
+      ]
+    },
+    {
+      "name": "empty-criteria",
+      "entity": "pane",
+      "lua": {},
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "all",
+          "args": []
+        }
+      },
+      "expected": [
+        "%1",
+        "%2",
+        "%3"
+      ]
+    },
+    {
+      "name": "empty-AND",
+      "entity": "pane",
+      "lua": {
+        "AND": []
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "all",
+          "args": []
+        }
+      },
+      "expected": [
+        "%1",
+        "%2",
+        "%3"
+      ]
+    },
+    {
+      "name": "empty-OR",
+      "entity": "pane",
+      "lua": {
+        "OR": []
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "any",
+          "args": []
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "empty-NOT",
+      "entity": "pane",
+      "lua": {
+        "NOT": {}
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "not",
+          "arg": {
+            "op": "all",
+            "args": []
+          }
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "empty-membership",
+      "entity": "pane",
+      "lua": {
+        "title": {
+          "one_of": []
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.pane.title",
+              "match": {
+                "op": "in",
+                "values": []
+              }
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "empty-exclusion",
+      "entity": "pane",
+      "lua": {
+        "title": {
+          "none_of": []
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "not",
+          "arg": {
+            "op": "fields",
+            "fields": [
+              {
+                "field": "tmux.pane.title",
+                "match": {
+                  "op": "in",
+                  "values": []
+                }
+              }
+            ]
+          }
+        }
+      },
+      "expected": [
+        "%1",
+        "%2",
+        "%3"
+      ]
+    },
+    {
+      "name": "unicode-nul-literal",
+      "entity": "pane",
+      "lua": {
+        "title": {
+          "contains": "λ\u0000雪"
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.pane.title",
+              "match": {
+                "op": "contains",
+                "value": "λ\u0000雪",
+                "case": "sensitive"
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "%1"
+      ]
+    },
+    {
+      "name": "format-pattern-literal",
+      "entity": "pane",
+      "lua": {
+        "title": {
+          "ends_with": "#{pane_id}.*"
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.pane.title",
+              "match": {
+                "op": "endsWith",
+                "value": "#{pane_id}.*",
+                "case": "sensitive"
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "%1"
+      ]
+    },
+    {
+      "name": "numeric-order",
+      "entity": "pane",
+      "lua": {
+        "width": {
+          "gt": 99.5,
+          "lte": 120
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "all",
+          "args": [
+            {
+              "op": "fields",
+              "fields": [
+                {
+                  "field": "tmux.pane.width",
+                  "match": {
+                    "op": "gt",
+                    "value": 99.5
+                  }
+                }
+              ]
+            },
+            {
+              "op": "fields",
+              "fields": [
+                {
+                  "field": "tmux.pane.width",
+                  "match": {
+                    "op": "le",
+                    "value": 120
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": [
+        "%1",
+        "%2"
+      ]
+    },
+    {
+      "name": "numeric-safe-upper",
+      "entity": "pane",
+      "lua": {
+        "width": {
+          "eq": 9007199254740991
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.pane.width",
+              "match": {
+                "op": "eq",
+                "value": 9007199254740991
+              }
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "numeric-safe-lower",
+      "entity": "pane",
+      "lua": {
+        "width": {
+          "eq": -9007199254740991
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.pane.width",
+              "match": {
+                "op": "eq",
+                "value": -9007199254740991
+              }
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "boolean-composition",
+      "entity": "pane",
+      "lua": {
+        "OR": [
+          {
+            "active": false
+          },
+          {
+            "NOT": {
+              "width": {
+                "gte": 100
+              }
+            }
+          }
+        ]
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "any",
+          "args": [
+            {
+              "op": "fields",
+              "fields": [
+                {
+                  "field": "tmux.pane.active",
+                  "match": {
+                    "op": "eq",
+                    "value": false
+                  }
+                }
+              ]
+            },
+            {
+              "op": "not",
+              "arg": {
+                "op": "fields",
+                "fields": [
+                  {
+                    "field": "tmux.pane.width",
+                    "match": {
+                      "op": "ge",
+                      "value": 100
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "%2",
+        "%3"
+      ]
+    },
+    {
+      "name": "nullable-membership",
+      "entity": "pane",
+      "lua": {
+        "current_command": {
+          "one_of": [
+            null,
+            "nvim"
+          ]
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.pane.current_command",
+              "match": {
+                "op": "in",
+                "values": [
+                  null,
+                  "nvim"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "%1",
+        "%2"
+      ]
+    },
+    {
+      "name": "physical-window",
+      "entity": "pane",
+      "lua": {
+        "window": {
+          "is": {
+            "name": "API"
+          }
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.pane.window",
+              "match": {
+                "op": "is",
+                "where": {
+                  "op": "fields",
+                  "fields": [
+                    {
+                      "field": "tmux.window.name",
+                      "match": {
+                        "op": "eq",
+                        "value": "API"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "%1",
+        "%2"
+      ]
+    },
+    {
+      "name": "quantifier-some",
+      "entity": "window",
+      "lua": {
+        "panes": {
+          "some": {
+            "active": true
+          }
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "window",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.window.panes",
+              "match": {
+                "op": "anyRelated",
+                "where": {
+                  "op": "fields",
+                  "fields": [
+                    {
+                      "field": "tmux.pane.active",
+                      "match": {
+                        "op": "eq",
+                        "value": true
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "@1",
+        "@2"
+      ]
+    },
+    {
+      "name": "quantifier-every",
+      "entity": "window",
+      "lua": {
+        "panes": {
+          "every": {
+            "dead": false
+          }
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "window",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.window.panes",
+              "match": {
+                "op": "allRelated",
+                "where": {
+                  "op": "fields",
+                  "fields": [
+                    {
+                      "field": "tmux.pane.dead",
+                      "match": {
+                        "op": "eq",
+                        "value": false
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "@2",
+        "@3"
+      ]
+    },
+    {
+      "name": "quantifier-none",
+      "entity": "window",
+      "lua": {
+        "panes": {
+          "none": {
+            "dead": true
+          }
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "window",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.window.panes",
+              "match": {
+                "op": "noRelated",
+                "where": {
+                  "op": "fields",
+                  "fields": [
+                    {
+                      "field": "tmux.pane.dead",
+                      "match": {
+                        "op": "eq",
+                        "value": true
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "@2",
+        "@3"
+      ]
+    },
+    {
+      "name": "same-link-correlation-negative",
+      "entity": "window",
+      "lua": {
+        "window_links": {
+          "some": {
+            "index": 0,
+            "session": {
+              "is": {
+                "name": "ops"
+              }
+            }
+          }
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "window",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.window.windowlinks",
+              "match": {
+                "op": "anyRelated",
+                "where": {
+                  "op": "all",
+                  "args": [
+                    {
+                      "op": "fields",
+                      "fields": [
+                        {
+                          "field": "tmux.windowlink.index",
+                          "match": {
+                            "op": "eq",
+                            "value": 0
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "op": "fields",
+                      "fields": [
+                        {
+                          "field": "tmux.windowlink.session",
+                          "match": {
+                            "op": "is",
+                            "where": {
+                              "op": "fields",
+                              "fields": [
+                                {
+                                  "field": "tmux.session.name",
+                                  "match": {
+                                    "op": "eq",
+                                    "value": "ops"
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "same-link-correlation-positive",
+      "entity": "window",
+      "lua": {
+        "window_links": {
+          "some": {
+            "index": 4,
+            "session": {
+              "is": {
+                "name": "ops"
+              }
+            }
+          }
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "window",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.window.windowlinks",
+              "match": {
+                "op": "anyRelated",
+                "where": {
+                  "op": "all",
+                  "args": [
+                    {
+                      "op": "fields",
+                      "fields": [
+                        {
+                          "field": "tmux.windowlink.index",
+                          "match": {
+                            "op": "eq",
+                            "value": 4
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "op": "fields",
+                      "fields": [
+                        {
+                          "field": "tmux.windowlink.session",
+                          "match": {
+                            "op": "is",
+                            "where": {
+                              "op": "fields",
+                              "fields": [
+                                {
+                                  "field": "tmux.session.name",
+                                  "match": {
+                                    "op": "eq",
+                                    "value": "ops"
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "@1"
+      ]
+    },
+    {
+      "name": "independent-link-existentials",
+      "entity": "window",
+      "lua": {
+        "AND": [
+          {
+            "window_links": {
+              "some": {
+                "index": 0
+              }
+            }
+          },
+          {
+            "window_links": {
+              "some": {
+                "session": {
+                  "is": {
+                    "name": "ops"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "window",
+        "where": {
+          "op": "all",
+          "args": [
+            {
+              "op": "fields",
+              "fields": [
+                {
+                  "field": "tmux.window.windowlinks",
+                  "match": {
+                    "op": "anyRelated",
+                    "where": {
+                      "op": "fields",
+                      "fields": [
+                        {
+                          "field": "tmux.windowlink.index",
+                          "match": {
+                            "op": "eq",
+                            "value": 0
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "op": "fields",
+              "fields": [
+                {
+                  "field": "tmux.window.windowlinks",
+                  "match": {
+                    "op": "anyRelated",
+                    "where": {
+                      "op": "fields",
+                      "fields": [
+                        {
+                          "field": "tmux.windowlink.session",
+                          "match": {
+                            "op": "is",
+                            "where": {
+                              "op": "fields",
+                              "fields": [
+                                {
+                                  "field": "tmux.session.name",
+                                  "match": {
+                                    "op": "eq",
+                                    "value": "ops"
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": [
+        "@1"
+      ]
+    },
+    {
+      "name": "client-known-absence",
+      "entity": "client",
+      "lua": {
+        "session": {
+          "is": null
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "client",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.client.session",
+              "match": {
+                "op": "eq",
+                "value": null
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "client"
+      ]
+    },
+    {
+      "name": "client-absent-related-negation",
+      "entity": "client",
+      "lua": {
+        "session": {
+          "is_not": {
+            "name": "ops"
+          }
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "client",
+        "where": {
+          "op": "not",
+          "arg": {
+            "op": "fields",
+            "fields": [
+              {
+                "field": "tmux.client.session",
+                "match": {
+                  "op": "is",
+                  "where": {
+                    "op": "fields",
+                    "fields": [
+                      {
+                        "field": "tmux.session.name",
+                        "match": {
+                          "op": "eq",
+                          "value": "ops"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "expected": [
+        "client"
+      ]
+    },
+    {
+      "name": "shared-pane-fields",
+      "entity": "pane",
+      "lua": {
+        "id": "%1",
+        "index": 0,
+        "active": true,
+        "dead": false,
+        "width": 120,
+        "height": 30,
+        "current_command": "nvim",
+        "current_path": "/app",
+        "title": {
+          "starts_with": "λ"
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.pane.id",
+              "match": {
+                "op": "eq",
+                "value": "%1"
+              }
+            },
+            {
+              "field": "tmux.pane.index",
+              "match": {
+                "op": "eq",
+                "value": 0
+              }
+            },
+            {
+              "field": "tmux.pane.active",
+              "match": {
+                "op": "eq",
+                "value": true
+              }
+            },
+            {
+              "field": "tmux.pane.dead",
+              "match": {
+                "op": "eq",
+                "value": false
+              }
+            },
+            {
+              "field": "tmux.pane.width",
+              "match": {
+                "op": "eq",
+                "value": 120
+              }
+            },
+            {
+              "field": "tmux.pane.height",
+              "match": {
+                "op": "eq",
+                "value": 30
+              }
+            },
+            {
+              "field": "tmux.pane.current_command",
+              "match": {
+                "op": "eq",
+                "value": "nvim"
+              }
+            },
+            {
+              "field": "tmux.pane.current_path",
+              "match": {
+                "op": "eq",
+                "value": "/app"
+              }
+            },
+            {
+              "field": "tmux.pane.title",
+              "match": {
+                "op": "startsWith",
+                "value": "λ",
+                "case": "sensitive"
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "%1"
+      ]
+    },
+    {
+      "name": "boolean-inequality",
+      "entity": "pane",
+      "lua": {
+        "active": {
+          "ne": true
+        }
+      },
+      "julia": {
+        "schema": "libtmux.julia.where",
+        "version": 1,
+        "entity": "pane",
+        "where": {
+          "op": "fields",
+          "fields": [
+            {
+              "field": "tmux.pane.active",
+              "match": {
+                "op": "ne",
+                "value": true
+              }
+            }
+          ]
+        }
+      },
+      "expected": [
+        "%2"
+      ]
+    }
+  ]
+}

@@ -1,11 +1,27 @@
 using Test
 
+if get(ENV, "LIBTMUX_TEST_COMPILER_CACHE", "0") == "1"
+    import LibTmuxWorkspaceCheckCompiler
+end
+
 suite = isempty(ARGS) ? "unit" : only(ARGS)
 suite in ("unit", "integration", "cli", "all") || error("unknown workspace suite")
 if suite in ("unit", "all")
-    include("config.jl")
-    include("script.jl")
-    include("readiness.jl")
+    if isdefined(@__MODULE__, :LibTmuxWorkspaceCheckCompiler)
+        LibTmuxWorkspaceCheckCompiler.run_file("config")
+    else
+        include("config.jl")
+    end
+    if isdefined(@__MODULE__, :LibTmuxWorkspaceCheckCompiler)
+        LibTmuxWorkspaceCheckCompiler.run_file("script")
+    else
+        include("script.jl")
+    end
+    if isdefined(@__MODULE__, :LibTmuxWorkspaceCheckCompiler)
+        LibTmuxWorkspaceCheckCompiler.run_file("readiness")
+    else
+        include("readiness.jl")
+    end
     include("cli.jl")
     include("cli_signal.jl")
 end

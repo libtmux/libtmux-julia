@@ -4,6 +4,7 @@ version = "0.1.0-alpha.1"
 license = "MIT"
 
 [deps]
+SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 LibTmux = "1a5dcb9e-7968-44df-ad70-bf0a17628f09"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
@@ -11,6 +12,7 @@ ModelContextProtocol = "c58f755f-f2a7-4f48-bf29-4e9659b78499"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 
 [compat]
+SHA = "<0.0.1, 0.7, 1"
 Logging = "<0.0.1, 1"
 Test = "<0.0.1, 1"
 LibTmux = "0.1"

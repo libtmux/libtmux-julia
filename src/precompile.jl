@@ -54,14 +54,88 @@ if ccall(:jl_generating_output, Cint, ()) == 1
     precompile(Tuple{typeof(capture_bytes),ControlConnection,PaneRef})
     let identity = ServerIdentity(socket_path="/precompile/s", generation="1:1")
         rows = (
-            ss=[["\$0", "precompile", "2"]],
-            ws=[["@0", "window", "80", "24", "\$0", "0", "1"]],
-            ps=[["%0", "@0", "0", "1", "0", "80", "24", "cat", "/", "title"]],
+            ss=[["\$0", "precompile", "2", "1", "1", "1"]],
+            ws=[[
+                "@0",
+                "window",
+                "80",
+                "24",
+                "\$0",
+                "0",
+                "1",
+                "layout",
+                "visible",
+                "0",
+                "1",
+            ]],
+            ps=[[
+                "%0",
+                "@0",
+                "0",
+                "1",
+                "0",
+                "80",
+                "24",
+                "cat",
+                "/",
+                "title",
+                "123",
+                "/dev/pts/0",
+                "",
+                "0",
+                "2000",
+                "0",
+                "0",
+            ]],
             cs=Vector{String}[],
         )
-        _snapshot_from_rows(identity, rows, (0.0, 0.0))
-        push!(rows.ps, ["%1", "@0", "1", "0", "1", "80", "24", "", "", ""])
-        push!(rows.cs, ["client", "123", "1", "\$0"])
+        snapshot_type = typeof(_snapshot_from_rows(identity, rows, (0.0, 0.0)))
+        for (View, Where, collection) in (
+            (SessionSnapshot, SessionWhere, sessions),
+            (WindowSnapshot, WindowWhere, windows),
+            (PaneSnapshot, PaneWhere, panes),
+            (ClientSnapshot, ClientWhere, clients),
+            (WindowLink, WindowLinkWhere, windowlinks),
+        )
+            view_type = View{snapshot_type}
+            selection_type = Selection{view_type}
+            precompile(Tuple{typeof(collection),snapshot_type})
+            precompile(Tuple{typeof(Base.getproperty),view_type,Symbol})
+            precompile(Tuple{typeof(Base.getindex),selection_type,Int})
+            precompile(Tuple{Where,view_type})
+            precompile(Tuple{typeof(Base.filter),Where,selection_type})
+            precompile(Tuple{typeof(encode_where),Where})
+        end
+        precompile(Tuple{typeof(paneoccurrences),snapshot_type})
+        for encoder in (encode_typescript_where, encode_rust_where)
+            precompile(Tuple{typeof(encoder),PaneWhere})
+        end
+        for decoder in (decode_where, decode_typescript_where, decode_rust_where)
+            precompile(Tuple{typeof(decoder),Dict{String,Any}})
+        end
+        push!(
+            rows.ps,
+            [
+                "%1",
+                "@0",
+                "1",
+                "0",
+                "1",
+                "80",
+                "24",
+                "",
+                "",
+                "",
+                "124",
+                "",
+                "7",
+                "0",
+                "2000",
+                "0",
+                "0",
+            ],
+        )
+        push!(rows.cs, ["client", "123", "1", "\$0", "1"])
         _snapshot_from_rows(identity, rows, (0.0, 0.0))
     end
 

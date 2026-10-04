@@ -7,6 +7,21 @@
             session_ref = LibTmux.new_session(server; name="io", command=["/bin/cat"])
             pane = only(panes(snapshot(server))).ref
             run_command(server, "set-buffer", "-b", "borrowed", "keep")
+            @test isdefined(LibTmux, :list_buffers)
+            if isdefined(LibTmux, :list_buffers)
+                inventory = LibTmux.list_buffers(server)
+                borrowed = only(inventory)
+                @test string(borrowed.ref.id) == "borrowed" && borrowed.size == 4
+                @test LibTmux.save_buffer(server, borrowed.ref) == codeunits("keep")
+                @test_throws OutputLimitExceeded LibTmux.list_buffers(server; max_bytes=1)
+                unusual = " borrowed #{pane_id};%Y雪 "
+                run_command(server, "set-buffer", "-b", unusual, "literal")
+                encoded = LibTmux.list_buffers(server)
+                observed = only(filter(x -> string(x.ref.id) == unusual, encoded))
+                @test observed.size == 7
+                @test LibTmux.save_buffer(server, observed.ref) == codeunits("literal")
+                LibTmux.delete_buffer(server, observed.ref)
+            end
             buffer_names() = split(
                 chomp(
                     decode_text(
@@ -31,7 +46,7 @@
             @test_throws ArgumentError LibTmux.load_buffer(server, UInt8[])
 
             quote_shell(s) = "'" * replace(s, "'" => "'\\''") * "'"
-            echo_file = joinpath(fixture.directory, "echo")
+            echo_file = joinpath(fixture.directory, "echo-#{pane_id}-%Y")
             literal = "Enter;#{pane_id}\$(printf should-not-run)"
             observed = literal * "!"
             signal = join(
@@ -46,7 +61,8 @@
                 " ",
             )
             pipe = "dd bs=1 count=$(ncodeunits(observed)) of=$(quote_shell(echo_file)) 2>/dev/null; $signal"
-            run_command(server, "pipe-pane", "-O", "-t", string(pane.id), pipe)
+            LibTmux.pipe_pane(server, pane, pipe)
+            @test_throws ArgumentError LibTmux.pipe_pane(server, pane, "cat >/dev/null")
             LibTmux.send_keys(
                 server,
                 pane,
@@ -57,6 +73,8 @@
             LibTmux.send_keys(server, pane, "!"; literal=true)
             run_command(server, "wait-for", "echo-ready"; timeout=0.9)
             @test read(echo_file) == codeunits(observed)
+            LibTmux.pipe_pane(server, pane)
+            @test only(read_formats(server, pane, FormatField("pane_pipe"))).value == "0"
             @test startswith(LibTmux.capture_pane(server, pane; end_line=0), observed)
             trimmed = LibTmux.capture_bytes(server, pane; end_line=0)
             padded = LibTmux.capture_bytes(server, pane; end_line=0, preserve_trailing=true)
@@ -82,17 +100,17 @@
                 ]),
                 " ",
             )
-            run_command(
+            LibTmux.pipe_pane(server, pane, "cat >/dev/null")
+            LibTmux.pipe_pane(
                 server,
-                "pipe-pane",
-                "-O",
-                "-t",
-                string(pane.id),
-                "dd bs=1 count=2 of=$(quote_shell(enter_file)) 2>/dev/null; $enter_signal",
+                pane,
+                "dd bs=1 count=2 of=$(quote_shell(enter_file)) 2>/dev/null; $enter_signal";
+                replace=true,
             )
             LibTmux.send_keys(server, pane, "Enter")
             run_command(server, "wait-for", "enter-ready"; timeout=0.9)
             @test read(enter_file) == codeunits("\r\n")
+            LibTmux.pipe_pane(server, pane)
 
             wrap_ref = LibTmux.new_window(server, session_ref; command=["/bin/cat"])
             wrap_window = only(filter(w -> w.ref == wrap_ref, windows(snapshot(server))))
@@ -110,17 +128,15 @@
                 ]),
                 " ",
             )
-            run_command(
+            LibTmux.pipe_pane(
                 server,
-                "pipe-pane",
-                "-O",
-                "-t",
-                string(wrap_pane.id),
+                wrap_pane,
                 "dd bs=1 count=$(ncodeunits(wrapped)) of=$(quote_shell(wrap_file)) 2>/dev/null; $wrap_signal",
             )
             LibTmux.paste_text(server, wrap_pane, wrapped)
             run_command(server, "wait-for", "wrap-ready"; timeout=0.9)
             @test read(wrap_file) == codeunits(wrapped)
+            LibTmux.pipe_pane(server, wrap_pane)
             @test !occursin(wrapped, LibTmux.capture_pane(server, wrap_pane))
             @test occursin(
                 wrapped,

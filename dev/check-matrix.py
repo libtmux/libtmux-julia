@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 import hashlib
 import json
 import os
@@ -11,6 +12,7 @@ from pathlib import Path
 import platform
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -35,6 +37,7 @@ TOOL_PREFERENCES = "[JuliaFormatter]\nprecompile_workload = false\n"
 DELIVERY_PHASES = frozenset(("extensions", "docs", "doc-snippets", "doc-contextual",
                             "imports", "external-examples", "external-launchers"))
 SUITES = ("runtime", "delivery")
+LOOP_BUDGETS = {"mid": 10, "outer": 60}
 
 TMUX_SHA256 = {
     "3.2a": "551553a4f82beaa8dadc9256800bcc284d7c000081e47aa6ecbb6ff36eacd05f",
@@ -87,10 +90,11 @@ def qa_cells():
         label = f"{os_name}-{arch}-julia{julia}-tmux{tmux}-t{threads}"
         cells.append(dict(label=label, os=os_name, runner=runner, arch=arch,
                           julia=julia, tmux=tmux, threads=threads, suites=tuple(suites),
-                          status="NOT RUN"))
+                          optional=os_name != "Linux", status="NOT RUN"))
 
-    add("Linux", "ubuntu-24.04", "x86_64", "1.10.0", "3.2a", suites=("all",))
-    add("Linux", "ubuntu-24.04", "x86_64", "1.13.0", "3.7c", 4, ("all",))
+    for julia, tmux in (("1.10.0", "3.2a"), ("1.13.0", "3.7c")):
+        for threads in (1, 4):
+            add("Linux", "ubuntu-24.04", "x86_64", julia, tmux, threads, ("all",))
     for runner, arch in (("macos-15", "arm64"), ("macos-15-intel", "x86_64")):
         add("Darwin", runner, arch, "1.13.0", "3.7c", suites=("all",))
     return cells
@@ -98,7 +102,8 @@ def qa_cells():
 
 def source_digest():
     digest = hashlib.sha256()
-    inputs = ("Project.toml", "README.md", "LICENSE", ".github/workflows",
+    inputs = ("Project.toml", "README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "WRITING.md", "AGENTS.md",
+              ".github/workflows",
               "src", "ext", "test", "schema", "docs", "examples", "packages",
               "dev", "benchmark")
     for base in inputs:
@@ -144,47 +149,248 @@ def signal_group(process, number):
         pass
 
 
-def phase(name, argv, *, cwd, env, log, budget):
+class PhaseGroup:
+    """Keep child identities reserved until signalling and final reap finish."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.processes = set()
+        self.cancelled = False
+        self.escalation = None
+
+    def add(self, process):
+        with self.lock:
+            self.processes.add(process)
+            if self.cancelled:
+                signal_group(process, signal.SIGKILL)
+
+    def reap(self, process, *, retire_group=False):
+        # Call only after WNOWAIT observed exit, so wait cannot block this lock.
+        with self.lock:
+            if retire_group or self.cancelled:
+                signal_group(process, signal.SIGKILL)
+            code = process.wait()
+            self.processes.discard(process)
+            return code
+
+    def signal(self, number, process=None):
+        with self.lock:
+            targets = self.processes if process is None else (process,)
+            for child in targets:
+                if child in self.processes:
+                    signal_group(child, number)
+
+    def cancel(self):
+        with self.lock:
+            if self.cancelled:
+                return
+            self.cancelled = True
+        self.signal(signal.SIGINT)
+        # Retire nested groups before the supervisor's 900 ms worker grace ends.
+        self.escalation = threading.Timer(0.8, self.signal, (signal.SIGKILL,))
+        self.escalation.start()
+
+    def close(self):
+        if self.escalation is not None:
+            self.escalation.cancel()
+            self.escalation.join()
+
+
+def phase(name, argv, *, cwd, env, log, budget, group=None):
     """Wait on a child-exit event; retire only this run's process group."""
+    if not callable(getattr(os, "waitid", None)) or not hasattr(os, "WNOWAIT"):
+        raise RuntimeError("owned process retirement needs waitid/WNOWAIT; use Python 3.13+ on macOS")
     start = time.monotonic()
     log.parent.mkdir(parents=True, exist_ok=True)
-    answer = dict(name=name, command=argv, status="NOT RUN", budget_seconds=budget)
+    answer = dict(name=name, command=argv, status="NOT RUN", budget_seconds=budget,
+                  started=False)
+    owned_group = group or PhaseGroup()
     process = None
     waiter = None
     done = threading.Event()
+    observer_errors = []
     try:
+        if owned_group.cancelled:
+            answer["status"] = "CANCELLED"
+            return answer
         with log.open("wb") as output:
             process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                        stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
-            def reap():
+            answer["started"] = True
+            owned_group.add(process)
+            def observe_exit():
                 try:
-                    process.wait()
+                    os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+                except BaseException as error:
+                    observer_errors.append(error)
                 finally:
                     done.set()
-            waiter = threading.Thread(target=reap, name=f"matrix-{name}")
+            waiter = threading.Thread(target=observe_exit, name=f"matrix-{name}")
             waiter.start()
             timed_out = not done.wait(budget)
             if timed_out:
-                signal_group(process, signal.SIGINT)
+                owned_group.signal(signal.SIGINT, process)
                 if not done.wait(0.9):
-                    signal_group(process, signal.SIGKILL)
+                    owned_group.signal(signal.SIGKILL, process)
                     done.wait()
             waiter.join()
-            answer.update(status="TIMEOUT" if timed_out else "PASS" if process.returncode == 0 else "FAIL",
-                          exit_code=process.returncode, direct_child_reaped=True)
+            if observer_errors:
+                raise observer_errors[0]
+            code = owned_group.reap(process, retire_group=timed_out)
+            status = ("TIMEOUT" if timed_out else "CANCELLED" if owned_group.cancelled
+                      else "PASS" if code == 0 else "FAIL")
+            answer.update(status=status,
+                          exit_code=code, direct_child_reaped=True)
             if timed_out:
                 answer["cleanup"] = "owned process group signalled; escaped descendants not proved retired"
     except FileNotFoundError:
         answer["reason"] = "required executable is unavailable"
+    except BaseException:
+        if process is not None and process.returncode is None and waiter is not None:
+            # Let an owned worker retire its separately grouped children and receipt.
+            owned_group.signal(signal.SIGINT, process)
+            done.wait(0.9)
+        raise
     finally:
-        if process is not None and process.poll() is None:
-            signal_group(process, signal.SIGKILL)
-            process.wait()
+        if process is not None and process.returncode is None:
+            owned_group.signal(signal.SIGKILL, process)
+            if waiter is None:
+                os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+            else:
+                done.wait()
+            owned_group.reap(process)
         if waiter is not None:
             waiter.join()
+        if group is None:
+            owned_group.close()
         answer["seconds"] = time.monotonic() - start
         answer["log"] = str(log)
     return answer
+
+
+def parallel_mid(commands, *, stage, env, result, save):
+    """Run independent offline phases; receipts and cancellation stay with the worker."""
+    priority = {"core-unit": 0, "mcp-unit": 1, "format": 2, "quality": 3}
+    ordered = sorted(commands, key=lambda item: priority.get(item[0], 4))
+    group = PhaseGroup()
+    pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="matrix-phase")
+    futures = {}
+    completed = set()
+
+    def progress():
+        result["active_phases"] = [item[0] for future, item in futures.items()
+                                   if future.running() and not future.done()]
+        result["pending_phases"] = [item[0] for future, item in futures.items()
+                                    if not future.running() and not future.done()]
+        result["active_phase"] = ",".join(result["active_phases"]) or None
+        save()
+
+    try:
+        for name, argv, budget, _ in ordered:
+            future = pool.submit(phase, name, argv, cwd=ROOT, env=env,
+                                 log=stage / "logs" / f"{name}.log", budget=budget, group=group)
+            futures[future] = (name, argv, budget)
+        progress()
+        for future in as_completed(futures):
+            item = future.result()
+            completed.add(future)
+            result["phases"].append(item)
+            progress()
+            print(f"{item['status']} {item['name']} {item['seconds']:.3f}s", flush=True)
+    except BaseException:
+        group.cancel()
+        raise
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+        for future, (name, argv, budget) in futures.items():
+            if future in completed:
+                continue
+            if future.cancelled():
+                item = dict(name=name, command=argv, status="CANCELLED", started=False,
+                            budget_seconds=budget, seconds=0.0)
+            else:
+                try:
+                    item = future.result()
+                except BaseException as error:
+                    item = dict(name=name, command=argv, status="FAIL",
+                                error_type=type(error).__name__)
+            result["phases"].append(item)
+        progress()
+        group.close()
+        save()
+
+
+def parallel_outer(commands, *, stage, env, result, save):
+    priority = {"core-normal": 0, "workspace-normal": 1, "mcp-normal": 2, "imports": 3,
+                "external-examples": 3, "external-launchers": 3}
+    pending = sorted(commands, key=lambda item: priority.get(item[0], 4))
+    names = {item[0] for item in commands}
+    dependencies = {"external-examples": {"imports"} & names,
+                    "external-launchers": {"external-examples"} & names}
+    group = PhaseGroup()
+    pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="matrix-outer")
+    running, futures, completed, finished = {}, {}, set(), set()
+
+    def progress():
+        result["active_phases"] = [item[0] for future, item in running.items()
+                                   if future.running() and not future.done()]
+        result["pending_phases"] = [item[0] for item in pending] + [
+            item[0] for future, item in running.items() if not future.running() and not future.done()]
+        result["active_phase"] = ",".join(result["active_phases"]) or None
+        save()
+
+    def admit():
+        while len(running) < 4:
+            index = next((i for i, item in enumerate(pending)
+                          if dependencies.get(item[0], set()) <= finished), None)
+            if index is None:
+                break
+            item = pending.pop(index)
+            name, argv, budget, _ = item
+            future = pool.submit(phase, name, argv, cwd=ROOT, env=env,
+                                 log=stage / "logs" / f"{name}.log", budget=budget, group=group)
+            running[future] = futures[future] = item
+        progress()
+
+    try:
+        admit()
+        while running:
+            ready, _ = wait(running, return_when=FIRST_COMPLETED)
+            for future in ready:
+                item = future.result()
+                completed.add(future)
+                finished.add(running.pop(future)[0])
+                result["phases"].append(item)
+                print(f"{item['status']} {item['name']} {item['seconds']:.3f}s", flush=True)
+            admit()
+        if pending:
+            raise RuntimeError("outer phase dependencies cannot be satisfied")
+    except BaseException:
+        group.cancel()
+        raise
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+        for future, (name, argv, budget, _) in futures.items():
+            if future in completed:
+                continue
+            if future.cancelled():
+                item = dict(name=name, command=argv, status="CANCELLED", started=False,
+                            budget_seconds=budget, seconds=0.0)
+            else:
+                try:
+                    item = future.result()
+                except BaseException as error:
+                    item = dict(name=name, command=argv, status="FAIL",
+                                error_type=type(error).__name__)
+            result["phases"].append(item)
+        for name, argv, budget, _ in pending:
+            result["phases"].append(dict(name=name, command=argv, status="CANCELLED",
+                                        started=False, budget_seconds=budget, seconds=0.0))
+        running.clear()
+        pending.clear()
+        progress()
+        group.close()
+        save()
 
 
 PACKAGE_SPECIFICATIONS = r'''
@@ -200,7 +406,11 @@ root, project = ARGS[1:2]
 Pkg.activate(project)
 Pkg.develop([PackageSpec(path=root),
              PackageSpec(path=joinpath(root, "packages", "LibTmuxWorkspace")),
-             PackageSpec(path=joinpath(root, "packages", "LibTmuxMCP"))])
+             PackageSpec(path=joinpath(root, "packages", "LibTmuxMCP")),
+             PackageSpec(path=joinpath(root, "dev", "LibTmuxCheckCompiler")),
+             PackageSpec(path=joinpath(root, "dev", "LibTmuxCoreCheckCompiler")),
+             PackageSpec(path=joinpath(root, "dev", "LibTmuxWorkspaceCheckCompiler")),
+             PackageSpec(path=joinpath(root, "dev", "LibTmuxQualityCheckCompiler"))])
 packages = package_specifications(ARGS[3:end])
 Pkg.add(packages)
 resolved = values(Pkg.dependencies())
@@ -304,6 +514,16 @@ def prepare(args):
                    cwd=ROOT, env=env, check=True)
     subprocess.run(format_warmup_command(args, project), cwd=ROOT,
                    env=environment(stage, offline=True), check=True)
+    for package in ("LibTmuxCoreCheckCompiler", "LibTmuxWorkspaceCheckCompiler"):
+        script = f'using {package}; println("PREPARED test entries=", {package}.TEST_CACHE_ENTRIES[], "; fixture entries=", {package}.TEST_CACHE_FIXTURES[])'
+        subprocess.run([args.julia, "--startup-file=no", f"--threads={args.threads}",
+                        f"--project={project}", "-e", script], cwd=ROOT,
+                       env=environment(stage, offline=True), check=True)
+    subprocess.run([args.julia, "--startup-file=no", f"--threads={args.threads}",
+                    f"--project={project}", "-e", '''using LibTmuxQualityCheckCompiler
+println("PREPARED QA entries=", LibTmuxQualityCheckCompiler.QUALITY_ENTRIES[],
+        "; options entries=", LibTmuxQualityCheckCompiler.OPTIONS_ENTRIES[])'''],
+                   cwd=ROOT, env=environment(stage, offline=True), check=True)
     consumers = stage / ("consumers-" + uuid.uuid4().hex)
     started = time.monotonic()
     registry_files = seed_registry_cache(stage / "depot", consumers / "depot")
@@ -328,44 +548,61 @@ def prepare(args):
 
 def format_warmup_command(args, project):
     return [args.julia, "--startup-file=no", f"--threads={args.threads}",
-            f"--project={project}", str(ROOT / "dev/check-quality.jl"), "format"]
+            f"--project={project}", "-e", '''using LibTmuxCheckCompiler
+println("PASS formatter compiler preparation; no source files checked")''']
 
 
 def command_plan(args, stage, metadata):
     project = metadata["project"]
     normal = [args.julia, "--startup-file=no", f"--threads={args.threads}", f"--project={project}"]
+    cache = os.environ.get("LIBTMUX_LOOP_NATIVE_TEST_CACHE", "1")
+    if cache not in ("0", "1"):
+        raise ValueError("native compiler cache control must be 0 or 1")
+    cached_normal = ["env", f"LIBTMUX_TEST_COMPILER_CACHE={cache}", *normal]
     minimal = [*normal, "--compile=min", "-O0"]
+    qa_cache = os.environ.get("LIBTMUX_LOOP_QUALITY_CACHE", "1")
+    if qa_cache not in ("0", "1"):
+        raise ValueError("QA compiler cache control must be 0 or 1")
+    quality_command = ["env", f"LIBTMUX_QUALITY_COMPILER_CACHE={qa_cache}", *minimal]
     commands = []
     def add(name, argv, budget, tier):
         commands.append((name, argv, budget, tier))
-    add("core-unit", [*minimal, "test/runtests.jl", "unit"], 30, "unit")
-    add("workspace-unit", [*minimal, "packages/LibTmuxWorkspace/test/runtests.jl", "unit"], 30, "unit")
-    add("mcp-unit", [*minimal, "packages/LibTmuxMCP/test/runtests.jl", "unit"], 30, "unit")
-    add("quality", [*minimal, "dev/check-quality.jl", "quality"], 30, "quality")
-    add("format", [*normal, "dev/check-quality.jl", "format"], 30, "quality")
-    add("generated", [*minimal, "dev/generate-criteria.jl", "--check"], 30, "quality")
-    add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 30, "quality")
-    add("consumer-diagnostics", [*minimal, "dev/check-consumers.jl", "--self-test"], 30, "quality")
-    add("example-inventory", [*minimal, "dev/check-doc-examples.jl", "check"], 30, "quality")
-    add("core-normal", [*normal, "test/runtests.jl", "all"], 300, "outer")
-    add("workspace-normal", [*normal, "packages/LibTmuxWorkspace/test/runtests.jl", "all"], 300, "outer")
-    add("mcp-normal", [*normal, "packages/LibTmuxMCP/test/runtests.jl", "all"], 300, "outer")
-    add("mcp-product", [*normal, "packages/LibTmuxMCP/test/product.jl"], 300, "outer")
+    add("core-unit", [*minimal, "test/runtests.jl", "unit"], 10, "unit")
+    add("workspace-unit", [*minimal, "packages/LibTmuxWorkspace/test/runtests.jl", "unit"], 10, "unit")
+    add("mcp-unit", [*minimal, "packages/LibTmuxMCP/test/runtests.jl", "unit"], 10, "unit")
+    add("quality", [*quality_command, "dev/check-quality.jl", "quality"], 10, "quality")
+    add("format", [*normal, "dev/check-quality.jl", "format"], 10, "quality")
+    add("generated", [*minimal, "dev/generate-criteria.jl", "--check"], 10, "quality")
+    add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 10, "quality")
+    add("consumer-diagnostics", [*minimal, "dev/check-consumers.jl", "--self-test"], 10, "quality")
+    add("example-inventory", [*minimal, "dev/check-doc-examples.jl", "check"], 10, "quality")
+    add("core-normal", [*cached_normal, "test/runtests.jl", "all"], 60, "outer")
+    add("workspace-normal", [*cached_normal, "packages/LibTmuxWorkspace/test/runtests.jl", "all"], 60, "outer")
+    add("mcp-normal", [*normal, "packages/LibTmuxMCP/test/runtests.jl", "all"], 60, "outer")
+    add("mcp-product", [*normal, "packages/LibTmuxMCP/test/product.jl"], 60, "outer")
     add("mcp-stopped-reader", [sys.executable, "packages/LibTmuxMCP/test/stdio_backpressure.py",
                               args.julia, project, "--compile", "normal", "--threads",
-                              str(args.threads)], 300, "outer")
+                              str(args.threads)], 60, "outer")
     extensions = 'using Test, LibTmux; include("test/criteria.jl"); include("test/json_extension.jl"); include("test/tables_extension.jl")'
-    add("extensions", [*normal, "-e", extensions], 300, "outer")
-    add("docs", [*normal, "docs/make.jl"], 300, "outer")
-    add("doc-snippets", [*normal, "dev/check-doc-examples.jl", "doctest"], 300, "outer")
-    add("doc-contextual", [*normal, "dev/check-doc-examples.jl", "contextual"], 300, "outer")
-    add("imports", [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]], 300, "outer")
-    add("external-examples", [*minimal, "dev/check-consumers.jl", "examples", metadata["consumers"]], 300, "outer")
-    add("external-launchers", [*minimal, "dev/check-consumers.jl", "launchers", metadata["consumers"]], 300, "outer")
+    add("extensions", [*normal, "-e", extensions], 60, "outer")
+    add("docs", [*normal, "docs/make.jl"], 60, "outer")
+    add("doc-snippets", [*normal, "dev/check-doc-examples.jl", "doctest"], 60, "outer")
+    add("doc-contextual", [*normal, "dev/check-doc-examples.jl", "contextual"], 60, "outer")
+    add("imports", [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]], 60, "outer")
+    add("external-examples", [*minimal, "dev/check-consumers.jl", "examples", metadata["consumers"]], 60, "outer")
+    add("external-launchers", [*minimal, "dev/check-consumers.jl", "launchers", metadata["consumers"]], 60, "outer")
     return commands
 
 
-def run(args):
+def result_path(stage, args, *, worker=False):
+    suffix = "" if args.suite == "all" else f"-{args.suite}"
+    if worker:
+        suffix += "-worker-" + args.worker_phase
+    return stage / f"results-{args.tier}{suffix}-t{args.threads}.json"
+
+
+def run_checks(args):
+    command_started = time.monotonic()
     stage = checked_stage(args.stage)
     metadata = json.loads((stage / "prepared.json").read_text())
     if metadata["source_digest"] != source_digest():
@@ -380,9 +617,9 @@ def run(args):
                   platform=platform.system(), machine=platform.machine(), kernel=platform.release(),
                   wsl="microsoft" in platform.release().lower(), threads=args.threads,
                   tools=metadata["tools"], status="NOT RUN", phases=[], suite=args.suite,
-                  tier=args.tier, active_phase=None)
-    suffix = "" if args.suite == "all" else f"-{args.suite}"
-    destination = stage / f"results-{args.tier}{suffix}-t{args.threads}.json"
+                  tier=args.tier, active_phase=None, loops={},
+                  invocation=getattr(args, "invocation", None))
+    destination = result_path(stage, args, worker=getattr(args, "worker", False))
 
     def save():
         temporary = destination.with_suffix(".tmp")
@@ -407,9 +644,27 @@ def run(args):
             result["reason"] = f"observed {mismatch} differs from the requested cell"
         else:
             commands = selected_commands(args, stage, metadata)
-            result.update(status="RUNNING", planned_phases=[item[0] for item in commands])
+            scope_args = argparse.Namespace(**(vars(args) | dict(worker=False)))
+            result.update(status="RUNNING", planned_phases=[item[0] for item in commands],
+                          required_phases=[item[0] for item in selected_commands(scope_args, stage, metadata)])
+            loop_started = command_started
+            active_loop = None
             try:
+                if getattr(args, "worker_phase", None) == "mid":
+                    active_loop = "mid"
+                    parallel_mid(commands, stage=stage, env=env, result=result, save=save)
+                    commands = []
+                elif getattr(args, "worker_phase", None) == "outer":
+                    active_loop = "outer"
+                    parallel_outer(commands, stage=stage, env=env, result=result, save=save)
+                    commands = []
                 for name, argv, budget, tier in commands:
+                    loop = "outer" if tier == "outer" else "mid"
+                    if active_loop is not None and loop != active_loop:
+                        result["loops"][active_loop] = loop_result(
+                            active_loop, time.monotonic() - loop_started, args)
+                        loop_started = command_started if loop == "outer" else time.monotonic()
+                    active_loop = loop
                     result["active_phase"] = name
                     save()
                     item = phase(name, argv, cwd=ROOT, env=env, log=stage / "logs" / f"{name}.log", budget=budget)
@@ -420,6 +675,12 @@ def run(args):
                 result["status"] = "PASS" if result["phases"] and all(p["status"] == "PASS" for p in result["phases"]) else "FAIL"
                 if metadata["source_digest"] != source_digest():
                     result.update(status="STALE", reason="source changed during checks")
+                if active_loop is not None:
+                    result["loops"][active_loop] = loop_result(
+                        active_loop, time.monotonic() - loop_started, args)
+                if result["status"] == "PASS" and any(
+                        loop["status"] == "FAIL" for loop in result["loops"].values()):
+                    result.update(status="FAIL", reason="aggregate whole-command loop budget exceeded")
             except BaseException as error:
                 result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
                               error_type=type(error).__name__)
@@ -431,10 +692,115 @@ def run(args):
     return 0 if result["status"] == "PASS" else 1
 
 
+def loop_result(name, seconds, args):
+    complete = args.suite == "all" and (
+        args.tier in ("all", "mid", "outer") if name == "mid" else args.tier in ("all", "outer"))
+    return dict(seconds=seconds, budget_seconds=LOOP_BUDGETS[name], complete=complete,
+                status="PASS" if seconds < LOOP_BUDGETS[name] else "FAIL")
+
+
 def selected_commands(args, stage, metadata):
     return [item for item in command_plan(args, stage, metadata)
-            if (args.tier == "all" or item[3] == args.tier)
+            if (args.tier in ("all", "outer") or item[3] == args.tier
+                or args.tier == "mid" and item[3] in ("unit", "quality"))
+            and (not getattr(args, "worker", False)
+                 or (item[3] == "outer") == (args.worker_phase == "outer"))
             and (args.suite == "all" or (item[0] in DELIVERY_PHASES) == (args.suite == "delivery"))]
+
+
+def cancelled_receipts(result, details):
+    """Keep source-bound names without guessing an unfinished worker's starts."""
+    retained = {item["name"] for item in result["phases"]}
+    planned = set(details.get("planned_phases", []))
+    for name in result["required_phases"]:
+        if name in retained:
+            continue
+        unstarted = name not in planned
+        result["phases"].append(dict(name=name,
+                                    status="NOT RUN" if unstarted else "CANCELLED",
+                                    started=False if unstarted else None,
+                                    seconds=0.0 if unstarted else None,
+                                    reason="complete loop stopped before final phase receipt"))
+
+
+def run(args):
+    """Measure complete workers through exit, including their final receipts."""
+    started = time.monotonic()
+    stage = checked_stage(args.stage)
+    metadata = json.loads((stage / "prepared.json").read_text())
+    if metadata["source_digest"] != source_digest():
+        raise ValueError("source changed since preparation; prepare again before checks")
+    plan = selected_commands(args, stage, metadata)
+    invocation = uuid.uuid4().hex
+    batches = ("mid", "outer") if args.tier in ("all", "outer") else ("mid",)
+    result = dict(schema_version=3, status="RUNNING", phases=[], loops={},
+                  tier=args.tier, suite=args.suite, threads=args.threads,
+                  invocation=invocation, workers=[], active_phase=None,
+                  required_phases=[item[0] for item in plan],
+                  timing_boundary="worker launch through exit; outer includes supervisor orchestration")
+    destination = result_path(stage, args)
+    for batch in batches:
+        argv = [sys.executable, str(Path(__file__).resolve()), "run", str(stage),
+                "--julia", args.julia, "--tmux", args.tmux, "--threads", str(args.threads),
+                "--tier", args.tier, "--suite", args.suite, "--worker",
+                "--worker-phase", batch, "--invocation", invocation]
+        for name in ("julia", "tmux", "os", "arch"):
+            value = getattr(args, f"expected_{name}")
+            if value is not None:
+                argv.extend((f"--expected-{name}", value))
+        budget = LOOP_BUDGETS[batch]
+        if batch == "outer":
+            budget = max(0.001, budget - (time.monotonic() - started))
+        worker_args = argparse.Namespace(**(vars(args) | dict(worker=True, worker_phase=batch)))
+        receipt = result_path(stage, worker_args, worker=True)
+        cancellation = dict(planned_phases=[item[0] for item in plan
+                                           if (item[3] == "outer") == (batch == "outer")])
+        try:
+            worker = phase(batch, argv, cwd=ROOT, env=os.environ.copy(),
+                           log=stage / "logs" / f"whole-{batch}-t{args.threads}.log", budget=budget)
+        except BaseException as error:
+            result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
+                          active_phase=batch, error_type=type(error).__name__,
+                          supervisor_seconds=time.monotonic() - started)
+            details = json.loads(receipt.read_text()) if receipt.is_file() else {}
+            if details.get("invocation") == invocation:
+                result["phases"].extend(details["phases"])
+                result["active_phase"] = details["active_phase"] or batch
+                cancelled_receipts(result, cancellation | details)
+            else:
+                cancelled_receipts(result, cancellation)
+            destination.write_text(json.dumps(result, indent=2) + "\n")
+            raise
+        result["workers"].append(worker)
+        details = json.loads(receipt.read_text()) if receipt.is_file() else {}
+        if details.get("invocation") == invocation:
+            result["phases"].extend(details["phases"])
+            result["active_phase"] = details["active_phase"]
+            for name in ("source_digest", "platform", "machine", "kernel", "wsl", "tools", "julia", "tmux"):
+                if name in details:
+                    result[name] = details[name]
+        else:
+            worker.update(status="FAIL", reason="worker did not retain a receipt for this invocation")
+        seconds = time.monotonic() - started
+        result["loops"][batch] = loop_result(batch, seconds, args)
+        result["loops"][batch]["complete"] &= worker["status"] == "PASS"
+        if worker["status"] != "PASS":
+            result.update(status="FAIL", reason=f"complete {batch} worker failed or exceeded its budget")
+            for remaining in batches[batches.index(batch) + 1:]:
+                result["loops"][remaining] = dict(status="NOT RUN", complete=False,
+                    seconds=None, budget_seconds=LOOP_BUDGETS[remaining])
+            break
+    else:
+        result["status"] = "PASS" if all(loop["status"] == "PASS" for loop in result["loops"].values()) else "FAIL"
+    if result["status"] != "PASS":
+        cancelled_receipts(result, cancellation | details
+                           if details.get("invocation") == invocation else cancellation)
+    result["supervisor_seconds"] = time.monotonic() - started
+    temporary = destination.with_suffix(".tmp")
+    temporary.write_text(json.dumps(result, indent=2) + "\n")
+    temporary.replace(destination)
+    print(f"{result['status']} supervised matrix result: {destination}")
+    return 0 if result["status"] == "PASS" else 1
 
 
 def self_test(julia=None):
@@ -532,17 +898,177 @@ println("PASS admitted version arguments construct real Pkg specifications")
             for cell in cells
         ] == [
             ("Linux", "x86_64", "1.10.0", "3.2a", 1),
+            ("Linux", "x86_64", "1.10.0", "3.2a", 4),
+            ("Linux", "x86_64", "1.13.0", "3.7c", 1),
             ("Linux", "x86_64", "1.13.0", "3.7c", 4),
             ("Darwin", "arm64", "1.13.0", "3.7c", 1),
             ("Darwin", "x86_64", "1.13.0", "3.7c", 1),
         ]
-        assert sum(len(cell["suites"]) for cell in cells) == 4
+        assert sum(len(cell["suites"]) for cell in cells) == 6
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
+        assert all(cell["optional"] == (cell["os"] != "Linux") for cell in cells)
         from types import SimpleNamespace
         from unittest.mock import patch
         from contextlib import redirect_stdout
         from io import StringIO
+        with patch.object(os, "waitid", None), patch.object(subprocess, "Popen") as spawn:
+            try:
+                phase("unsupported", [], cwd=base, env={}, log=base / "unsupported.log", budget=0.9)
+            except RuntimeError as error:
+                assert "Python 3.13+ on macOS" in str(error)
+            else:
+                raise AssertionError("missing WNOWAIT support was accepted")
+            spawn.assert_not_called()
+        barrier = threading.Barrier(4)
+        counter_lock = threading.Lock()
+        counters = dict(active=0, peak=0)
+        def concurrent_phase(name, argv, **kwargs):
+            with counter_lock:
+                counters["active"] += 1
+                counters["peak"] = max(counters["peak"], counters["active"])
+            try:
+                if int(name[1:]) < 4:
+                    barrier.wait(0.9)
+                return dict(name=name, status="FAIL" if name == "p7" else "PASS", seconds=0.01)
+            finally:
+                with counter_lock:
+                    counters["active"] -= 1
+        parallel_result = dict(phases=[])
+        with patch(__name__ + ".phase", side_effect=concurrent_phase), \
+             redirect_stdout(StringIO()):
+            parallel_mid([(f"p{i}", [], 10, "unit") for i in range(9)], stage=base,
+                         env={}, result=parallel_result, save=lambda: None)
+        assert counters == dict(active=0, peak=4)
+        assert {item["name"] for item in parallel_result["phases"]} == {f"p{i}" for i in range(9)}
+        assert [item["name"] for item in parallel_result["phases"] if item["status"] == "FAIL"] == ["p7"]
+        assert not parallel_result["active_phases"] and not parallel_result["pending_phases"]
+        def interrupted_phase(name, argv, **kwargs):
+            if name == "second":
+                raise KeyboardInterrupt()
+            return dict(name=name, status="FAIL", seconds=0.01)
+        interrupted_result = dict(phases=[])
+        with patch(__name__ + ".phase", side_effect=interrupted_phase), \
+             redirect_stdout(StringIO()):
+            try:
+                parallel_mid([("first", [], 10, "unit"), ("second", [], 10, "unit")],
+                             stage=base, env={}, result=interrupted_result, save=lambda: None)
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("parallel interruption was swallowed")
+        assert {item["name"] for item in interrupted_result["phases"]} == {"first", "second"}
+        assert all(item["status"] == "FAIL" for item in interrupted_result["phases"])
+        assert next(item for item in interrupted_result["phases"]
+                    if item["name"] == "second")["error_type"] == "KeyboardInterrupt"
+        release = threading.Event()
+        started = threading.Barrier(5)
+        class InterruptedPool(ThreadPoolExecutor):
+            def shutdown(self, wait=True, *, cancel_futures=False):
+                super().shutdown(wait=False, cancel_futures=cancel_futures)
+                release.set()
+                if wait:
+                    super().shutdown(wait=True, cancel_futures=cancel_futures)
+        def held_phase(name, argv, **kwargs):
+            started.wait(0.9)
+            assert release.wait(0.9)
+            return dict(name=name, status="CANCELLED", started=True, seconds=0.01)
+        def interrupt_pending(futures):
+            started.wait(0.9)
+            raise KeyboardInterrupt()
+        queued_result = dict(phases=[])
+        with patch(__name__ + ".ThreadPoolExecutor", InterruptedPool), \
+             patch(__name__ + ".phase", side_effect=held_phase), \
+             patch(__name__ + ".as_completed", side_effect=interrupt_pending):
+            try:
+                parallel_mid([(f"q{i}", [], 10, "unit") for i in range(9)], stage=base,
+                             env={}, result=queued_result, save=lambda: None)
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("queued interruption was swallowed")
+        assert {item["name"] for item in queued_result["phases"]} == {f"q{i}" for i in range(9)}
+        assert all(item["status"] == "CANCELLED" for item in queued_result["phases"])
+        assert sum(not item["started"] for item in queued_result["phases"]) == 5
+        assert not queued_result["active_phases"] and not queued_result["pending_phases"]
+        # Exit observation reserves the leader PID; signals and final reap share a lock.
+        reserved = subprocess.Popen([sys.executable, "-c", "raise SystemExit(7)"],
+                                    start_new_session=True)
+        ownership = PhaseGroup()
+        ownership.add(reserved)
+        observed = os.waitid(os.P_PID, reserved.pid, os.WEXITED | os.WNOWAIT)
+        assert observed.si_pid == reserved.pid and reserved.returncode is None
+        assert os.waitid(os.P_PID, reserved.pid, os.WEXITED | os.WNOWAIT).si_pid == reserved.pid
+        deliveries = []
+        def guarded_signal(child, number):
+            assert ownership.lock.locked() and child in ownership.processes
+            assert child.returncode is None
+            deliveries.append((child.pid, number))
+        original_wait = reserved.wait
+        def guarded_reap():
+            assert ownership.lock.locked() and reserved in ownership.processes
+            return original_wait()
+        with patch(__name__ + ".signal_group", side_effect=guarded_signal), \
+             patch.object(reserved, "wait", side_effect=guarded_reap):
+            ownership.signal(signal.SIGINT)
+            with ownership.lock:
+                ownership.cancelled = True
+            assert ownership.reap(reserved) == 7
+            ownership.signal(signal.SIGKILL)
+        assert deliveries == [(reserved.pid, signal.SIGINT), (reserved.pid, signal.SIGKILL)]
+        assert not ownership.processes
+        group = PhaseGroup()
+        registered = threading.Event()
+        original_add = group.add
+        def register_child(process):
+            original_add(process)
+            registered.set()
+        with patch.object(group, "add", side_effect=register_child):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(phase, "cancelled", [
+                    sys.executable, "-c", "import threading; threading.Event().wait()"],
+                    cwd=base, env=os.environ.copy(), log=base / "cancelled.log",
+                    budget=0.9, group=group)
+                assert registered.wait(0.9)
+                group.cancel()
+                cancelled = future.result(timeout=0.9)
+        group.close()
+        assert cancelled["status"] == "CANCELLED" and cancelled["direct_child_reaped"]
+        assert not group.processes
+        # A leader may exit on SIGINT while its same-group child ignores it.
+        leaf = ("import signal,socket,sys;signal.signal(signal.SIGINT,signal.SIG_IGN);"
+                "connection=socket.socket(socket.AF_UNIX);connection.connect(sys.argv[1]);"
+                "connection.sendall(b'r');connection.recv(1)")
+        leader = ("import subprocess,sys,threading;"
+                  "subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]]);"
+                  "threading.Event().wait()")
+        for mode in ("timeout", "cancel"):
+            descendants = PhaseGroup()
+            address = str(base / ("descendant-" + mode))
+            with socket.socket(socket.AF_UNIX) as listener:
+                listener.bind(address)
+                listener.listen(1)
+                listener.settimeout(0.9)
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(phase, mode, [sys.executable, "-c", leader, leaf, address],
+                        cwd=base, env=os.environ.copy(), log=base / (mode + ".log"),
+                        budget=0.2 if mode == "timeout" else 0.9, group=descendants)
+                    connection, _ = listener.accept()
+                    with connection:
+                        connection.settimeout(0.9)
+                        try:
+                            assert connection.recv(1) == b"r"
+                            if mode == "cancel":
+                                descendants.cancel()
+                            retired = future.result(timeout=0.9)
+                            assert retired["status"] == ("TIMEOUT" if mode == "timeout" else "CANCELLED")
+                            assert retired["direct_child_reaped"]
+                            assert connection.recv(1) == b"", "same-group descendant survived retirement"
+                        finally:
+                            # The owned connection releases the leaf if a regression leaves it alive.
+                            connection.shutdown(socket.SHUT_RDWR)
+            descendants.close()
+            assert not descendants.processes
         args = SimpleNamespace(stage=str(base), julia="julia", tmux="tmux", threads=1,
                                tier="all", suite="all", expected_julia=None,
                                expected_tmux=None, expected_os=None, expected_arch=None)
@@ -552,11 +1078,14 @@ println("PASS admitted version arguments construct real Pkg specifications")
         budgets = {
             name: budget for name, _, budget, _ in selected_commands(args, base, metadata)
         }
-        assert budgets["format"] == 30
-        assert format_warmup_command(args, base) == [
-            "julia", "--startup-file=no", "--threads=1", f"--project={base}",
-            str(ROOT / "dev/check-quality.jl"), "format",
-        ]
+        assert budgets["format"] == 10
+        warmup = format_warmup_command(args, base)
+        assert warmup[:5] == ["julia", "--startup-file=no", "--threads=1", f"--project={base}", "-e"]
+        assert "using LibTmuxCheckCompiler" in warmup[5]
+        assert "source_files" not in warmup[5] and "check-quality" not in warmup[5]
+        compiler_source = (ROOT / "dev/LibTmuxCheckCompiler/src/LibTmuxCheckCompiler.jl").read_text()
+        assert "compiler_probe" in compiler_source and "@compile_workload" in compiler_source
+        assert "read(" not in compiler_source and "source_files" not in compiler_source
         partitions = []
         for suite in SUITES:
             args.suite = suite
@@ -565,8 +1094,52 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert set(partitions) == set(all_names)
         assert DELIVERY_PHASES <= set(all_names)
         args.suite = "all"
+        assert loop_result("mid", 10, args)["status"] == "FAIL"
+        assert loop_result("mid", 9.9, args)["status"] == "PASS"
+        assert loop_result("outer", 60, args)["status"] == "FAIL"
+        args.tier = "unit"
+        assert not loop_result("mid", 1, args)["complete"]
+        args.tier = "mid"
+        assert loop_result("mid", 1, args)["complete"]
+        assert {item[3] for item in selected_commands(args, base, metadata)} == {"unit", "quality"}
+        args.tier = "outer"
+        assert {item[0] for item in selected_commands(args, base, metadata)} == set(all_names)
+        assert loop_result("mid", 1, args)["complete"]
+        args.tier = "all"
         (base / ".libtmux-julia-matrix").touch()
         (base / "LocalPreferences.toml").write_text(TOOL_PREFERENCES)
+        (base / "prepared.json").write_text(json.dumps(metadata))
+        fingerprint_root = base / "fingerprint-source"
+        fingerprints = [fingerprint_root / name for name in (
+            "CHANGELOG.md", "CONTRIBUTING.md", "WRITING.md", "AGENTS.md", "dev/quality-checks.jl",
+            "dev/generate-options.jl", "dev/LibTmuxCheckCompiler/src/LibTmuxCheckCompiler.jl",
+            "dev/LibTmuxCoreCheckCompiler/Project.toml",
+            "dev/LibTmuxCoreCheckCompiler/src/LibTmuxCoreCheckCompiler.jl",
+            "dev/LibTmuxWorkspaceCheckCompiler/Project.toml",
+            "dev/LibTmuxWorkspaceCheckCompiler/src/LibTmuxWorkspaceCheckCompiler.jl",
+            "dev/LibTmuxQualityCheckCompiler/Project.toml",
+            "dev/LibTmuxQualityCheckCompiler/src/LibTmuxQualityCheckCompiler.jl")]
+        for path in fingerprints:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("original")
+        with patch(__name__ + ".ROOT", fingerprint_root):
+            fingerprint = source_digest()
+            (base / "prepared.json").write_text(json.dumps(metadata | dict(source_digest=fingerprint)))
+            for path in fingerprints:
+                path.write_text("changed")
+                with patch(__name__ + ".phase") as launch, \
+                     patch.object(subprocess, "check_output", side_effect=AssertionError(
+                         "stale source reached executable probe")) as probe:
+                    try:
+                        run_checks(args)
+                    except ValueError as error:
+                        assert "source changed since preparation" in str(error)
+                    else:
+                        raise AssertionError("changed policy or compiler source was accepted")
+                    launch.assert_not_called()
+                    probe.assert_not_called()
+                path.write_text("original")
+                assert source_digest() == fingerprint
         (base / "prepared.json").write_text(json.dumps(metadata))
         plan = [("first", [], 30, "unit"), ("second", [], 30, "unit")]
         with patch(__name__ + ".source_digest", return_value="fixed"), \
@@ -577,7 +1150,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
                  dict(name="first", status="FAIL", seconds=0.01), KeyboardInterrupt()]), \
              redirect_stdout(StringIO()):
             try:
-                run(args)
+                run_checks(args)
             except KeyboardInterrupt:
                 pass
             else:
@@ -585,6 +1158,87 @@ println("PASS admitted version arguments construct real Pkg specifications")
         retained = json.loads((base / "results-all-t1.json").read_text())
         assert retained["status"] == "INTERRUPTED" and retained["active_phase"] == "second"
         assert retained["phases"][0]["status"] == "FAIL"
+        with patch(__name__ + ".source_digest", return_value="fixed"), \
+             patch.object(shutil, "which", return_value="binary"), \
+             patch.object(subprocess, "check_output", return_value="version"), \
+             patch(__name__ + ".command_plan", return_value=plan[:1]), \
+             patch(__name__ + ".phase", return_value=dict(name="first", status="PASS", seconds=0.01)), \
+             patch.object(time, "monotonic", side_effect=[0, 12]), \
+             redirect_stdout(StringIO()):
+            assert run_checks(args) == 1
+        retained = json.loads((base / "results-all-t1.json").read_text())
+        assert retained["phases"][0]["status"] == "PASS"
+        assert retained["loops"]["mid"]["complete"]
+        assert retained["loops"]["mid"]["status"] == "FAIL"
+        assert retained["status"] == "FAIL"
+        metadata = metadata | dict(source_digest=source_digest())
+        (base / "prepared.json").write_text(json.dumps(metadata))
+        args.tier = "mid"
+        def complete_worker(name, argv, **kwargs):
+            invocation = argv[argv.index("--invocation") + 1]
+            worker_args = SimpleNamespace(**(vars(args) | dict(worker_phase=name)))
+            result_path(base, worker_args, worker=True).write_text(json.dumps(dict(
+                invocation=invocation, phases=[dict(name="first", status="PASS", seconds=0.01)],
+                active_phase=None, loops={"mid": dict(seconds=0.01, status="PASS")},
+            )))
+            return dict(name=name, status="PASS", seconds=12)
+        with patch(__name__ + ".phase", side_effect=complete_worker), \
+             patch.object(time, "monotonic", side_effect=[0, 12, 12]), \
+             redirect_stdout(StringIO()):
+            assert run(args) == 1
+        retained = json.loads(result_path(base, args).read_text())
+        assert retained["phases"][0]["status"] == "PASS"
+        assert retained["loops"]["mid"]["seconds"] == 12
+        assert retained["loops"]["mid"]["status"] == "FAIL"
+        assert retained["status"] == "FAIL"
+        with patch(__name__ + ".phase", return_value=dict(name="mid", status="PASS", seconds=0.01)), \
+             redirect_stdout(StringIO()):
+            assert run(args) == 1
+        retained = json.loads(result_path(base, args).read_text())
+        assert retained["workers"][0]["reason"] == "worker did not retain a receipt for this invocation"
+        def interrupted_worker(name, argv, **kwargs):
+            complete_worker(name, argv, **kwargs)
+            worker_args = SimpleNamespace(**(vars(args) | dict(worker_phase=name)))
+            receipt = result_path(base, worker_args, worker=True)
+            details = json.loads(receipt.read_text())
+            details["phases"][0]["status"] = "FAIL"
+            details["active_phase"] = "second"
+            details["active_phases"] = ["second"]
+            details["required_phases"] = details["planned_phases"] = [
+                "first", "second", *[f"pending-{index}" for index in range(19)]]
+            details["pending_phases"] = details["planned_phases"][2:]
+            receipt.write_text(json.dumps(details))
+            raise KeyboardInterrupt()
+        interrupted_plan = [(name, [], 30, "unit") for name in (
+            "first", "second", *[f"pending-{index}" for index in range(19)])]
+        with patch(__name__ + ".phase", side_effect=interrupted_worker), \
+             patch(__name__ + ".command_plan", return_value=interrupted_plan), \
+             redirect_stdout(StringIO()):
+            try:
+                run(args)
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("supervisor interruption was swallowed")
+        retained = json.loads(result_path(base, args).read_text())
+        assert retained["status"] == "INTERRUPTED" and retained["active_phase"] == "second"
+        assert retained["phases"][0]["status"] == "FAIL"
+        assert len(retained["phases"]) == 21
+        assert retained["phases"][1]["started"] is None
+        assert all(item["status"] == "CANCELLED" and item["started"] is None
+                   for item in retained["phases"][2:])
+        with patch(__name__ + ".phase", side_effect=KeyboardInterrupt()), \
+             redirect_stdout(StringIO()):
+            try:
+                run(args)
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("missing-receipt interruption was swallowed")
+        retained = json.loads(result_path(base, args).read_text())
+        assert {item["name"] for item in retained["phases"]} == {
+            item[0] for item in selected_commands(args, base, metadata)}
+        assert all(item["started"] is None for item in retained["phases"])
     print("PASS owned preparation, phase retirement, suite coverage and interrupted result retention")
 
 
@@ -607,8 +1261,11 @@ def main():
     execution.add_argument("--julia", default="julia")
     execution.add_argument("--tmux", default="tmux")
     execution.add_argument("--threads", type=int, choices=(1, 4), default=1)
-    execution.add_argument("--tier", choices=("unit", "quality", "outer", "all"), default="all")
+    execution.add_argument("--tier", choices=("unit", "quality", "mid", "outer", "all"), default="all")
     execution.add_argument("--suite", choices=("all", *SUITES), default="all")
+    execution.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    execution.add_argument("--worker-phase", choices=("mid", "outer"), help=argparse.SUPPRESS)
+    execution.add_argument("--invocation", help=argparse.SUPPRESS)
     for option in ("julia", "tmux", "os", "arch"):
         execution.add_argument(f"--expected-{option}")
     args = parser.parse_args()
@@ -626,7 +1283,7 @@ def main():
         elif args.command == "prepare":
             prepare(args)
         else:
-            return run(args)
+            return run_checks(args) if args.worker else run(args)
     except (ValueError, FileNotFoundError, subprocess.CalledProcessError) as error:
         print(f"NOT RUN: {error}", file=sys.stderr)
         return 2

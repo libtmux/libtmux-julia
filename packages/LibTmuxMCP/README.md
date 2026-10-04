@@ -18,15 +18,15 @@ support are pending.
 
 </div>
 
-## Install v0.1.0-alpha.1
+## Install from source
 
 From a consumer project directory, add the core and MCP package from the same
-public Git tag:
+public source revision:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxMCP")])'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="9e3776d07798174a3590a728d28029efcbb52780"; Pkg.add([Pkg.PackageSpec(url=repo, rev=revision), Pkg.PackageSpec(url=repo, rev=revision, subdir="packages/LibTmuxMCP")])'
 ```
 
 Install a launcher bound to that environment. Choose a writable destination;
@@ -70,6 +70,12 @@ includes the pane ID and observed server generation. Listing returns unique
 physical panes plus linked session/window contexts; it preserves the
 difference between one pane and several occurrences.
 
+Narrow discovery with a generation-bound session/window `scope`, native inert
+`where` criteria, or explicit scalar `columns`. Continue `nextPageToken` only
+while the query and discovered facets remain unchanged; `observation_changed`
+requires a fresh listing. See [pane discovery](docs/discovery.md) for schemas,
+coverage, pagination, cancellation, and stale-target recovery.
+
 `--caller-pane %3` resolves a default target at startup. It never uses the
 control client's current pane. Repeating `--allow-pane` restricts the target
 set. Repeating `--tool` replaces the default catalog. The same policy applies
@@ -98,6 +104,18 @@ A `result_limit` response keeps compact summaries of completed items, the
 partial batch, `originalError` retains the failed item's code. The top-level
 `error.effects` annotation remains conservative for the whole batch.
 
+Every tool can invoke configured tmux hooks or aliases. Waits also attach and
+detach control clients, which can trigger hooks and unattached-session policies.
+The catalog therefore advertises `readOnlyHint: false`, `destructiveHint: true`
+and `idempotentHint: false`, including for listing and capture.
+
+`error.effects: none` means the call failed before external I/O admission, such
+as argument validation, target policy or prior cancellation. Once any stage
+admits tmux I/O, errors report `possible`. This includes earlier batch items,
+control attachment, creation cleanup and truncated results. A later command's
+unsent status cannot erase those effects. `possible` does not assert that a
+change occurred; cancellation and errors never establish rollback.
+
 Terminal content is returned as data. Text in a pane does not grant
 permission to invoke another tool. The application neither owns nor destroys
 the borrowed daemon or pre-existing sessions. EOF cancels and joins request
@@ -110,6 +128,12 @@ An independent baseline is never concatenated with output across its reset
 boundary. Both tools share the application's deadline and byte bounds, emit
 bounded progress when requested, and release their control clients on
 cancellation. Unrelated requests remain serviceable during a wait.
+
+Set `timeoutSeconds` on either wait tool to shorten that call's total budget.
+The value must be positive and no greater than the application timeout. Setup,
+capture and waiting share the shortened deadline; a wait inside `run_operations`
+also remains bounded by the whole batch's remaining deadline. The MCP tools use
+the core stream waits described in [the observation guide](../../docs/src/observations.md).
 
 ## Library use
 

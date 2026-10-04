@@ -8,6 +8,7 @@
 | Cancellation callback | [`CancellationSubscription`](@ref) | `close` |
 | Capture/paste spool and temporary buffer | I/O operation | Success/failure cleanup |
 | Buffer returned by `load_buffer` | Caller | Explicit `delete_buffer` |
+| Buffer returned by `list_buffers` | Borrowed | Delete only by explicit caller intent |
 | Snapshot/selection | Caller references | Ordinary Julia lifetime |
 
 Remote functions return normal results. For concurrency, call them from
@@ -33,6 +34,22 @@ Inspect each method's signature for specialized transport, acquisition and
 lifecycle controls. Construction, filtering, iteration and display have no
 remote timeout because they perform no tmux I/O.
 
+Use `list_options`, `list_hooks`, `list_environment` and `list_buffers` for
+bounded typed inventories. Option arrays retain sparse indices and explicit
+empty overrides. Environment entries distinguish hidden values, removals and
+inheritance. Their values remain data and are never evaluated.
+
+New tmux versions provide encoded option metadata. Older versions admit
+portable names only and verify the listing against exact named reads;
+ambiguous names or changing values refuse acquisition. Option entries mark
+literal string values with `encoding=:literal` and canonical tmux
+representations with `encoding=:tmux`. Exact `get_option` and `get_hook`
+reads remain available for a caller's known configuration. Environment
+inventory admits portable variable names and refuses other names. One deadline
+covers acquisition; later actions remain separate. Buffer names can be replaced
+within one daemon generation; inventory does not reserve their contents or
+transfer ownership.
+
 Subprocess generation checks compare observed daemon identity before acting;
 the check/use interval remains best effort. `strict=true` refuses unsupported
 subprocess operations. A control connection stays bound to its daemon and
@@ -47,6 +64,8 @@ escape hatch; the control allowlist is narrower because raw payloads can
 resemble protocol guards.
 
 Choose the transport explicitly. Unsupported routes have no implicit fallback.
+For named channels, host configuration and terminal handoff, read
+[External coordination](coordination.md).
 
 | Operation | `Server` | `ControlConnection` |
 | --- | --- | --- |
@@ -65,6 +84,24 @@ Choose the transport explicitly. Unsupported routes have no implicit fallback.
 | Arbitrary raw tmux argv | Yes | Restricted audited command grammar |
 | Independent batches | Yes | Audited commands only |
 | Explicit semicolon groups | Aggregate evidence; per-item attribution unknown | Audited commands with per-item evidence |
+
+Pane maintenance accepts either transport and exact captured references:
+
+| Task | Operation | Observable effect |
+| --- | --- | --- |
+| Remove saved scrollback | `clear_history` | Keeps the visible screen and process |
+| Connect a producer or output consumer | `pipe_pane` | Runs host shell syntax; explicitly close with `nothing` |
+| Move a pane into a new window | `break_pane` | Requires a source session link and destination slot; keeps the process |
+| Set the pane title | `set_title` | Stores literal printable UTF-8 |
+| Request a zoom state | `set_zoom` | May unzoom then zoom when changing the active pane |
+| Rearrange existing panes | `rotate_panes`, `cycle_layout` | Changes positions or sizes within the physical window |
+
+`pipe_pane` protects an existing pipe unless replacement is explicit. tmux
+owns its shell child; a command reply proves setup, not child completion.
+Use an explicit completion signal before reading output, as in
+[the command completion example](observations.md). Closing a borrowed pipe
+requires caller intent. Topology operations preserve physical-window effects:
+changing a pane changes the window seen through every session link.
 
 [`run_batch`](@ref) continues independent commands after an error. Results
 preserve input order; concurrent execution order is unspecified.
