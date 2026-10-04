@@ -161,24 +161,15 @@ end
                 Dict("LIBTMUX_READY" => ready, "LIBTMUX_HOLD" => hold),
             )
             token = CancellationToken()
-            monitor = FileWatching.FolderMonitor(parent)
             operation = Threads.@spawn try
                 LibTmux.open_server(tmux=executable, env=environment, cancel=token)
             catch error
                 error
             end
-            watcher = Threads.@spawn begin
-                wait(operation)
-                close(monitor)
-            end
             try
-                while !isfile(ready) && isopen(monitor)
-                    try
-                        wait(monitor)
-                    catch error
-                        error isa EOFError || rethrow()
-                    end
-                end
+                # Bounded poll: macOS watches register on another thread and start
+                # "since now", so a just-created file can go unreported.
+                timedwait(() -> isfile(ready) || istaskdone(operation), 60.0; pollint=0.01)
                 @test isfile(ready)
                 cancel!(token)
                 failure = fetch(operation)
@@ -199,8 +190,6 @@ end
             finally
                 cancel!(token)
                 wait(operation)
-                close(monitor)
-                wait(watcher)
             end
         end
     end

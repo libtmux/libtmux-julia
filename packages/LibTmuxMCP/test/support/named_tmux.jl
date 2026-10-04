@@ -40,27 +40,40 @@ function stop!(process::Base.Process)
     forced[] && error("owned named tmux daemon required SIGKILL during cleanup")
 end
 
+# See `_watch_wake` in src/lifecycle.jl.
+function wake_source(monitor::FolderMonitor; interval=0.05)
+    wake = Base.Event(true)
+    task = Threads.@spawn begin
+        try
+            while true
+                wait(monitor)
+                notify(wake)
+            end
+        catch error
+            error isa EOFError || rethrow()
+        finally
+            notify(wake)
+        end
+    end
+    tick = Timer(_ -> notify(wake), interval; interval)
+    wake, () -> (close(tick); close(monitor); wait(task))
+end
+
 function await_ready(fixture::Fixture, monitor::FolderMonitor)
     timer = Timer(_ -> close(monitor), 0.9)
+    wake, release = wake_source(monitor)
     try
         while process_running(fixture.process)
             if ispath(fixture.socket_path) && !ispath(fixture.socket_path * ".lock")
                 return
             end
             isopen(monitor) || error("owned named tmux startup exceeded 900 ms")
-            try
-                wait(monitor)
-            catch caught
-                caught isa EOFError || rethrow()
-                process_running(fixture.process) &&
-                    error("owned named tmux startup exceeded 900 ms")
-                error("owned named tmux daemon exited before startup completed")
-            end
+            wait(wake)
         end
         error("owned named tmux daemon exited before startup completed")
     finally
         close(timer)
-        close(monitor)
+        release()
     end
 end
 

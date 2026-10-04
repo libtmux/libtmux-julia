@@ -46,6 +46,34 @@ end
     end
 end
 
+@testset "named tmux startup finds a socket the watch never reports" begin
+    # A deaf monitor models macOS, whose directory watch never reports a Unix
+    # socket; readiness must still be observed by the poll.
+    for deaf in (true, false)
+        mktempdir(; prefix="libtmux-julia-named-lost-") do directory
+            quiet = mkpath(joinpath(directory, "quiet"))
+            socket = joinpath(directory, "socket")
+            watched = deaf ? quiet : directory
+            process = run(`/bin/sh -c "sleep 0.3; : > $socket; sleep 5"`; wait=false)
+            fixture = NamedTmux.Fixture(
+                Server(socket_name="s", tmux="tmux"),
+                "tmux",
+                "s",
+                socket,
+                directory,
+                Dict{String,String}(),
+                process,
+            )
+            try
+                @test NamedTmux.await_ready(fixture, NamedTmux.FolderMonitor(watched)) ===
+                      nothing
+            finally
+                NamedTmux.stop!(process)
+            end
+        end
+    end
+end
+
 @testset "named tmux fixture ignores a long inherited temporary directory" begin
     mktempdir(; prefix="libtmux-julia-named-parent-") do parent
         inherited = joinpath(parent, repeat("x", 80))
