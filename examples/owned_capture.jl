@@ -10,7 +10,13 @@ function main()
         screen = capture_pane(server, pane.ref)
         @assert isempty(strip(screen))
         @assert only(sessions(snap)).name == "example"
-        println("Captured ", string(pane.id), ": ", ncodeunits(screen), " screen bytes")
+        println(
+            "Captured ",
+            string(pane.id),
+            ": ",
+            ncodeunits(screen),
+            " screen bytes",
+        )
         (; snap, screen)
     end
     @assert !ispath(dirname(endpoint[].socket_path))
