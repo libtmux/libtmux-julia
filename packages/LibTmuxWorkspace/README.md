@@ -18,6 +18,9 @@ The library and installed CLI share the same public operations.
 
 </div>
 
+This companion is experimental. Freeze reconstructs the documented subset;
+full tmuxp compatibility and complete timing checks remain open.
+
 The consumer package depends on the public `LibTmux` package, JSON 1.9 and
 YAML 0.4.17, and PrecompileTools. The core does not depend on this package
 or these consumer dependencies. Precompilation covers inert configuration
@@ -31,7 +34,16 @@ same public source revision:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="9e3776d07798174a3590a728d28029efcbb52780"; Pkg.add([Pkg.PackageSpec(url=repo, rev=revision), Pkg.PackageSpec(url=repo, rev=revision, subdir="packages/LibTmuxWorkspace")])'
+    -e 'using Pkg
+        Pkg.activate(".")
+        repo = "https://github.com/libtmux/libtmux-julia.git"
+        revision = "e48057e583ac918c042c58021fac52137bbe05b3"
+        Pkg.add([
+            Pkg.PackageSpec(url=repo, rev=revision),
+            Pkg.PackageSpec(
+                url=repo, rev=revision, subdir="packages/LibTmuxWorkspace",
+            ),
+        ])'
 ```
 
 Install a launcher bound to that environment:
