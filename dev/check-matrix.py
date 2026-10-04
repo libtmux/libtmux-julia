@@ -22,6 +22,8 @@ import tomllib
 import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
+# Upper bound on a self-test step that starts a process and is expected to finish.
+HANG_GUARD = 30.0
 PINNED_TOOLS = {
     "Aqua": "0.8.18", "JuliaFormatter": "2.14.0", "Documenter": "1.17.0",
     "Tables": "1.14.0", "JSON": "1.9.0", "YAML": "0.4.17",
@@ -559,11 +561,11 @@ println("PASS admitted version arguments construct real Pkg specifications")
             "./configure", f"--prefix={base}"]
         literal = "; $(touch must-not-exist)"
         ok = phase("literal", [sys.executable, "-c", "import sys; print(sys.argv[1])", literal],
-                   cwd=base, env=os.environ.copy(), log=base / "literal.log", budget=0.9)
+                   cwd=base, env=os.environ.copy(), log=base / "literal.log", budget=HANG_GUARD)
         assert ok["status"] == "PASS" and (base / "literal.log").read_text().strip() == literal
         assert not (base / "must-not-exist").exists()
         failed = phase("failure", [sys.executable, "-c", "raise SystemExit(7)"],
-                       cwd=base, env=os.environ.copy(), log=base / "failure.log", budget=0.9)
+                       cwd=base, env=os.environ.copy(), log=base / "failure.log", budget=HANG_GUARD)
         assert failed["status"] == "FAIL" and failed["exit_code"] == 7
         absent = phase("missing", [str(base / "missing")], cwd=base,
                        env=os.environ.copy(), log=base / "missing.log", budget=0.9)

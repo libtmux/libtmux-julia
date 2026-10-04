@@ -2,6 +2,8 @@ using LibTmux, BenchmarkTools, JSON, Random, SHA
 import LibTmux.Filters as F
 
 const ROOT = dirname(@__DIR__)
+# Upper bound on a step that starts a process and is expected to finish.
+const HANG_GUARD = 30.0
 
 function parameters(arguments)
     defaults = Dict(
@@ -291,7 +293,11 @@ function main(arguments)
     whole = time_ns()
     directory = nothing
     try
-        with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do server
+        with_server(;
+            tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
+            env=environment,
+            timeout=HANG_GUARD,
+        ) do server
             directory = dirname(server.socket_path)
             report["tmux"] = strip(
                 decode_text(
