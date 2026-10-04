@@ -120,14 +120,14 @@ const DOC_SNIPPETS = Dict(
     ("docs/src/queries.md", 1) => (
         kind=:derived,
         gate=:external,
-        fingerprint="653f6f18181230c5bf0157924b0cea02566465c38d1d6185caaff8d25095c45e",
+        fingerprint="c5beff64a1a7cd51654e845da6d777d9a62a9894986985ebfbf82e22b12220ab",
         source="examples/shared_windows.jl",
         note="",
     ),
     ("docs/src/queries.md", 2) => (
         kind=:executable,
         gate=:doctest,
-        fingerprint="d49a18ba90a5196cd097cfc4e8c72b50de4ee7b330988664f36a288776db8670",
+        fingerprint="2beb5f2738ee0913c06f9d5bb102cd129825b566402d5511a2c5aeb7fb46965d",
         source="",
         note="Pure callable criteria and wire conversion",
     ),
