@@ -99,7 +99,7 @@ const DOC_SNIPPETS = Dict(
     ("docs/src/index.md", 1) => (
         kind=:derived,
         gate=:external,
-        fingerprint="cd8ae36ca441a4fc58c0251156380640005861762c32349331a13cc8b5a08872",
+        fingerprint="d3f44d8bef2bd7278603f21a1a9e168b4ea0d7f201de3ae19aaf9ef27e23d74e",
         source="examples/owned_capture.jl",
         note="",
     ),
