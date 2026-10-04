@@ -45,7 +45,7 @@ end
 
 function await_restart_request(predicate, connection)
     expired = Ref(false)
-    timer, task = LibTmux._owned_timer(0.9) do
+    timer, task = LibTmux._owned_timer(30.0) do
         lock(connection.lock) do
             expired[] = true
             notify(connection.changed; all=true)
@@ -79,7 +79,7 @@ end
             connection = open_control(server, session)
             signal = control_signal(connection)
             waiting = Threads.@spawn try
-                wait(signal)
+                wait(signal; timeout=60.0)
             catch error
                 error
             end
@@ -90,7 +90,7 @@ end
                     signal.request !== nothing && signal.request.frame !== nothing
                 end
                 queued = Threads.@spawn try
-                    rename_session(connection, session, "must-not-replay")
+                    rename_session(connection, session, "must-not-replay"; timeout=60.0)
                 catch error
                     error
                 end
