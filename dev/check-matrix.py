@@ -1203,9 +1203,13 @@ println("PASS admitted version arguments construct real Pkg specifications")
         leaf = ("import signal,socket,sys;signal.signal(signal.SIGINT,signal.SIG_IGN);"
                 "connection=socket.socket(socket.AF_UNIX);connection.connect(sys.argv[1]);"
                 "connection.sendall(b'r');connection.recv(1)")
-        leader = ("import subprocess,sys,threading;"
-                  "subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]]);"
-                  "threading.Event().wait()")
+        leader = ("import os,sys,threading\n"
+                  "program,address=sys.argv[1:]\n"
+                  "if os.fork()==0:\n"
+                  " sys.argv=['-c',address]\n"
+                  " exec(program)\n"
+                  " os._exit(0)\n"
+                  "threading.Event().wait()\n")
         for mode in ("timeout", "cancel"):
             descendants = PhaseGroup()
             address = str(base / ("descendant-" + mode))
