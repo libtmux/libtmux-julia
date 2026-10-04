@@ -33,7 +33,8 @@ and supplies the declared schema even when no rows match.
 using LibTmux, Tables
 
 function pane_columns(snap::Snapshot)
-    Tables.columntable(project_rows(panes(snap); columns=(:id, :current_command)))
+    columns = (:id, :current_command)
+    Tables.columntable(project_rows(panes(snap); columns))
 end
 ```
 
