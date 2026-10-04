@@ -358,6 +358,8 @@ function _ascii_fold(text::String, control::_CriterionTraversal)
     String(bytes)
 end
 function _contains_checkpointed(haystack::String, needle::String, control)
+    # Base's String search differs from SubString search for malformed UTF-8.
+    isvalid(needle) || return occursin(needle, haystack)
     isempty(needle) && return true
     length = ncodeunits(haystack)
     ncodeunits(needle) > length && return false

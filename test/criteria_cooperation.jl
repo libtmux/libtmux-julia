@@ -228,6 +228,12 @@ end
 end
 
 @testset "controlled literal matching preserves Base boundaries" begin
+    outcome(f) =
+        try
+            (:value, f())
+        catch err
+            (:error, typeof(err), sprint(showerror, err))
+        end
     callback=()->nothing
     control=LibTmux._CriterionTraversal{Function}(callback, 0, nothing, nothing)
     texts=["éx", "é😀end", repeat("a", 32767)*"😀suffix", String(UInt8[0xff, 0xc2, 0x80])]
@@ -240,10 +246,9 @@ end
         String(UInt8[0xa9, 0x78]),
     ]
     @test all(
-        LibTmux._matches(operator(needle), text, control)==LibTmux._matches(
-            operator(needle),
-            text,
-        ) for operator in (Filters.Contains, Filters.StartsWith, Filters.EndsWith),
+        outcome(() -> LibTmux._matches(operator(needle), text, control)) ==
+        outcome(() -> LibTmux._matches(operator(needle), text)) for
+        operator in (Filters.Contains, Filters.StartsWith, Filters.EndsWith),
         text in texts,
         needle in needles
     )
