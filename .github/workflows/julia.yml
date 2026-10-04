@@ -6,6 +6,22 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      debug_runner:
+        description: Open an actor-restricted SSH session after a selected cell fails
+        type: boolean
+        default: false
+      debug_cell:
+        description: Matrix cell to inspect when debug_runner is enabled
+        type: choice
+        default: Linux-x86_64-julia1.13.0-tmux3.7c-t4-all
+        options:
+          - Linux-x86_64-julia1.10.0-tmux3.2a-t1-all
+          - Linux-x86_64-julia1.10.0-tmux3.2a-t4-all
+          - Linux-x86_64-julia1.13.0-tmux3.7c-t1-all
+          - Linux-x86_64-julia1.13.0-tmux3.7c-t4-all
+          - Darwin-arm64-julia1.13.0-tmux3.7c-t1-all
+          - Darwin-x86_64-julia1.13.0-tmux3.7c-t1-all
 
 permissions:
   contents: read
@@ -67,6 +83,8 @@ jobs:
       - name: Choose owned preparation stage
         run: echo "MATRIX_STAGE=$RUNNER_TEMP/libtmux-julia-matrix" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.13'
@@ -127,6 +145,20 @@ jobs:
             ${{ env.MATRIX_STAGE }}/environment/LocalPreferences.toml
             ${{ env.MATRIX_STAGE }}/environment/Manifest.toml
             ${{ env.MATRIX_STAGE }}/logs/*.log
+
+      - name: Inspect failed cell with actor-restricted SSH
+        if: >-
+          failure() &&
+          github.event_name == 'workflow_dispatch' &&
+          github.repository == 'libtmux/libtmux-julia' &&
+          inputs.debug_runner &&
+          inputs.debug_cell == matrix.job_label
+        timeout-minutes: 10
+        uses: owenthereal/action-upterm@7df5fa550d6dc458335f4b2685452a0e42d0ba7e # v2.4.0
+        with:
+          limit-access-to-actor: true
+          wait-timeout-minutes: 3
+          upterm-version: v0.34.0
 
   tag-install:
     name: Verify public tag install
