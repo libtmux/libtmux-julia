@@ -233,8 +233,8 @@ function shipped_programs(root)
 end
 
 function derived_source(entry, root)
-    matched = match(r"(?s)read\(joinpath\(@__DIR__,\s*(.*?)\),\s*String\)", entry.code)
-    matched === nothing &&
+    matched = match(r"(?s)joinpath\(\s*@__DIR__,\s*(.*?)\)", entry.code)
+    (matched === nothing || !occursin("read(", entry.code)) &&
         error("Derived fence must read one literal example path: $(entry.path)")
     arguments = matched.captures[1]
     parts = [part.captures[1] for part in eachmatch(r"\"([^\"]+)\"", arguments)]
