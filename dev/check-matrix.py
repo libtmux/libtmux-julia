@@ -423,7 +423,7 @@ def parallel_outer(commands, *, stage, env, result, save):
     pending = sorted(commands, key=lambda item: priority.get(item[0], 4))
     names = {item[0] for item in commands}
     dependencies = {"external-examples": {"imports"} & names,
-                    "external-launchers": {"external-examples"} & names}
+                    "external-launchers": {"imports"} & names}
     group = PhaseGroup()
     pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="matrix-outer")
     running, futures, completed, finished = {}, {}, set(), set()
@@ -1107,6 +1107,22 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert {item["name"] for item in parallel_result["phases"]} == {f"p{i}" for i in range(9)}
         assert [item["name"] for item in parallel_result["phases"] if item["status"] == "FAIL"] == ["p7"]
         assert not parallel_result["active_phases"] and not parallel_result["pending_phases"]
+        launchers_started = threading.Event()
+        def installed_phase(name, argv, **kwargs):
+            if name == "external-examples":
+                assert launchers_started.wait(0.2), "independent launcher blocked behind examples"
+            elif name == "external-launchers":
+                launchers_started.set()
+            return dict(name=name, status="PASS", seconds=0.0)
+        installed_result = dict(phases=[])
+        installed_names = ("imports", "external-examples", "external-launchers")
+        with patch(__name__ + ".phase", side_effect=installed_phase), \
+             redirect_stdout(StringIO()):
+            parallel_outer([(name, [], 60, "outer") for name in installed_names],
+                           stage=base, env={}, result=installed_result, save=lambda: None)
+        assert {item["name"] for item in installed_result["phases"]} == set(installed_names)
+        assert all(item["status"] == "PASS" for item in installed_result["phases"])
+        assert not installed_result["active_phases"] and not installed_result["pending_phases"]
         def interrupted_phase(name, argv, **kwargs):
             if name == "second":
                 raise KeyboardInterrupt()
