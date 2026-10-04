@@ -136,12 +136,28 @@ def checked_stage(path, *, create=False):
     return stage
 
 
-def signal_group(process, number):
-    try:
-        os.killpg(process.pid, number)
-    except ProcessLookupError:
-        # Exit may win the race between the waiter deadline and signal delivery.
-        pass
+def signal_group(process, number, *, kill=os.killpg, patience=2.0):
+    """Signal the process group, treating EPERM from a dead group as exit.
+
+    XNU skips zombies and reports EPERM when it signalled no live member, so
+    a group whose leader exited but is not yet reaped answers EPERM on macOS.
+    Confirm the exit with poll(), which reaps; EPERM that outlasts `patience`
+    with a live child is raised.
+    """
+    deadline = time.monotonic() + patience
+    while True:
+        try:
+            kill(process.pid, number)
+            return
+        except ProcessLookupError:
+            # Exit may win the race between the waiter deadline and signal delivery.
+            return
+        except PermissionError:
+            if process.poll() is not None:
+                return
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
 
 
 def phase(name, argv, *, cwd, env, log, budget):
@@ -287,6 +303,33 @@ def stdlib_cache_profile(julia, env):
     return dict(julia=lines[0], version=lines[1], modules=lines[2:])
 
 
+def run_bounded(argv, *, cwd, env, limit=600, attempts=2):
+    """Run a preparation step under a hang guard, retrying a stalled attempt.
+
+    Julia package precompilation can stall without output on hosted runners
+    until the job cap.  Precompiled caches persist, so a retry resumes where
+    the stalled attempt stopped.
+    """
+    for attempt in range(1, attempts + 1):
+        process = subprocess.Popen(argv, cwd=cwd, env=env, start_new_session=True)
+        try:
+            code = process.wait(timeout=limit)
+        except subprocess.TimeoutExpired:
+            print(f"preparation stalled {limit}s (attempt {attempt}/{attempts}); retiring its process group",
+                  flush=True)
+            signal_group(process, signal.SIGKILL)
+            process.wait()
+            continue
+        except BaseException:
+            signal_group(process, signal.SIGKILL)
+            process.wait()
+            raise
+        if code:
+            raise subprocess.CalledProcessError(code, argv)
+        return
+    raise TimeoutError(f"preparation step stalled in every attempt: {argv[-1] if argv else ''}")
+
+
 def prepare(args):
     stage = checked_stage(args.stage, create=True)
     initial_digest = source_digest()
@@ -297,13 +340,13 @@ def prepare(args):
     argv = [args.julia, "--startup-file=no", f"--project={project}", "-e", PREPARE,
             str(ROOT), str(project), *[f"{name}={version}" for name, version in PINNED_TOOLS.items()]]
     # Preparation is a separate tier: package resolution/network/precompilation.
-    subprocess.run(argv, cwd=ROOT, env=env, check=True)
-    subprocess.run([args.julia, "--startup-file=no", "--compile=min", "-O0",
-                    f"--project={project}", "-e",
-                    "using Aqua, LibTmux, LibTmuxWorkspace, LibTmuxMCP, ModelContextProtocol, JSON, Tables"],
-                   cwd=ROOT, env=env, check=True)
-    subprocess.run(format_warmup_command(args, project), cwd=ROOT,
-                   env=environment(stage, offline=True), check=True)
+    run_bounded(argv, cwd=ROOT, env=env)
+    run_bounded([args.julia, "--startup-file=no", "--compile=min", "-O0",
+                 f"--project={project}", "-e",
+                 "using Aqua, LibTmux, LibTmuxWorkspace, LibTmuxMCP, ModelContextProtocol, JSON, Tables"],
+                cwd=ROOT, env=env)
+    run_bounded(format_warmup_command(args, project), cwd=ROOT,
+                env=environment(stage, offline=True))
     consumers = stage / ("consumers-" + uuid.uuid4().hex)
     started = time.monotonic()
     registry_files = seed_registry_cache(stage / "depot", consumers / "depot")
@@ -335,33 +378,34 @@ def command_plan(args, stage, metadata):
     project = metadata["project"]
     normal = [args.julia, "--startup-file=no", f"--threads={args.threads}", f"--project={project}"]
     minimal = [*normal, "--compile=min", "-O0"]
+    # Budgets are hang guards, not performance gates.
     commands = []
     def add(name, argv, budget, tier):
         commands.append((name, argv, budget, tier))
-    add("core-unit", [*minimal, "test/runtests.jl", "unit"], 30, "unit")
-    add("workspace-unit", [*minimal, "packages/LibTmuxWorkspace/test/runtests.jl", "unit"], 30, "unit")
-    add("mcp-unit", [*minimal, "packages/LibTmuxMCP/test/runtests.jl", "unit"], 30, "unit")
-    add("quality", [*minimal, "dev/check-quality.jl", "quality"], 30, "quality")
-    add("format", [*normal, "dev/check-quality.jl", "format"], 30, "quality")
-    add("generated", [*minimal, "dev/generate-criteria.jl", "--check"], 30, "quality")
-    add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 30, "quality")
-    add("consumer-diagnostics", [*minimal, "dev/check-consumers.jl", "--self-test"], 30, "quality")
-    add("example-inventory", [*minimal, "dev/check-doc-examples.jl", "check"], 30, "quality")
-    add("core-normal", [*normal, "test/runtests.jl", "all"], 300, "outer")
-    add("workspace-normal", [*normal, "packages/LibTmuxWorkspace/test/runtests.jl", "all"], 300, "outer")
-    add("mcp-normal", [*normal, "packages/LibTmuxMCP/test/runtests.jl", "all"], 300, "outer")
-    add("mcp-product", [*normal, "packages/LibTmuxMCP/test/product.jl"], 300, "outer")
+    add("core-unit", [*minimal, "test/runtests.jl", "unit"], 60, "unit")
+    add("workspace-unit", [*minimal, "packages/LibTmuxWorkspace/test/runtests.jl", "unit"], 60, "unit")
+    add("mcp-unit", [*minimal, "packages/LibTmuxMCP/test/runtests.jl", "unit"], 60, "unit")
+    add("quality", [*minimal, "dev/check-quality.jl", "quality"], 120, "quality")
+    add("format", [*normal, "dev/check-quality.jl", "format"], 120, "quality")
+    add("generated", [*minimal, "dev/generate-criteria.jl", "--check"], 120, "quality")
+    add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 120, "quality")
+    add("consumer-diagnostics", [*minimal, "dev/check-consumers.jl", "--self-test"], 120, "quality")
+    add("example-inventory", [*minimal, "dev/check-doc-examples.jl", "check"], 120, "quality")
+    add("core-normal", [*normal, "test/runtests.jl", "all"], 600, "outer")
+    add("workspace-normal", [*normal, "packages/LibTmuxWorkspace/test/runtests.jl", "all"], 600, "outer")
+    add("mcp-normal", [*normal, "packages/LibTmuxMCP/test/runtests.jl", "all"], 600, "outer")
+    add("mcp-product", [*normal, "packages/LibTmuxMCP/test/product.jl"], 600, "outer")
     add("mcp-stopped-reader", [sys.executable, "packages/LibTmuxMCP/test/stdio_backpressure.py",
                               args.julia, project, "--compile", "normal", "--threads",
-                              str(args.threads)], 300, "outer")
+                              str(args.threads)], 600, "outer")
     extensions = 'using Test, LibTmux; include("test/criteria.jl"); include("test/json_extension.jl"); include("test/tables_extension.jl")'
-    add("extensions", [*normal, "-e", extensions], 300, "outer")
-    add("docs", [*normal, "docs/make.jl"], 300, "outer")
-    add("doc-snippets", [*normal, "dev/check-doc-examples.jl", "doctest"], 300, "outer")
-    add("doc-contextual", [*normal, "dev/check-doc-examples.jl", "contextual"], 300, "outer")
-    add("imports", [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]], 300, "outer")
-    add("external-examples", [*minimal, "dev/check-consumers.jl", "examples", metadata["consumers"]], 300, "outer")
-    add("external-launchers", [*minimal, "dev/check-consumers.jl", "launchers", metadata["consumers"]], 300, "outer")
+    add("extensions", [*normal, "-e", extensions], 600, "outer")
+    add("docs", [*normal, "docs/make.jl"], 600, "outer")
+    add("doc-snippets", [*normal, "dev/check-doc-examples.jl", "doctest"], 600, "outer")
+    add("doc-contextual", [*normal, "dev/check-doc-examples.jl", "contextual"], 600, "outer")
+    add("imports", [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]], 600, "outer")
+    add("external-examples", [*minimal, "dev/check-consumers.jl", "examples", metadata["consumers"]], 600, "outer")
+    add("external-launchers", [*minimal, "dev/check-consumers.jl", "launchers", metadata["consumers"]], 600, "outer")
     return commands
 
 
@@ -526,6 +570,42 @@ println("PASS admitted version arguments construct real Pkg specifications")
         timed = phase("deadline", [sys.executable, "-c", "import threading; threading.Event().wait()"],
                       cwd=base, env=os.environ.copy(), log=base / "deadline.log", budget=0.05)
         assert timed["status"] == "TIMEOUT" and timed["direct_child_reaped"]
+        # Darwin reports EPERM for a group with no live member (unreaped leader
+        # or an exec in flight); a seam reproduces that on Linux.
+        def denied(count):
+            calls = []
+            def kill(pid, number):
+                calls.append(number)
+                if len(calls) <= count:
+                    raise PermissionError(1, "Operation not permitted")
+            return kill, calls
+        live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            kill, calls = denied(3)
+            signal_group(live, signal.SIGINT, kill=kill)
+            assert len(calls) == 4, "EPERM on a live child was not retried"
+            kill, calls = denied(10 ** 9)
+            try:
+                signal_group(live, signal.SIGINT, kill=kill, patience=0.05)
+            except PermissionError:
+                pass
+            else:
+                raise AssertionError("persistent EPERM for a live child was swallowed")
+        finally:
+            live.kill()
+            live.wait()
+        kill, calls = denied(10 ** 9)
+        signal_group(live, signal.SIGKILL, kill=kill)
+        assert len(calls) == 1, "EPERM for a reaped child was not treated as exit"
+        stalled = time.monotonic()
+        try:
+            run_bounded([sys.executable, "-c", "import time; time.sleep(30)"],
+                        cwd=base, env=os.environ.copy(), limit=0.2, attempts=2)
+        except TimeoutError:
+            assert time.monotonic() - stalled < 5, "stalled step was not retired at its guard"
+        else:
+            raise AssertionError("a stalled preparation step was not reported")
+        run_bounded([sys.executable, "-c", "pass"], cwd=base, env=os.environ.copy(), limit=5)
         cells = qa_cells()
         assert [
             (cell["os"], cell["arch"], cell["julia"], cell["tmux"], cell["threads"])
@@ -552,7 +632,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         budgets = {
             name: budget for name, _, budget, _ in selected_commands(args, base, metadata)
         }
-        assert budgets["format"] == 30
+        assert budgets["format"] == 120
         assert format_warmup_command(args, base) == [
             "julia", "--startup-file=no", "--threads=1", f"--project={base}",
             str(ROOT / "dev/check-quality.jl"), "format",
