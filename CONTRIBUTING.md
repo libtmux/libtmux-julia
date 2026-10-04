@@ -165,6 +165,19 @@ $ julia \
     dev/check-doc-examples.jl check
 ```
 
+Check that example code stays within 80 columns. The check reads the files
+that [.github/example-width.toml](.github/example-width.toml) names and needs
+only Python 3.11+. Its self-test plants a wide line to prove the check can
+fail:
+
+```console
+$ python3 dev/check_example_width.py --self-test
+```
+
+```console
+$ python3 dev/check_example_width.py
+```
+
 The [example inventory](docs/example-inventory.md) distinguishes exact pure
 doctests, snippets derived from executable programs, and contextual examples.
 After the matrix preparation below, run the contextual examples with its
