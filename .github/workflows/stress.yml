@@ -5,6 +5,9 @@ name: Stress
 # steps that start a process, to size hang guards against the slowest run.
 
 on:
+  push:
+    branches: [flaky-investigations-000]
+    paths: ['.github/workflows/stress.yml', 'dev/time-steps.jl']
   schedule:
     - cron: '17 6 * * 1'
   workflow_dispatch:
