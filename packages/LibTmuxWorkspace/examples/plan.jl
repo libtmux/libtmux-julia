@@ -7,5 +7,13 @@ workspace = expand(config; env=Dict("PROJECT" => "example"))
 result = plan(workspace)
 
 for step in result.steps
-    println(step.action, " window=", step.window, " pane=", step.pane, " ", step.arguments)
+    println(
+        step.action,
+        " window=",
+        step.window,
+        " pane=",
+        step.pane,
+        " ",
+        step.arguments,
+    )
 end

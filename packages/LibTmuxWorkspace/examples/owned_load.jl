@@ -17,7 +17,10 @@ function main()
                         "panes" => [
                             Dict(
                                 "shell_command" => [
-                                    Dict("cmd" => "printf ready", "enter" => false),
+                                    Dict(
+                                        "cmd" => "printf ready",
+                                        "enter" => false,
+                                    ),
                                 ],
                             ),
                             Dict("focus" => true),
@@ -26,7 +29,8 @@ function main()
                 ],
             ),
         )
-        prepared = plan(expand(config; base_directory=dirname(server.socket_path)))
+        prepared =
+            plan(expand(config; base_directory=dirname(server.socket_path)))
         result = apply(server, prepared; rollback=:created)
         @assert result.status == :complete
         observed = snapshot(server)
@@ -48,9 +52,12 @@ function main()
             p -> p.start_directory == realpath(dirname(server.socket_path)),
             frozen_editor.panes,
         )
-        @assert frozen_editor.layout ==
-                only(read_formats(server, editor.ref, FormatField("window_layout"))).value
-        println("Loaded 1 window and 2 panes; frozen names, layout, paths and focus")
+        @assert frozen_editor.layout == only(
+            read_formats(server, editor.ref, FormatField("window_layout")),
+        ).value
+        println(
+            "Loaded 1 window and 2 panes; frozen names, layout, paths and focus",
+        )
         document
     end
     @assert !ispath(dirname(endpoint[].socket_path))
