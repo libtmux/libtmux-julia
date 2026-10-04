@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+#### macOS CI fixes
+
+Harden the matrix driver and test fixtures against macOS timing and process
+behavior, and add the
+[macOS CI guide](.github/contributing/MACOS_CI.md).
+
 ## 0.1.0-alpha.1 - 2026-09-21
 
 #### Initial Julia package suite
