@@ -9,6 +9,7 @@ const UNIT_FILES = (
     "model",
     "lookup",
     "criteria",
+    "criteria_cooperation",
     "wire",
     "sibling_wire",
     "projection",
