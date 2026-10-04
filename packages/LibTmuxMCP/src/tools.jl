@@ -1054,6 +1054,30 @@ function _result_limit_payload(name, payload, effects)
     result
 end
 
+struct _ToolInvocation <: Function
+    app::Application
+    plan::NamedTuple
+    progress::Any
+    effects::Base.RefValue{Bool}
+end
+@noinline _tool_invocation(app, plan, progress, effects) =
+    _ToolInvocation(app, plan, progress, effects)
+@noinline function (invocation::_ToolInvocation)(context)
+    plan = invocation.plan
+    budget = min(context.budget, get(plan.args, "timeoutSeconds", context.budget))
+    _execute_tool(
+        invocation.app,
+        plan,
+        _ToolContext(
+            context.started,
+            budget,
+            context.cancel,
+            invocation.progress,
+            invocation.effects,
+        ),
+    )
+end
+
 function _invoke_tool(
     app,
     name,
@@ -1064,14 +1088,7 @@ function _invoke_tool(
     effects = Ref(false)
     payload = try
         plan = _plan_tool(app, name, input)
-        _application_call(app, cancel) do context
-            budget = min(context.budget, get(plan.args, "timeoutSeconds", context.budget))
-            _execute_tool(
-                app,
-                plan,
-                _ToolContext(context.started, budget, context.cancel, progress, effects),
-            )
-        end
+        _application_call(_tool_invocation(app, plan, progress, effects), app, cancel)
     catch error
         Dict("error"=>_tool_error(error, effects[]))
     end

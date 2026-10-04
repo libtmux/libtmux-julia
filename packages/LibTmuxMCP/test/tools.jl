@@ -41,6 +41,41 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
         end
     end
 
+    @testset "MCP call owner preserves validation and deferred callback admission" begin
+        mktempdir("/tmp"; prefix="ltj-mcp-") do directory
+            endpoint = Server(socket_path=joinpath(directory, "s"))
+            caller = PaneRef(
+                ServerIdentity(socket_path=endpoint.socket_path, generation="1:1"),
+                "%0",
+            )
+            app = Application(endpoint; caller, allowed_tools=("capture_pane",), timeout=0.9)
+            name = SubString("capture_pane suffix", 1, 12)
+            cancelled = CancellationToken()
+            cancel!(cancelled)
+            try
+                for (arguments, token, code) in (
+                    (Dict("lines"=>0), CancellationToken(), "invalid_arguments"),
+                    (Dict("maxBytes"=>1), cancelled, "cancelled"),
+                    (Dict("maxBytes"=>1), CancellationToken(), "operation_failed"),
+                )
+                    result = tool_result(app, name, arguments; cancel=token, progress=1)
+                    detail = result.structured_content["error"]
+                    @test result.is_error &&
+                          (detail["code"], detail["effects"]) == (code, "none")
+                    @test isempty(app._active) && isopen(app)
+                end
+                close(app)
+                result = tool_result(app, name, Dict("maxBytes"=>1); progress=1)
+                detail = result.structured_content["error"]
+                @test result.is_error &&
+                      (detail["code"], detail["effects"]) == ("closed", "none")
+                @test isempty(app._active) && !isopen(app)
+            finally
+                close(app)
+            end
+        end
+    end
+
     @testset "MCP failures preserve whole-call I/O admission" begin
         result = CommandResult(UInt8[0x61], UInt8[], 0, 0)
         for failure in (

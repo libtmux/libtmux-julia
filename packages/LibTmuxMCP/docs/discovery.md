@@ -32,8 +32,9 @@ The advertised schema lists native field identities, scalar column names,
 Boolean nodes, and matching operators. The core decoder checks field types,
 relation targets, unknown keys, and operator meaning before tmux I/O. Criteria
 have at most 24 nesting levels, 512 nodes, 64 items per object/array, 1024 bytes
-per string, and 8192 string/key bytes in total. `columns` accepts 1–16 distinct
-scalar names. Invalid arguments report `invalid_arguments` with `effects: none`.
+per string, and 8192 string/key bytes in total. These limits count the serialized
+JSON tree, including object keys, scalar values, and containers. `columns` accepts
+1–16 distinct scalar names. Invalid arguments report `invalid_arguments` with `effects: none`.
 A listing observes at most 4096 candidate panes; a larger result reports
 `discovery_limit` and requires a scope.
 
@@ -59,8 +60,9 @@ observed links, returning `contextsCoverage: all_observed_links`. An unscoped
 listing has `complete_observed_graph` coverage. Scoped captures retain partial
 root collections; a criterion requiring an unknown relation reports
 `incomplete_observation`, even if the available rows happen to contain a
-matching link. None of these captures is atomic against concurrent daemon
-changes.
+matching link. Each tmux reply is bounded at 8 MiB. Use a scope when a
+server-wide capture exceeds that bound, including repeated rows from shared
+window links. None of these captures is atomic against concurrent daemon changes.
 
 ## Continue or restart
 
@@ -78,6 +80,10 @@ continuity verification. A token does not retain a server-side snapshot or grant
 target permission. Allowlist checks apply on every call.
 
 ## Wait, cancel, and recover
+
+Discovery filtering, projection validation, and fingerprinting cooperatively
+check the same cancellation token and total call deadline used for acquisition.
+Errors after tmux I/O admission retain `effects: possible` during this processing.
 
 Enable `wait_for_text` or `send_keys_and_wait` explicitly. Set `timeoutSeconds`
 to shorten the total call budget, including setup and capture. The value must

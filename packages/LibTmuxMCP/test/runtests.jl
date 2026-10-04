@@ -9,6 +9,7 @@ files = String[]
 mode in ("unit", "all") && append!(files, ["adapter.jl", "stdio.jl", "cli.jl"])
 push!(files, "tools.jl")
 mode in ("unit", "integration", "discovery", "all") && push!(files, "discovery.jl")
+mode in ("unit", "discovery", "all") && push!(files, "discovery_cooperation.jl")
 for file in files
     # Each suite has its own imported SDK/core names and transport fixtures.
     Base.include(Module(gensym(:MCPTest)), joinpath(@__DIR__, file))
