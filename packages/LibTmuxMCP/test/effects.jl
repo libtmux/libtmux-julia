@@ -67,6 +67,17 @@ using Test, LibTmux, LibTmuxMCP
                     ],
                 ),
             )
+            if !(
+                partial.is_error &&
+                get(partial.structured_content, "failedIndex", nothing) == 2 &&
+                length(get(partial.structured_content, "completed", ())) == 1
+            )
+                println(
+                    stderr,
+                    "whole-call effects partial payload: ",
+                    partial.structured_content,
+                )
+            end
             @test partial.is_error && partial.structured_content["failedIndex"] == 2
             @test only(partial.structured_content["completed"])["tool"] == "list_panes"
             @test partial.structured_content["error"]["effects"] == "possible"
@@ -79,13 +90,32 @@ using Test, LibTmux, LibTmuxMCP
                 "set-environment -g LTJ_ATTACH_HOOK observed",
             )
             token = CancellationToken()
+            waiting_reached = Ref(false)
             waited = LibTmuxMCP._invoke_tool(
                 app,
                 "wait_for_text",
                 Dict("text"=>"never-emitted");
                 cancel=token,
-                progress=phase -> phase == "waiting" && cancel!(token),
+                progress=phase -> begin
+                    if phase == "waiting"
+                        waiting_reached[] = true
+                        cancel!(token)
+                    end
+                end,
             )
+            if !(
+                waited.is_error &&
+                get(get(waited.structured_content, "error", Dict()), "code", nothing) ==
+                "cancelled"
+            )
+                println(
+                    stderr,
+                    "whole-call effects wait payload: ",
+                    waited.structured_content,
+                    "; waiting reached: ",
+                    waiting_reached[],
+                )
+            end
             @test waited.is_error &&
                   waited.structured_content["error"]["code"] == "cancelled"
             @test waited.structured_content["error"]["effects"] == "possible"
