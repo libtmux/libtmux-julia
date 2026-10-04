@@ -273,7 +273,11 @@ still uses normal compilation and inspects every owned source file. Product
 precompilation is unchanged. Prepared metadata records the preference, and
 the runner rejects preference changes before checking the cell.
 Preparation runs the same read-only formatter check at the selected thread
-count so the timed quality gate keeps its 30-second budget.
+count so the timed quality gate starts from warm caches. Preparation steps run
+under a hang guard and retry once when a step stalls without output.
+
+Phase budgets in the matrix driver are hang guards, not performance gates.
+Each sits well above the slowest hosted macOS run; see `check-matrix.py`.
 
 ```console
 $ matrix_stage=$(mktemp -d "${TMPDIR:-/tmp}/ltj-matrix.XXXXXX")
@@ -344,6 +348,9 @@ Linux run establishes macOS support. The workflow is prepared in
 Run performance work separately using [the benchmark guide](benchmark/README.md).
 It covers execution modes, local criteria, output pressure and installed
 MCP/workspace processes. Keep raw results and compiler flags with any claim.
+
+Tests must also pass on macOS: see
+[MACOS_CI.md](.github/contributing/MACOS_CI.md).
 
 ## Verification budgets and remaining gates
 
