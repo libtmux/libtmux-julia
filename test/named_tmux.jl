@@ -3,21 +3,15 @@ isdefined(@__MODULE__, :NamedTmux) || include("support/named_tmux.jl")
 # Immutable consumer staging exports each adapter's own test tree. Keep its
 # local fixture copy aligned with this canonical core fixture.
 @testset "named tmux fixture copies remain aligned" begin
-    canonical = read(joinpath(@__DIR__, "support", "named_tmux.jl"), String)
-    for package in ("LibTmuxMCP", "LibTmuxWorkspace")
-        copy = read(
-            joinpath(
-                @__DIR__,
-                "..",
-                "packages",
-                package,
-                "test",
-                "support",
-                "named_tmux.jl",
-            ),
-            String,
-        )
-        @test copy == canonical
+    for file in ("named_tmux.jl", "hang_guard.jl")
+        canonical = read(joinpath(@__DIR__, "support", file), String)
+        for package in ("LibTmuxMCP", "LibTmuxWorkspace")
+            copy = read(
+                joinpath(@__DIR__, "..", "packages", package, "test", "support", file),
+                String,
+            )
+            @test copy == canonical
+        end
     end
 end
 
@@ -35,14 +29,14 @@ end
         )
         failure = nothing
         try
-            NamedTmux.await_ready(fixture, NamedTmux.FolderMonitor(directory))
+            NamedTmux.await_ready(fixture, NamedTmux.FolderMonitor(directory); budget=0.9)
         catch error
             failure = error
         finally
             NamedTmux.stop!(process)
         end
         @test failure isa ErrorException
-        @test occursin("startup exceeded 900 ms", sprint(showerror, failure))
+        @test occursin("startup exceeded its hang guard", sprint(showerror, failure))
     end
 end
 

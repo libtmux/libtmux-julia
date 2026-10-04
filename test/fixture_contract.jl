@@ -79,13 +79,13 @@ using .OwnedTmux
     @test !ispath(owned[].directory)
 end
 
-# Outer case: deliberately stop the daemon to exercise its 900 ms deadline.
+# Outer case: deliberately stop the daemon to exercise its SIGKILL escalation.
 if get(ENV, "LIBTMUX_TEST_FIXTURE_ESCALATION", "0") == "1"
     @testset "owned tmux forced cleanup" begin
         owned = Ref{Any}()
         sentinel = ErrorException("callback failed before forced cleanup")
         failure = try
-            with_tmux() do fixture
+            with_tmux(; grace=0.9) do fixture
                 owned[] = fixture
                 run(Cmd(["kill", "-STOP", string(getpid(fixture.process))]))
                 throw(sentinel)
