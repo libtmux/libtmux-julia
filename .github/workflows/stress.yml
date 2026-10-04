@@ -1,7 +1,8 @@
 name: Stress
 
-# Repeats the core real-tmux suite (the phase that exercises the fixtures, control engine and lifecycle) and reports each phase's failure
-# count, so a flake shows up as a rate rather than as one red run.
+# Repeats the real-tmux suites (fixtures, control engine, lifecycle, workspace and MCP) and reports each phase's failure
+# count, so a flake shows up as a rate rather than as one red run. It also times the
+# steps that start a process, to size hang guards against the slowest run.
 
 on:
   schedule:
@@ -9,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       repeat:
-        description: Repetitions of the core real-tmux suite per lane
+        description: Repetitions of the real-tmux suites per lane
         default: '10'
 
 permissions:
@@ -26,7 +27,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         include:
           - {label: linux-control, runner: ubuntu-latest}
@@ -64,15 +65,27 @@ jobs:
         run: python3 dev/check-matrix.py build-tmux "$MATRIX_STAGE" "$TMUX_VERSION"
       - name: Prepare Julia tools and external consumers
         run: python3 dev/check-matrix.py prepare "$MATRIX_STAGE" --threads 1
-      - name: Repeat the core real-tmux suite
+      - name: Time start-up steps
         run: |
           mkdir -p "$RUNNER_TEMP/stress"
+          export LIBTMUX_TEST_TMUX="$MATRIX_STAGE/tmux/$TMUX_VERSION/bin/tmux"
+          {
+            echo "### Step timings: ${{ matrix.label }}"
+            echo
+            julia --startup-file=no --project="$MATRIX_STAGE/environment" dev/time-steps.jl 30
+          } | tee "$RUNNER_TEMP/stress/step-timings.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Repeat the real-tmux suites
+        run: |
+          mkdir -p "$RUNNER_TEMP/stress"
+          phases="core-normal workspace-normal mcp-normal mcp-product mcp-stopped-reader"
           for n in $(seq 1 "$REPEAT"); do
             python3 dev/check-matrix.py run "$MATRIX_STAGE" \
               --tmux "$MATRIX_STAGE/tmux/$TMUX_VERSION/bin/tmux" \
-              --threads 1 --tier outer --suite runtime --only core-normal || true
+              --threads 1 --tier outer --suite runtime --only $phases || true
             cp "$MATRIX_STAGE/results-outer-runtime-t1.json" "$RUNNER_TEMP/stress/run-$n.json"
-            cp "$MATRIX_STAGE/logs/core-normal.log" "$RUNNER_TEMP/stress/log-$n.txt"
+            for phase in $phases; do
+              cp "$MATRIX_STAGE/logs/$phase.log" "$RUNNER_TEMP/stress/log-$n-$phase.txt" || true
+            done
           done
       - name: Report failure counts
         if: always()
@@ -87,5 +100,6 @@ jobs:
             ${{ runner.temp }}/stress/*.json
             ${{ runner.temp }}/stress/failure-counts.csv
             ${{ runner.temp }}/stress/testset-failure-counts.csv
+            ${{ runner.temp }}/stress/step-timings.md
             ${{ runner.temp }}/stress/log-*.txt
             ${{ env.MATRIX_STAGE }}/logs/*.log
