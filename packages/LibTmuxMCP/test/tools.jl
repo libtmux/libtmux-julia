@@ -48,7 +48,8 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
                 ServerIdentity(socket_path=endpoint.socket_path, generation="1:1"),
                 "%0",
             )
-            app = Application(endpoint; caller, allowed_tools=("capture_pane",), timeout=0.9)
+            app =
+                Application(endpoint; caller, allowed_tools=("capture_pane",), timeout=0.9)
             name = SubString("capture_pane suffix", 1, 12)
             cancelled = CancellationToken()
             cancel!(cancelled)
