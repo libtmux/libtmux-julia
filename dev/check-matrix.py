@@ -42,7 +42,7 @@ DELIVERY_PHASES = frozenset(("extensions", "docs", "doc-snippets", "doc-contextu
                             "imports", "external-examples", "external-launchers",
                             "readme-commands"))
 SUITES = ("runtime", "delivery")
-LOOP_BUDGETS = {"mid": 10, "outer": 90}
+LOOP_BUDGETS = {"mid": 10, "outer": 120}
 
 TMUX_SHA256 = {
     "3.0a": "4ad1df28b4afa969e59c08061b45082fdc49ff512f30fc8e43217d7b0e5f8db9",
