@@ -14,7 +14,8 @@ It creates a session, captures the initial screen and asserts daemon cleanup.
 
 ```@eval
 using Markdown
-Markdown.parse("```julia\n" * read(joinpath(@__DIR__, "..", "..", "examples", "owned_capture.jl"), String) * "\n```")
+example = joinpath(@__DIR__, "..", "..", "examples", "owned_capture.jl")
+Markdown.parse("```julia\n" * read(example, String) * "\n```")
 ```
 
 Use [`Server`](@ref) for a borrowed endpoint. Neither construction nor local
