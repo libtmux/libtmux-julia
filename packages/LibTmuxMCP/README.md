@@ -24,6 +24,9 @@ and full compatibility support are pending.
 [Tool pages](https://libtmux.org/en/julia/latest/mcp/tools/) ·
 [Guide](https://libtmux.org/en/julia/latest/mcp/source-guide/)
 
+This companion is experimental. Cold Julia compilation can consume short
+request deadlines; complete compatibility and timing checks remain open.
+
 ## Install from source
 
 From a consumer project directory, add the core and MCP package from the same
@@ -32,7 +35,16 @@ public source revision:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="9e3776d07798174a3590a728d28029efcbb52780"; Pkg.add([Pkg.PackageSpec(url=repo, rev=revision), Pkg.PackageSpec(url=repo, rev=revision, subdir="packages/LibTmuxMCP")])'
+    -e 'using Pkg
+        Pkg.activate(".")
+        repo = "https://github.com/libtmux/libtmux-julia.git"
+        revision = "e48057e583ac918c042c58021fac52137bbe05b3"
+        Pkg.add([
+            Pkg.PackageSpec(url=repo, rev=revision),
+            Pkg.PackageSpec(
+                url=repo, rev=revision, subdir="packages/LibTmuxMCP",
+            ),
+        ])'
 ```
 
 Install a launcher bound to that environment with

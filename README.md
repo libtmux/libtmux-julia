@@ -23,8 +23,8 @@ and other Julia collection functions.
 [API reference](https://libtmux.org/en/julia/latest/reference/) ·
 [Field reference](docs/generated/criteria.md)
 
-The core uses only Julia standard libraries. Add a companion for MCP or
-workspace configuration:
+The core uses only Julia standard libraries. Add an experimental companion
+for MCP or workspace configuration:
 
 | Package | Use it for |
 | --- | --- |
@@ -40,7 +40,11 @@ core from this tested public source revision:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); Pkg.add(Pkg.PackageSpec(url="https://github.com/libtmux/libtmux-julia.git", rev="9e3776d07798174a3590a728d28029efcbb52780"))'
+    -e 'using Pkg
+        Pkg.activate(".")
+        repo = "https://github.com/libtmux/libtmux-julia.git"
+        revision = "e48057e583ac918c042c58021fac52137bbe05b3"
+        Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
 Have `tmux` on your `PATH`. Julia 1.10+ and tmux 3.3a+ are the compatibility
@@ -184,7 +188,7 @@ $ cd libtmux-julia
 ```
 
 ```console
-$ git checkout 9e3776d07798174a3590a728d28029efcbb52780
+$ git checkout e48057e583ac918c042c58021fac52137bbe05b3
 ```
 
 ```console
