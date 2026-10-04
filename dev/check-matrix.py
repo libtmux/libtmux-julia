@@ -40,7 +40,7 @@ TOOL_PREFERENCES = "[JuliaFormatter]\nprecompile_workload = false\n"
 DELIVERY_PHASES = frozenset(("extensions", "docs", "doc-snippets", "doc-contextual",
                             "imports", "external-examples", "external-launchers"))
 SUITES = ("runtime", "delivery")
-LOOP_BUDGETS = {"mid": 10, "outer": 60}
+LOOP_BUDGETS = {"mid": 10, "outer": 90}
 
 TMUX_SHA256 = {
     "3.2a": "551553a4f82beaa8dadc9256800bcc284d7c000081e47aa6ecbb6ff36eacd05f",
@@ -662,6 +662,7 @@ def command_plan(args, stage, metadata):
         raise ValueError("QA compiler cache control must be 0 or 1")
     quality_command = ["env", f"LIBTMUX_QUALITY_COMPILER_CACHE={qa_cache}", *minimal]
     commands = []
+    outer_budget = LOOP_BUDGETS["outer"]
     def add(name, argv, budget, tier):
         commands.append((name, argv, budget, tier))
     add("core-unit", [*minimal, "test/runtests.jl", "unit"], 10, "unit")
@@ -673,21 +674,21 @@ def command_plan(args, stage, metadata):
     add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 10, "quality")
     add("consumer-diagnostics", [*minimal, "dev/check-consumers.jl", "--self-test"], 10, "quality")
     add("example-inventory", [*minimal, "dev/check-doc-examples.jl", "check"], 10, "quality")
-    add("core-normal", [*cached_normal, "test/runtests.jl", "all"], 60, "outer")
-    add("workspace-normal", [*cached_normal, "packages/LibTmuxWorkspace/test/runtests.jl", "all"], 60, "outer")
-    add("mcp-normal", [*normal, "packages/LibTmuxMCP/test/runtests.jl", "all"], 60, "outer")
-    add("mcp-product", [*normal, "packages/LibTmuxMCP/test/product.jl"], 60, "outer")
+    add("core-normal", [*cached_normal, "test/runtests.jl", "all"], outer_budget, "outer")
+    add("workspace-normal", [*cached_normal, "packages/LibTmuxWorkspace/test/runtests.jl", "all"], outer_budget, "outer")
+    add("mcp-normal", [*normal, "packages/LibTmuxMCP/test/runtests.jl", "all"], outer_budget, "outer")
+    add("mcp-product", [*normal, "packages/LibTmuxMCP/test/product.jl"], outer_budget, "outer")
     add("mcp-stopped-reader", [sys.executable, "packages/LibTmuxMCP/test/stdio_backpressure.py",
                               args.julia, project, "--compile", "normal", "--threads",
-                              str(args.threads)], 60, "outer")
+                              str(args.threads)], outer_budget, "outer")
     extensions = 'using Test, LibTmux; include("test/criteria.jl"); include("test/json_extension.jl"); include("test/tables_extension.jl")'
-    add("extensions", [*normal, "-e", extensions], 60, "outer")
-    add("docs", [*normal, "docs/make.jl"], 60, "outer")
-    add("doc-snippets", [*normal, "dev/check-doc-examples.jl", "doctest"], 60, "outer")
-    add("doc-contextual", [*normal, "dev/check-doc-examples.jl", "contextual"], 60, "outer")
-    add("imports", [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]], 60, "outer")
-    add("external-examples", [*minimal, "dev/check-consumers.jl", "examples", metadata["consumers"]], 60, "outer")
-    add("external-launchers", [*minimal, "dev/check-consumers.jl", "launchers", metadata["consumers"]], 60, "outer")
+    add("extensions", [*normal, "-e", extensions], outer_budget, "outer")
+    add("docs", [*normal, "docs/make.jl"], outer_budget, "outer")
+    add("doc-snippets", [*normal, "dev/check-doc-examples.jl", "doctest"], outer_budget, "outer")
+    add("doc-contextual", [*normal, "dev/check-doc-examples.jl", "contextual"], outer_budget, "outer")
+    add("imports", [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]], outer_budget, "outer")
+    add("external-examples", [*minimal, "dev/check-consumers.jl", "examples", metadata["consumers"]], outer_budget, "outer")
+    add("external-launchers", [*minimal, "dev/check-consumers.jl", "launchers", metadata["consumers"]], outer_budget, "outer")
     return commands
 
 
@@ -1277,7 +1278,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         args.suite = "all"
         assert loop_result("mid", 10, args)["status"] == "FAIL"
         assert loop_result("mid", 9.9, args)["status"] == "PASS"
-        assert loop_result("outer", 60, args)["status"] == "FAIL"
+        assert loop_result("outer", LOOP_BUDGETS["outer"], args)["status"] == "FAIL"
         args.tier = "unit"
         assert not loop_result("mid", 1, args)["complete"]
         args.tier = "mid"

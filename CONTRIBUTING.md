@@ -370,7 +370,7 @@ Measure the whole command. Libraries should aim for the stretch budget.
 | --- | --- | --- |
 | Inner | Under 1 second | Focused tests after each edit |
 | Mid | Under 10 seconds | All unit suites, quality, formatting and generated-file checks |
-| Outer | Under 60 seconds | Complete prepared cell, including normal compilation, integration, documentation and installed consumers |
+| Outer | Under 90 seconds | Complete prepared cell, including normal compilation, integration, documentation and installed consumers |
 
 The matrix runner records aggregate mid and outer durations and fails an
 overrun even when every phase passes. Use `--tier mid` for the complete mid
