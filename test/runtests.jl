@@ -1,6 +1,10 @@
 using Test
 using LibTmux
 
+if get(ENV, "LIBTMUX_TEST_COMPILER_CACHE", "0") == "1"
+    import LibTmuxCoreCheckCompiler
+end
+
 const UNIT_FILES = (
     "server",
     "process",
@@ -57,5 +61,10 @@ else
     error("expected unit, integration, all, or a test file stem")
 end
 for file in files
-    include(file * ".jl")
+    if isdefined(@__MODULE__, :LibTmuxCoreCheckCompiler) &&
+       hasproperty(LibTmuxCoreCheckCompiler.FILE_CHECKS, Symbol(file))
+        LibTmuxCoreCheckCompiler.run_file(file)
+    else
+        include(file * ".jl")
+    end
 end

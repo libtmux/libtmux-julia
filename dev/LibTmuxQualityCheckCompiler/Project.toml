@@ -1,0 +1,13 @@
+name = "LibTmuxQualityCheckCompiler"
+uuid = "a826529b-e66e-4e22-80a1-bb72e8feb1ea"
+version = "0.1.0"
+
+[deps]
+Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
+SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[compat]
+julia = "1.10"
+Aqua = "=0.8.18"
