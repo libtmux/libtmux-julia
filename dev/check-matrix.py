@@ -1218,19 +1218,16 @@ println("PASS admitted version arguments construct real Pkg specifications")
                         cwd=base, env=os.environ.copy(), log=base / (mode + ".log"),
                         budget=0.2 if mode == "timeout" else 0.9, group=descendants)
                     connection, _ = listener.accept()
+                    # Closing this owned connection releases a leaf left alive by a regression.
                     with connection:
                         connection.settimeout(0.9)
-                        try:
-                            assert connection.recv(1) == b"r"
-                            if mode == "cancel":
-                                descendants.cancel()
-                            retired = future.result(timeout=0.9)
-                            assert retired["status"] == ("TIMEOUT" if mode == "timeout" else "CANCELLED")
-                            assert retired["direct_child_reaped"]
-                            assert connection.recv(1) == b"", "same-group descendant survived retirement"
-                        finally:
-                            # The owned connection releases the leaf if a regression leaves it alive.
-                            connection.shutdown(socket.SHUT_RDWR)
+                        assert connection.recv(1) == b"r"
+                        if mode == "cancel":
+                            descendants.cancel()
+                        retired = future.result(timeout=0.9)
+                        assert retired["status"] == ("TIMEOUT" if mode == "timeout" else "CANCELLED")
+                        assert retired["direct_child_reaped"]
+                        assert connection.recv(1) == b"", "same-group descendant survived retirement"
             descendants.close()
             assert not descendants.processes
         args = SimpleNamespace(stage=str(base), julia="julia", tmux="tmux", threads=1,
