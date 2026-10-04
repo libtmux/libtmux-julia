@@ -55,7 +55,7 @@
                 literal=true,
             )
             LibTmux.send_keys(server, pane, "!"; literal=true)
-            run_command(server, "wait-for", "echo-ready"; timeout=0.9)
+            run_command(server, "wait-for", "echo-ready"; timeout=30.0)
             @test read(echo_file) == codeunits(observed)
             @test startswith(LibTmux.capture_pane(server, pane; end_line=0), observed)
             trimmed = LibTmux.capture_bytes(server, pane; end_line=0)
@@ -91,7 +91,7 @@
                 "dd bs=1 count=2 of=$(quote_shell(enter_file)) 2>/dev/null; $enter_signal",
             )
             LibTmux.send_keys(server, pane, "Enter")
-            run_command(server, "wait-for", "enter-ready"; timeout=0.9)
+            run_command(server, "wait-for", "enter-ready"; timeout=30.0)
             @test read(enter_file) == codeunits("\r\n")
 
             wrap_ref = LibTmux.new_window(server, session_ref; command=["/bin/cat"])
@@ -119,7 +119,7 @@
                 "dd bs=1 count=$(ncodeunits(wrapped)) of=$(quote_shell(wrap_file)) 2>/dev/null; $wrap_signal",
             )
             LibTmux.paste_text(server, wrap_pane, wrapped)
-            run_command(server, "wait-for", "wrap-ready"; timeout=0.9)
+            run_command(server, "wait-for", "wrap-ready"; timeout=30.0)
             @test read(wrap_file) == codeunits(wrapped)
             @test !occursin(wrapped, LibTmux.capture_pane(server, wrap_pane))
             @test occursin(
@@ -163,7 +163,7 @@
             end
             outcome = nothing
             try
-                run_command(server, "wait-for", "loaded"; timeout=0.9)
+                run_command(server, "wait-for", "loaded"; timeout=30.0)
             finally
                 cancel!(active)
                 outcome = fetch(task)

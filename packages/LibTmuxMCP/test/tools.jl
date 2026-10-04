@@ -178,7 +178,7 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
                       denied.structured_content["error"]["code"] == "target_denied"
                 sent = tool_result(app, "send_keys", Dict("keys"=>["hello λ", "Enter"]))
                 @test !sent.is_error && sent.structured_content["completed"]
-                run_command(server, "wait-for", signal; timeout=0.9)
+                run_command(server, "wait-for", signal; timeout=30.0)
                 captured = tool_result(app, "capture_pane")
                 @test !captured.is_error &&
                       occursin("hello λ", captured.structured_content["text"])

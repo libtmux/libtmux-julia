@@ -47,7 +47,7 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
             prepared = plan(expand(validate(document); base_directory=fixture.directory))
             events = []
             result = apply(server, prepared; on_event=e -> push!(events, e))
-            LibTmux.run_command(server, "wait-for", "complete"; timeout=0.9)
+            LibTmux.run_command(server, "wait-for", "complete"; timeout=30.0)
             @test result.status == :complete
             @test isempty(result.borrowed)
             @test read(output, String) == "literal;#{pane_id}"

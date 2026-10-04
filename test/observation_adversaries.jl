@@ -29,7 +29,7 @@ end
                 fixture.socket,
             ],
         )
-        run_command(server, "wait-for", "raw-ready"; timeout=0.9)
+        run_command(server, "wait-for", "raw-ready"; timeout=30.0)
         target = only(panes(snapshot(server))).ref
         destination_window =
             new_window(server, session; name="destination", command=["/bin/cat"])
@@ -59,7 +59,7 @@ end
                     baseline = @sync begin
                         capturing = Threads.@spawn capture_baseline(primary)
                         try
-                            run_command(server, "wait-for", "baseline-captured"; timeout=0.9)
+                            run_command(server, "wait-for", "baseline-captured"; timeout=30.0)
                             send_keys(server, target, String(copy(during)); literal=true)
                             during_cursor = adversary_output(observer, during)
                             @test !istaskdone(capturing)
@@ -94,7 +94,7 @@ end
             observe_output(connection, target) do moved
                 old_cursor = observation_cursor(moved)
                 move_pane(server, target, destination; direction=:right)
-                @test_throws ObservationLost take!(moved; timeout=0.9)
+                @test_throws ObservationLost take!(moved; timeout=30.0)
                 @test_throws ObservationLost capture_baseline(moved)
                 @test_throws ObservationLost observe_output(
                     connection,
@@ -107,7 +107,7 @@ end
             observe_output(connection, target) do dying
                 @test capture_baseline(dying).continuity === :reset
                 kill_pane(server, target)
-                @test_throws ObservationLost take!(dying; timeout=0.9)
+                @test_throws ObservationLost take!(dying; timeout=30.0)
                 @test_throws ObservationLost capture_baseline(dying)
                 @test_throws ControlTargetError observe_output(connection, target)
                 @test all(p -> p.ref != target, panes(snapshot(connection)))

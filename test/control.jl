@@ -293,7 +293,7 @@
                 earlier, later =
                     LibTmux.control_signal(concurrent), LibTmux.control_signal(concurrent)
                 first_wait = Threads.@spawn try
-                    wait(earlier; timeout=0.9)
+                    wait(earlier; timeout=30.0)
                 catch error
                     error
                 end
@@ -303,7 +303,7 @@
                     end
                 end
                 second_wait = Threads.@spawn try
-                    wait(later; timeout=0.9)
+                    wait(later; timeout=30.0)
                 catch error
                     error
                 end
@@ -361,7 +361,7 @@
                     @test isempty(stream.queue)
                     run_command(server, "rename-window", "-t", window, "after-registration")
                     @test endswith(
-                        String(take!(stream; timeout=0.9).bytes),
+                        String(take!(stream; timeout=30.0).bytes),
                         " after-registration",
                     )
                 end

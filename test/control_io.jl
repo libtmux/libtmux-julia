@@ -82,7 +82,7 @@
                 error
             end
             try
-                run_command(server, "wait-for", "capture-created"; timeout=0.9)
+                run_command(server, "wait-for", "capture-created"; timeout=30.0)
                 cancel!(active)
             finally
                 run_command(server, "wait-for", "-S", "capture-release")

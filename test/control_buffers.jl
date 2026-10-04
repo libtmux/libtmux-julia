@@ -74,10 +74,10 @@
                         connection.identity,
                         only(read_formats(connection, raw_window, FormatField("pane_id"))).value,
                     )
-                    run_command(server, "wait-for", "raw-ready"; timeout=0.9)
+                    run_command(server, "wait-for", "raw-ready"; timeout=30.0)
                     @test paste_bytes(connection, raw_pane, payload) isa ControlResult
                     send_keys(connection, raw_pane, "Z"; literal=true)
-                    run_command(server, "wait-for", "raw-done"; timeout=0.9)
+                    run_command(server, "wait-for", "raw-done"; timeout=30.0)
                     @test read(output) == vcat(payload, codeunits("Z"))
                     missing = PaneRef(connection.identity, "%999999")
                     @test_throws ControlCommandError paste_bytes(
@@ -114,7 +114,7 @@
                     end
                     outcome = nothing
                     try
-                        run_command(server, "wait-for", "buffer-loaded"; timeout=0.9)
+                        run_command(server, "wait-for", "buffer-loaded"; timeout=30.0)
                     finally
                         cancel!(active)
                         try

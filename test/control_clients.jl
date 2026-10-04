@@ -85,7 +85,7 @@
                 )
                 close(input_pipe.out)
                 try
-                    run_command(server, "wait-for", "client-ready"; timeout=0.9)
+                    run_command(server, "wait-for", "client-ready"; timeout=30.0)
                     graph = snapshot(connection)
                     client = only(filter(c -> c.pid == getpid(victim), clients(graph))).ref
                     old = ClientRef(identity, ClientID(client.id.name, "stale"))

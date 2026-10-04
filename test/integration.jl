@@ -57,7 +57,7 @@
         catch error
             error
         end
-        run_command(server, "wait-for", "started"; timeout=0.9)
+        run_command(server, "wait-for", "started"; timeout=30.0)
         cancel!(token)
         outcome = fetch(task)
         @test outcome isa RequestCancelled

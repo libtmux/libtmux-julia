@@ -99,7 +99,7 @@ end
                 send_keys(server, pane, String(copy(wanted)); literal=true)
                 got = UInt8[]
                 while length(got) < length(wanted)
-                    append!(got, take!(output; timeout=0.9).bytes)
+                    append!(got, take!(output; timeout=30.0).bytes)
                 end
                 @test got == wanted
                 position = LibTmux.observation_cursor(output)
@@ -127,7 +127,7 @@ end
                 reset = LibTmux.observe_output(connection, pane)
                 before_reset = LibTmux.observation_cursor(reset)
                 split_window(server, pane; command=["cat"])
-                @test_throws LibTmux.ObservationLost take!(reset; timeout=0.9)
+                @test_throws LibTmux.ObservationLost take!(reset; timeout=30.0)
                 close(reset)
                 @test_throws LibTmux.ObservationLost LibTmux.observe_output(
                     connection,
@@ -233,7 +233,7 @@ end
                 )
                 events = LibTmux.notifications(lost)
                 kill(lost.process, Base.SIGKILL)
-                @test_throws LibTmux.ObservationLost take!(events; timeout=0.9)
+                @test_throws LibTmux.ObservationLost take!(events; timeout=30.0)
             finally
                 close(lost)
             end

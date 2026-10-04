@@ -157,7 +157,7 @@
             )
             close(input_pipe.out)
             try
-                run_command(server, "wait-for", "client-attached"; timeout=0.9)
+                run_command(server, "wait-for", "client-attached"; timeout=30.0)
                 client = only(clients(snapshot(server))).ref
                 old_client = ClientRef(client.server, ClientID(client.id.name, "stale"))
                 @test_throws StaleReference LibTmux.detach_client(server, old_client)

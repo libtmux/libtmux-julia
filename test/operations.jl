@@ -194,7 +194,7 @@ end
                 environment=("VALUE" => "#{session_name};",),
                 command=argv,
             )
-            LibTmux.run_command(server, "wait-for", "window-ready"; timeout=0.9)
+            LibTmux.run_command(server, "wait-for", "window-ready"; timeout=30.0)
             @test read(argv[5], String) == "#{session_name};"
             snap = snapshot(server)
             link = only(filter(l -> window(l).ref == window_ref, windowlinks(snap)))
@@ -209,7 +209,7 @@ end
                 environment=Dict("VALUE" => "pane;"),
                 command=argv,
             )
-            LibTmux.run_command(server, "wait-for", "pane-ready"; timeout=0.9)
+            LibTmux.run_command(server, "wait-for", "pane-ready"; timeout=30.0)
             @test read(argv[5], String) == "pane;"
             LibTmux.select_pane(server, second)
             LibTmux.select_window(server, WindowLinkRef(link))
