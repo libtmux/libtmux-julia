@@ -11,7 +11,13 @@ From the consumer project directory:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); Pkg.add(Pkg.PackageSpec(url="https://github.com/libtmux/libtmux-julia.git", rev="v0.1.0-alpha.1"))'
+    -e '
+    using Pkg
+    Pkg.activate(".")
+    Pkg.add(Pkg.PackageSpec(
+        url="https://github.com/libtmux/libtmux-julia.git",
+        rev="v0.1.0-alpha.1",
+    ))'
 ```
 
 Have `tmux` on `PATH`. Julia 1.10+ and tmux 3.2a+ are the compatibility
@@ -24,7 +30,15 @@ Add the core and MCP adapter together. Both specifications name the same tag:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxMCP")])'
+    -e '
+    using Pkg
+    Pkg.activate(".")
+    repo = "https://github.com/libtmux/libtmux-julia.git"
+    tag = "v0.1.0-alpha.1"
+    Pkg.add([
+        Pkg.PackageSpec(url=repo, rev=tag),
+        Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxMCP"),
+    ])'
 ```
 
 Install the local launcher after resolution:
@@ -50,7 +64,15 @@ Add the core and workspace adapter together:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
+    -e '
+    using Pkg
+    Pkg.activate(".")
+    repo = "https://github.com/libtmux/libtmux-julia.git"
+    tag = "v0.1.0-alpha.1"
+    Pkg.add([
+        Pkg.PackageSpec(url=repo, rev=tag),
+        Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace"),
+    ])'
 ```
 
 Install the local launcher after resolution:
