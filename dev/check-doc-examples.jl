@@ -92,7 +92,7 @@ const DOC_SNIPPETS = Dict(
     ("docs/projections.md", 2) => (
         kind=:executable,
         gate=:context,
-        fingerprint="b88c4bc32b35365f8f073940716b34bdeee28876ec6a1e5a1b2d64b0e31ddfd1",
+        fingerprint="d05f30d2b8eaa73d8d00679407a2a9dcb663e71f971199cb09d32aae4bd1efc5",
         source="",
         note="Owned snapshot passed to pane_columns with Tables 1.14",
     ),
