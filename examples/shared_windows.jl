@@ -12,9 +12,9 @@ function main()
 
         ops = new_session(server; name="ops", command=["/bin/cat"])
         captured = snapshot(server)
-        placeholder = only(
-            windows(onlymatch(SessionWhere(name="ops"), sessions(captured))),
-        ).ref
+        in_ops = onlymatch(SessionWhere(name="ops"), sessions(captured))
+        ops_windows = windows(in_ops)
+        placeholder = only(ops_windows).ref
         source = onlymatch(
             WindowLinkWhere(window=WindowWhere(name="api")),
             windowlinks(captured),
@@ -33,14 +33,12 @@ function main()
     # Captured relations remain usable after the owned daemon has stopped.
     has_api = SessionWhere(windows=F.AnyRelated(WindowWhere(name="api")))
     @assert count(has_api, sessions(snap)) == 2
-    selected = filter(
-        PaneWhere(active=true, window=WindowWhere(name="api")),
-        panes(snap),
-    )
+    in_api = WindowWhere(name="api")
+    selected = filter(PaneWhere(active=true, window=in_api), panes(snap))
     @assert length(selected) == 1
-    @assert only(selected).ref == only(
-        Iterators.filter(p -> p.active && p.window.name == "api", panes(snap)),
-    ).ref
+    active_api(p) = p.active && p.window.name == "api"
+    api_pane = only(Iterators.filter(active_api, panes(snap)))
+    @assert only(selected).ref == api_pane.ref
     println("2 sessions, 2 windows, 3 links, 3 panes, 5 occurrences")
     snap
 end
