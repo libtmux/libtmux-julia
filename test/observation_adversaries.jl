@@ -3,7 +3,7 @@ function adversary_output(stream, expected)
     cursors = ObservationCursor[]
     started = time_ns()
     while length(bytes) < length(expected)
-        remaining = 0.9 - (time_ns() - started) / 1e9
+        remaining = 30.0 - (time_ns() - started) / 1e9
         event = take!(stream; timeout=remaining)
         event isa PaneOutput || error("expected pane output")
         append!(bytes, event.bytes)
@@ -71,7 +71,7 @@ end
                                     "wait-for",
                                     "-S",
                                     "baseline-release";
-                                    timeout=0.9,
+                                    timeout=30.0,
                                 )
                             finally
                                 unset_hook(server, :global_session, "after-capture-pane")

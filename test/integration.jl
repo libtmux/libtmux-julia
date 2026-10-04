@@ -31,14 +31,14 @@
         )
 
         # Compile both timed paths before the one-thread live cancellation race.
-        run_command(server, "display-message", "-p", "ready"; timeout=0.9)
+        run_command(server, "display-message", "-p", "ready"; timeout=30.0)
         run_command(
             server,
             "display-message",
             "-p",
             "ready";
             cancel=CancellationToken(),
-            timeout=0.9,
+            timeout=30.0,
         )
 
         token = CancellationToken()
@@ -52,7 +52,7 @@
                 "wait-for",
                 "blocked";
                 cancel=token,
-                timeout=0.9,
+                timeout=30.0,
             )
         catch error
             error

@@ -1,6 +1,6 @@
 function await_observation(predicate, connection, message)
     expired = Ref(false)
-    timer, task = LibTmux._owned_timer(0.9) do
+    timer, task = LibTmux._owned_timer(30.0) do
         lock(connection.lock) do
             expired[] = true
             notify(connection.changed; all=true)

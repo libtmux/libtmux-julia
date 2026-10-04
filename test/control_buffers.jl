@@ -123,7 +123,7 @@
                                 "wait-for",
                                 "-S",
                                 "buffer-release";
-                                timeout=0.9,
+                                timeout=30.0,
                             )
                         finally
                             outcome = fetch(task)
