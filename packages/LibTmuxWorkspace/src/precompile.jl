@@ -89,8 +89,33 @@
     end
 end
 
-# Compile owned-session rollback without invoking tmux during package loading.
+# Compile owned runtime paths without invoking tmux during package loading.
 if ccall(:jl_generating_output, Cint, ()) == 1
+    # Installed stdio is wrapped by Julia; compile the owned entry without
+    # constructing its writer, signal watcher or any tmux endpoint.
+    precompile(Tuple{typeof(_main_owned)})
+    precompile(
+        Tuple{
+            typeof(Core.kwcall),
+            NamedTuple{
+                (:out, :err),
+                Tuple{IOContext{Base.PipeEndpoint},IOContext{IOStream}},
+            },
+            typeof(_main_owned),
+            Vector{String},
+        },
+    )
+    precompile(
+        Tuple{
+            typeof(Core.kwcall),
+            NamedTuple{
+                (:out, :err, :owner),
+                Tuple{IOContext{Base.PipeEndpoint},IOContext{IOStream},_CLIOwnedOutput},
+            },
+            typeof(_main),
+            Vector{String},
+        },
+    )
     precompile(
         _rollback_created,
         (
