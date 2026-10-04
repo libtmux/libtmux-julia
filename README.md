@@ -38,7 +38,13 @@ directory, add the core from its public Git tag:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); Pkg.add(Pkg.PackageSpec(url="https://github.com/libtmux/libtmux-julia.git", rev="v0.1.0-alpha.1"))'
+    -e '
+    using Pkg
+    Pkg.activate(".")
+    Pkg.add(Pkg.PackageSpec(
+        url="https://github.com/libtmux/libtmux-julia.git",
+        rev="v0.1.0-alpha.1",
+    ))'
 ```
 
 Have `tmux` on your `PATH`. Julia 1.10+ and tmux 3.2a+ are the compatibility
@@ -71,7 +77,8 @@ snap, screen = with_server() do server
 end
 
 @assert isempty(strip(screen))
-println(only(sessions(snap)).name, ": ", length(panes(snap)), " panes; blank capture verified")
+name = only(sessions(snap)).name
+println(name, ": ", length(panes(snap)), " panes; blank capture verified")
 ```
 
 ```text
