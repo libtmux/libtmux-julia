@@ -2,7 +2,7 @@
 @testset "control capture uses an owned binary spool" begin
     with_tmux() do fixture
         server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-        new_session(server; name="capture", command=["/bin/cat"])
+        new_session(server; name="capture", command=["/bin/cat"], timeout=HANG_GUARD)
         snap = snapshot(server)
         session = only(sessions(snap)).ref
         result = run_command(
@@ -28,7 +28,7 @@
         )
         expected = capture_bytes(server, pane)
         @test occursin("%end 1 2 1", decode_text(expected))
-        open_control(server, session) do connection
+        open_control(server, session; timeout=HANG_GUARD) do connection
             captured = snapshot(connection)
             @test entitykey.(panes(captured)) == entitykey.(panes(snapshot(server)))
             @test length(clients(captured)) == 2
@@ -82,7 +82,7 @@
                 error
             end
             try
-                run_command(server, "wait-for", "capture-created"; timeout=0.9)
+                run_command(server, "wait-for", "capture-created"; timeout=HANG_GUARD)
                 cancel!(active)
             finally
                 run_command(server, "wait-for", "-S", "capture-release")

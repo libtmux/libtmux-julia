@@ -18,7 +18,7 @@ with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do se
             bytes = UInt8[]
             started = time_ns()
             while length(bytes) < ncodeunits(message)
-                remaining = 0.9 - (time_ns() - started) / 1e9
+                remaining = 30.0 - (time_ns() - started) / 1e9
                 remaining > 0 || error("terminal echo deadline expired")
                 append!(bytes, take!(stream; timeout=remaining).bytes)
             end

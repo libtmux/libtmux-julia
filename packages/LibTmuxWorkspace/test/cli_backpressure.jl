@@ -43,7 +43,7 @@ import JSON
             )
             close(output.in)
             @test read(output.out, UInt8) == UInt8('{')
-            timer, timer_task = LibTmuxWorkspace._owned_timer(0.9) do
+            timer, timer_task = LibTmuxWorkspace._owned_timer(HANG_GUARD) do
                 if process_running(proc)
                     forced[] = true
                     kill(proc, Base.SIGKILL)

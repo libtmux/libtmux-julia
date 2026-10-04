@@ -3,8 +3,12 @@
     if isdefined(LibTmux, :new_session)
         with_tmux() do fixture
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-            session_ref =
-                LibTmux.new_session(server; name="typed-#{literal};", command=["/bin/cat"])
+            session_ref = LibTmux.new_session(
+                server;
+                name="typed-#{literal};",
+                command=["/bin/cat"],
+                timeout=HANG_GUARD,
+            )
             @test session_ref isa SessionRef
             @test only(sessions(snapshot(server))).name == "typed-#{literal};"
             first_pane = only(panes(snapshot(server))).ref
@@ -13,6 +17,7 @@
                 first_pane;
                 direction=:right,
                 command=["/bin/cat"],
+                timeout=HANG_GUARD,
             )
             @test second isa PaneRef && second != first_pane
             extra = LibTmux.new_window(
@@ -20,6 +25,7 @@
                 session_ref;
                 name="#{literal}",
                 command=["/bin/cat"],
+                timeout=HANG_GUARD,
             )
             @test extra isa WindowRef
             @test any(w -> w.name == "#{literal}", windows(snapshot(server)))
@@ -89,7 +95,7 @@ esac
         for reply in ("\t200\t$socket\t\$0\n", "100\t\t$socket\t\$0\n", "malformed\n")
             write(executable * ".reply", reply)
             failure = try
-                LibTmux.new_session(server; name="probe")
+                LibTmux.new_session(server; name="probe", timeout=HANG_GUARD)
             catch error
                 error
             end
@@ -168,6 +174,7 @@ end
                 name="environment",
                 environment=Dict("VALUE" => "session"),
                 command=["/bin/cat"],
+                timeout=HANG_GUARD,
             )
         catch error
             error
@@ -193,8 +200,9 @@ end
                 index=9,
                 environment=("VALUE" => "#{session_name};",),
                 command=argv,
+                timeout=HANG_GUARD,
             )
-            LibTmux.run_command(server, "wait-for", "window-ready"; timeout=0.9)
+            LibTmux.run_command(server, "wait-for", "window-ready"; timeout=HANG_GUARD)
             @test read(argv[5], String) == "#{session_name};"
             snap = snapshot(server)
             link = only(filter(l -> window(l).ref == window_ref, windowlinks(snap)))
@@ -208,8 +216,9 @@ end
                 firstpane;
                 environment=Dict("VALUE" => "pane;"),
                 command=argv,
+                timeout=HANG_GUARD,
             )
-            LibTmux.run_command(server, "wait-for", "pane-ready"; timeout=0.9)
+            LibTmux.run_command(server, "wait-for", "pane-ready"; timeout=HANG_GUARD)
             @test read(argv[5], String) == "pane;"
             LibTmux.select_pane(server, second)
             LibTmux.select_window(server, WindowLinkRef(link))

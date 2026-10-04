@@ -4,6 +4,8 @@ using FileWatching
 
 export Fixture, tmuxcmd, with_tmux
 
+include("hang_guard.jl")
+
 struct Fixture
     tmux::String
     directory::String
@@ -30,10 +32,10 @@ function tmuxcmd(fixture::Fixture, args::AbstractString...)
     )
 end
 
-function stop!(process::Base.Process)
+function stop!(process::Base.Process; grace=HANG_GUARD)
     process_exited(process) && return
     forced = Ref(false)
-    timer = Timer(0.9) do _
+    timer = Timer(grace) do _
         if process_running(process)
             forced[] = true
             kill(process, Base.SIGKILL)
@@ -48,34 +50,55 @@ function stop!(process::Base.Process)
     forced[] && error("owned tmux daemon required SIGKILL during cleanup")
 end
 
-function await_ready(fixture::Fixture, monitor::FolderMonitor)
-    timer = Timer(_ -> close(monitor), 0.9)
+# See `_watch_wake` in src/lifecycle.jl.
+function wake_source(monitor::FolderMonitor; interval=0.05)
+    wake = Base.Event(true)
+    task = Threads.@spawn begin
+        try
+            while true
+                wait(monitor)
+                notify(wake)
+            end
+        catch error
+            error isa EOFError || rethrow()
+        finally
+            notify(wake)
+        end
+    end
+    tick = Timer(_ -> notify(wake), interval; interval)
+    wake, () -> (close(tick); close(monitor); wait(task))
+end
+
+function await_ready(fixture::Fixture, monitor::FolderMonitor; budget=HANG_GUARD)
+    timer = Timer(_ -> close(monitor), budget)
+    wake, release = wake_source(monitor)
     try
         while process_running(fixture.process)
             # tmux removes its startup lock only after bind() and listen().
             if ispath(fixture.socket) && !ispath(fixture.socket * ".lock")
                 return
             end
-            isopen(monitor) || error("owned tmux startup exceeded 900 ms")
-            wait(monitor)
+            isopen(monitor) || error("owned tmux startup exceeded its hang guard")
+            wait(wake)
         end
         error("owned tmux daemon exited before startup completed")
     finally
         close(timer)
-        close(monitor)
+        release()
     end
 end
 
 """
-    with_tmux(f; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"))
+    with_tmux(f; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), grace=HANG_GUARD)
 
 Call `f(fixture)` with an isolated foreground tmux daemon. The callback's
 return value is preserved. Startup uses filesystem notifications; shutdown
 waits for and reaps the owned daemon, including when the callback throws.
 Only `PATH` is inherited; `TERM` and `SHELL` have fixed test values. The
-fixture does not own additional processes spawned by the callback.
+fixture does not own additional processes spawned by the callback. `grace` is
+how long a stopped daemon may take to exit before SIGKILL fails the test.
 """
-function with_tmux(f; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"))
+function with_tmux(f; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), grace=HANG_GUARD)
     directory = mktempdir(; prefix="libtmux-julia-", cleanup=false)
     process = nothing
     watcher = nothing
@@ -112,7 +135,7 @@ function with_tmux(f; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"))
     finally
         cleanup_error = nothing
         try
-            process === nothing || stop!(process)
+            process === nothing || stop!(process; grace)
         catch error
             cleanup_error = error
         finally

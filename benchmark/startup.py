@@ -23,6 +23,8 @@ import tomllib
 ROOT = Path(__file__).resolve().parent.parent
 PROFILES = {"normal": [], "o0": ["-O0"], "minimal": ["--compile=min", "-O0"]}
 OUTPUT_LIMIT = 1024 * 1024
+# Upper bound on a step that starts a process and is expected to finish.
+HANG_GUARD = 30.0
 BASELINE = ('println("LTJ_STARTUP_BASELINE\\t", VERSION, "\\t", '
             'Threads.nthreads(), "\\t", Sys.maxrss())')
 
@@ -308,7 +310,7 @@ def main(arguments):
                 if result["status"] == "interrupted":
                     break
             if time.monotonic() < deadline:
-                version = owned_process([args.tmux, "-V"], environment, min(deadline, time.monotonic() + 0.9))
+                version = owned_process([args.tmux, "-V"], environment, min(deadline, time.monotonic() + HANG_GUARD))
                 report["tmux_version"] = version["stdout"].decode("utf-8", "replace").strip()
                 report["tmux_version_status"] = version["status"]
             report["status"] = "pass" if len(report["samples"]) == len(jobs) and all(sample["status"] == "pass" for sample in report["samples"]) else "failed"
@@ -333,11 +335,11 @@ def self_test():
         marker = Path(directory) / "must-not-exist"
         literal = f"; $(touch {marker})"
         result = owned_process([sys.executable, "-c", "import sys; print(sys.argv[1])", literal],
-                               dict(os.environ), time.monotonic() + 0.9)
+                               dict(os.environ), time.monotonic() + HANG_GUARD)
         assert result["status"] == "pass" and result["stdout"] == (literal + "\n").encode()
         assert result["direct_child_reaped"] and not marker.exists()
         result = owned_process([sys.executable, "-c", "print('retained'); raise SystemExit(7)"],
-                               dict(os.environ), time.monotonic() + 0.9)
+                               dict(os.environ), time.monotonic() + HANG_GUARD)
         assert result["status"] == "failed" and result["exit_code"] == 7
         assert result["stdout"] == b"retained\n"
         result = owned_process([sys.executable, "-c", "import signal, threading; signal.signal(signal.SIGINT, signal.SIG_IGN); threading.Event().wait()"],
@@ -345,7 +347,7 @@ def self_test():
         assert result["status"] == "deadline" and result["direct_child_reaped"]
         assert result["termination_signal"] == "SIGKILL"
         result = owned_process([sys.executable, "-c", f"import os; os.write(1, b'x' * {OUTPUT_LIMIT + 1})"],
-                               dict(os.environ), time.monotonic() + 0.9)
+                               dict(os.environ), time.monotonic() + HANG_GUARD)
         assert result["status"] == "output_limit" and len(result["stdout"]) == OUTPUT_LIMIT
         assert result["direct_child_reaped"]
         result = owned_process([str(marker)], dict(os.environ), time.monotonic() - 1)

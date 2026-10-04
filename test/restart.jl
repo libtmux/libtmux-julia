@@ -45,7 +45,7 @@ end
 
 function await_restart_request(predicate, connection)
     expired = Ref(false)
-    timer, task = LibTmux._owned_timer(0.9) do
+    timer, task = LibTmux._owned_timer(HANG_GUARD) do
         lock(connection.lock) do
             expired[] = true
             notify(connection.changed; all=true)
@@ -74,12 +74,17 @@ end
             original[] = fixture
             original_pid = getpid(fixture.process)
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-            session = new_session(server; name="original", command=["/bin/cat"])
+            session = new_session(
+                server;
+                name="original",
+                command=["/bin/cat"],
+                timeout=HANG_GUARD,
+            )
             pane = only(panes(snapshot(server))).ref
-            connection = open_control(server, session)
+            connection = open_control(server, session; timeout=HANG_GUARD)
             signal = control_signal(connection)
             waiting = Threads.@spawn try
-                wait(signal)
+                wait(signal; timeout=60.0)
             catch error
                 error
             end
@@ -90,7 +95,7 @@ end
                     signal.request !== nothing && signal.request.frame !== nothing
                 end
                 queued = Threads.@spawn try
-                    rename_session(connection, session, "must-not-replay")
+                    rename_session(connection, session, "must-not-replay"; timeout=60.0)
                 catch error
                     error
                 end
@@ -112,6 +117,7 @@ end
                         fresh_server;
                         name="replacement",
                         command=["/bin/cat"],
+                        timeout=HANG_GUARD,
                     )
                     fresh_pane = only(panes(snapshot(fresh_server))).ref
                     @test session.id == fresh_session.id && pane.id == fresh_pane.id
@@ -150,7 +156,11 @@ end
                     )
                     @test connection.submitted == submitted
                     @test only(sessions(snapshot(fresh_server))).name == "replacement"
-                    open_control(fresh_server, fresh_session) do fresh_connection
+                    open_control(
+                        fresh_server,
+                        fresh_session;
+                        timeout=HANG_GUARD,
+                    ) do fresh_connection
                         before = fresh_connection.submitted
                         @test_throws StaleReference send_keys(
                             fresh_connection,

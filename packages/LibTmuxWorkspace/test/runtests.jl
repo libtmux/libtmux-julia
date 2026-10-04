@@ -2,6 +2,7 @@ using Test
 
 suite = isempty(ARGS) ? "unit" : only(ARGS)
 suite in ("unit", "integration", "cli", "all") || error("unknown workspace suite")
+include("support/hang_guard.jl")
 if suite in ("unit", "all")
     include("config.jl")
     include("script.jl")

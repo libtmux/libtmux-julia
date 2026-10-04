@@ -5,6 +5,8 @@ using LibTmux
 
 export Fixture, with_named_tmux
 
+include("hang_guard.jl")
+
 struct Fixture
     server::Server
     tmux::String
@@ -22,10 +24,10 @@ function tmuxcmd(fixture::Fixture, args::AbstractString...)
     )
 end
 
-function stop!(process::Base.Process)
+function stop!(process::Base.Process; grace=HANG_GUARD)
     process_exited(process) && return
     forced = Ref(false)
-    timer = Timer(0.9) do _
+    timer = Timer(grace) do _
         if process_running(process)
             forced[] = true
             kill(process, Base.SIGKILL)
@@ -40,27 +42,40 @@ function stop!(process::Base.Process)
     forced[] && error("owned named tmux daemon required SIGKILL during cleanup")
 end
 
-function await_ready(fixture::Fixture, monitor::FolderMonitor)
-    timer = Timer(_ -> close(monitor), 0.9)
+# See `_watch_wake` in src/lifecycle.jl.
+function wake_source(monitor::FolderMonitor; interval=0.05)
+    wake = Base.Event(true)
+    task = Threads.@spawn begin
+        try
+            while true
+                wait(monitor)
+                notify(wake)
+            end
+        catch error
+            error isa EOFError || rethrow()
+        finally
+            notify(wake)
+        end
+    end
+    tick = Timer(_ -> notify(wake), interval; interval)
+    wake, () -> (close(tick); close(monitor); wait(task))
+end
+
+function await_ready(fixture::Fixture, monitor::FolderMonitor; budget=HANG_GUARD)
+    timer = Timer(_ -> close(monitor), budget)
+    wake, release = wake_source(monitor)
     try
         while process_running(fixture.process)
             if ispath(fixture.socket_path) && !ispath(fixture.socket_path * ".lock")
                 return
             end
-            isopen(monitor) || error("owned named tmux startup exceeded 900 ms")
-            try
-                wait(monitor)
-            catch caught
-                caught isa EOFError || rethrow()
-                process_running(fixture.process) &&
-                    error("owned named tmux startup exceeded 900 ms")
-                error("owned named tmux daemon exited before startup completed")
-            end
+            isopen(monitor) || error("owned named tmux startup exceeded its hang guard")
+            wait(wake)
         end
         error("owned named tmux daemon exited before startup completed")
     finally
         close(timer)
-        close(monitor)
+        release()
     end
 end
 

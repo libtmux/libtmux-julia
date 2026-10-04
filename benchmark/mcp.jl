@@ -1,6 +1,8 @@
 using JSON, SHA, Pkg, Random
 
 const MCP_BENCH_ROOT = dirname(@__DIR__)
+# Upper bound on a step that starts a process and is expected to finish.
+const HANG_GUARD = 30.0
 const MCP_BENCH_PROFILES =
     Dict("normal"=>String[], "o0"=>["-O0"], "minimal"=>["--compile=min", "-O0"])
 const MCP_BENCH_TOOLS = (
@@ -194,7 +196,7 @@ function mcp_fixture(server, bytes)
         ready,
     ]
     session = new_session(server; name="benchmark-fixture", command)
-    run_command(server, "wait-for", ready; timeout=0.9)
+    run_command(server, "wait-for", ready; timeout=HANG_GUARD)
     pane = only(panes(snapshot(server))).ref
     app = Application(
         server;
@@ -264,7 +266,11 @@ function mcp_main(arguments)
     primary = nothing
     cleanup = nothing
     try
-        owned = open_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment)
+        owned = open_server(;
+            tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
+            env=environment,
+            timeout=HANG_GUARD,
+        )
         let server = owned.server
             report["tmux"] = strip(
                 decode_text(

@@ -10,6 +10,8 @@ import sys
 
 
 FAULT = "libtmux-example-injected-command-failure"
+# Upper bound on a step that starts or stops a process and is expected to finish.
+HANG_GUARD = 30.0
 
 
 def _ps_process_identity(pid):
@@ -142,7 +144,7 @@ def tmux_boundary(config_path, arguments):
         # Confirm a real session exists before failing the subsequent request.
         result = subprocess.run([config["tmux"], "-N", "-S", socket,
                                  "list-sessions", "-F", "#{session_id}"],
-                                capture_output=True, check=True, timeout=0.9)
+                                capture_output=True, check=True, timeout=HANG_GUARD)
         if not result.stdout.startswith(b"$"):
             raise AssertionError("failure injection did not follow session creation")
         (root / "fault.json").write_text(json.dumps(dict(
@@ -170,9 +172,9 @@ def terminate_record(record):
             if process_identity(pid) != record["started"]:
                 return
             signal.pidfd_send_signal(descriptor, signal.SIGTERM)
-            if not select.select([descriptor], [], [], 0.9)[0]:
+            if not select.select([descriptor], [], [], HANG_GUARD)[0]:
                 signal.pidfd_send_signal(descriptor, signal.SIGKILL)
-                if not select.select([descriptor], [], [], 0.9)[0]:
+                if not select.select([descriptor], [], [], HANG_GUARD)[0]:
                     raise AssertionError("owned example process did not exit after rescue")
         finally:
             os.close(descriptor)
@@ -189,9 +191,9 @@ def terminate_record(record):
                 os.kill(pid, signal.SIGTERM)
             except ProcessLookupError:
                 return
-            if not watcher.control(None, 1, 0.9):
+            if not watcher.control(None, 1, HANG_GUARD):
                 os.kill(pid, signal.SIGKILL)
-                if not watcher.control(None, 1, 0.9):
+                if not watcher.control(None, 1, HANG_GUARD):
                     raise AssertionError("owned example process did not exit after rescue")
         finally:
             watcher.close()
@@ -274,9 +276,9 @@ def main():
         parser.error("tmux executable is unavailable")
     if args.negative_control:
         program = '''using LibTmux
-        owned = open_server(; tmux=ENV["LIBTMUX_TEST_TMUX"])
+        owned = open_server(; tmux=ENV["LIBTMUX_TEST_TMUX"], timeout=HANG_GUARD)
         new_session(owned.server; name="missing-close", command=["/bin/cat"])
-        '''
+        '''.replace("HANG_GUARD", str(HANG_GUARD))
         try:
             run_example([*command, "-e", program], tmux=tmux, env=os.environ,
                         cwd=args.cwd, diagnostics=False)

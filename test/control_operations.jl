@@ -7,8 +7,13 @@
     if admitted
         with_tmux() do fixture
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-            session = new_session(server; name="typed-control", command=["/bin/cat"])
-            open_control(server, session) do connection
+            session = new_session(
+                server;
+                name="typed-control",
+                command=["/bin/cat"],
+                timeout=HANG_GUARD,
+            )
+            open_control(server, session; timeout=HANG_GUARD) do connection
                 pane = only(panes(snapshot(connection))).ref
                 count_before = connection.submitted
                 @test_throws UnsupportedCapability new_window(
@@ -91,8 +96,9 @@
                         fixture.socket,
                         signal.name,
                     ],
+                    timeout=HANG_GUARD,
                 )
-                wait(signal)
+                wait(signal; timeout=HANG_GUARD)
                 @test created isa WindowRef && created.server == connection.identity
                 observed = split(read(path, String), '\0')
                 @test observed[[1, 3, 4]] == [value, argument, ""]
@@ -110,6 +116,7 @@
                     only(panes(window)).ref;
                     direction=:right,
                     command=["/bin/cat"],
+                    timeout=HANG_GUARD,
                 )
                 @test extra isa PaneRef && extra.server == connection.identity
                 @test length(panes(snapshot(connection))) == 3
@@ -131,12 +138,13 @@
                         fixture.socket,
                         signal.name,
                     ],
+                    timeout=HANG_GUARD,
                 )
                 text = "literal;#{value};雪;"
                 @test send_keys(connection, receiver, text; literal=true) isa ControlResult
                 @test !isfile(path)
                 @test send_keys(connection, receiver, "Enter") isa ControlResult
-                wait(signal)
+                wait(signal; timeout=HANG_GUARD)
                 @test read(path, String) == text
                 @test isopen(connection)
             end

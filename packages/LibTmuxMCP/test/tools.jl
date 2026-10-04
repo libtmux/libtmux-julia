@@ -1,6 +1,9 @@
 using Test, LibTmux, LibTmuxMCP
 import ModelContextProtocol as ToolSDK
 
+isdefined(@__MODULE__, :HANG_GUARD) ||
+    Base.include(@__MODULE__, joinpath(@__DIR__, "support", "hang_guard.jl"))
+
 tool_result(app, name, args=Dict(); kwargs...) =
     LibTmuxMCP._invoke_tool(app, name, args; kwargs...)
 pane_target(ref) = Dict("paneId"=>string(ref.id), "generation"=>ref.server.generation)
@@ -132,6 +135,7 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
         LibTmux.with_server(;
             tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
             env=environment,
+            timeout=HANG_GUARD,
         ) do server
             signal = "mcp-tools-ready"
             command = [
@@ -143,9 +147,9 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
                 server.socket_path,
                 signal,
             ]
-            session = new_session(server; name="caller", command)
+            session = new_session(server; name="caller", command, timeout=HANG_GUARD)
             caller = only(panes(snapshot(server))).ref
-            other = split_window(server, caller; command=["/bin/cat"])
+            other = split_window(server, caller; command=["/bin/cat"], timeout=HANG_GUARD)
             allowed = [caller]
             app = Application(
                 server;
@@ -178,7 +182,7 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
                       denied.structured_content["error"]["code"] == "target_denied"
                 sent = tool_result(app, "send_keys", Dict("keys"=>["hello λ", "Enter"]))
                 @test !sent.is_error && sent.structured_content["completed"]
-                run_command(server, "wait-for", signal; timeout=0.9)
+                run_command(server, "wait-for", signal; timeout=HANG_GUARD)
                 captured = tool_result(app, "capture_pane")
                 @test !captured.is_error &&
                       occursin("hello λ", captured.structured_content["text"])
@@ -380,8 +384,14 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
         LibTmux.with_server(;
             tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
             env=environment,
+            timeout=HANG_GUARD,
         ) do server
-            borrowed = new_session(server; name="borrowed", command=["/bin/cat"])
+            borrowed = new_session(
+                server;
+                name="borrowed",
+                command=["/bin/cat"],
+                timeout=HANG_GUARD,
+            )
             caller = only(panes(snapshot(server))).ref
             names = (
                 "list_panes",
@@ -479,19 +489,21 @@ if any(arg -> arg in ("observation", "all"), ARGS)
         LibTmux.with_server(;
             tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
             env=environment,
+            timeout=HANG_GUARD,
         ) do server
             command = [
                 "/bin/sh",
                 "-c",
                 "while IFS= read -r line; do printf 'reply:%s\\n' \"\$line\"; done",
             ]
-            new_session(server; name="observed", command)
+            new_session(server; name="observed", command, timeout=HANG_GUARD)
             caller = only(panes(snapshot(server))).ref
             app = Application(
                 server;
                 caller,
                 allowed_panes=[caller],
                 allowed_tools=("wait_for_text", "send_keys_and_wait"),
+                timeout=HANG_GUARD,
             )
             try
                 sent = tool_result(

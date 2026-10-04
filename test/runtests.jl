@@ -3,6 +3,7 @@ using LibTmux
 
 suite = isempty(ARGS) ? "all" : only(ARGS)
 suite in ("unit", "integration", "all") || error("suite must be unit, integration or all")
+include("support/hang_guard.jl")
 if suite in ("unit", "all")
     include("server.jl")
     include("process.jl")
