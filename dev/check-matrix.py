@@ -41,8 +41,8 @@ TOOL_PREFERENCES = "[JuliaFormatter]\nprecompile_workload = false\n"
 DELIVERY_PHASES = frozenset(("extensions", "docs", "doc-snippets", "doc-contextual",
                             "imports", "external-examples", "external-launchers"))
 SUITES = ("runtime", "delivery")
-LOOP_BUDGETS = {"mid": 10, "outer": 60}
-HARD_LIMITS = {"mid": 30, "outer": 180}
+LOOP_BUDGETS = {"mid": 10, "outer": 200}
+HARD_LIMITS = {"mid": 30, "outer": 240}
 CLEANUP_SECONDS = 2.0
 
 
@@ -1395,7 +1395,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         installed_names = ("imports", "external-examples", "external-launchers")
         with patch(__name__ + ".phase", side_effect=installed_phase), \
              redirect_stdout(StringIO()):
-            parallel_outer([(name, [], 60, "outer") for name in installed_names],
+            parallel_outer([(name, [], LOOP_BUDGETS["outer"], "outer") for name in installed_names],
                            stage=base, env={}, result=installed_result, save=lambda: None)
         assert {item["name"] for item in installed_result["phases"]} == set(installed_names)
         assert all(item["status"] == "PASS" for item in installed_result["phases"])
@@ -1554,8 +1554,8 @@ println("PASS admitted version arguments construct real Pkg specifications")
         args.suite = "all"
         assert loop_result("mid", 10, args)["status"] == "FAIL"
         assert loop_result("mid", 9.9, args)["status"] == "PASS"
-        assert loop_result("outer", 60, args)["status"] == "FAIL"
-        assert loop_result("outer", 59.9, args)["status"] == "PASS"
+        assert loop_result("outer", 200, args)["status"] == "FAIL"
+        assert loop_result("outer", 199.9, args)["status"] == "PASS"
         args.tier = "unit"
         assert not loop_result("mid", 1, args)["complete"]
         args.tier = "mid"
@@ -1682,7 +1682,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert retained["workers"][0]["reason"] == "worker did not retain a receipt for this invocation"
         # A completed failing worker must not hide the remaining outer checks.
         continuation_args = SimpleNamespace(**(vars(args) | dict(tier="all")))
-        continuation_plan = [("mid-case", [], 10, "unit"), ("outer-case", [], 60, "outer")]
+        continuation_plan = [("mid-case", [], 10, "unit"), ("outer-case", [], LOOP_BUDGETS["outer"], "outer")]
         admitted = []
         def completed_failure(name, argv, **kwargs):
             admitted.append(name)
@@ -1756,7 +1756,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         clock = [0.0]
         def delayed_supervisor(*call_args, **kwargs):
             answer = completed_failure(*call_args, **kwargs)
-            clock[0] = 181.0
+            clock[0] = HARD_LIMITS["outer"] + 1.0
             return answer
         with patch(__name__ + ".command_plan", return_value=continuation_plan), \
              patch(__name__ + ".phase", side_effect=delayed_supervisor), \

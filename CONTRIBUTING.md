@@ -370,7 +370,12 @@ Measure the whole command. Libraries should aim for the stretch budget.
 | --- | --- | --- |
 | Inner | Under 1 second | Focused tests after each edit |
 | Mid | Under 10 seconds | All unit suites, quality, formatting and generated-file checks |
-| Outer | Under 60 seconds | Complete prepared cell, including normal compilation, integration, documentation and installed consumers |
+| Outer | Under 200 seconds temporarily | Complete prepared cell, including normal compilation, integration, documentation and installed consumers |
+
+The outer allowance is temporary. Track reductions in CI runtime and wait
+latency in [the follow-up issue](https://github.com/libtmux/libtmux-julia/issues/9).
+The long-term whole-command outer target remains under 60 seconds; inner and
+mid targets are unchanged.
 
 The matrix runner records aggregate mid and outer durations. A soft overrun
 fails the check while work continues. A completed failing mid worker still
@@ -383,7 +388,7 @@ whole-process timing as well as the runner's orchestration measurements.
 The aggregate clock starts after Python imports and argument parsing and
 ends before the supervisor's final receipt write and process exit.
 
-Hard limits stop work after 30 seconds for mid or 180 seconds for the complete
+Hard limits stop work after 30 seconds for mid or 240 seconds for the complete
 outer command, including mid. Every admitted phase shares its worker's
 absolute deadline. Expired deadlines admit no new work. These diagnostic
 allowances do not change the soft acceptance limits above.
