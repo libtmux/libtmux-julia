@@ -1,5 +1,6 @@
 module LibTmuxWorkspaceCheckCompiler
 using Test
+import LibTmuxTestDiagnostics
 using LibTmux
 using LibTmuxWorkspace
 import JSON
@@ -7,9 +8,18 @@ const SOURCE_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
 const TEST_CACHE_DEFINITIONS_ONLY = true
 const TEST_CACHE_ENTRIES = Ref(0)
 const TEST_CACHE_FIXTURES = Ref(0)
-include(joinpath(SOURCE_ROOT, "packages", "LibTmuxWorkspace", "test", "config.jl"))
-include(joinpath(SOURCE_ROOT, "packages", "LibTmuxWorkspace", "test", "script.jl"))
-include(joinpath(SOURCE_ROOT, "packages", "LibTmuxWorkspace", "test", "readiness.jl"))
+LibTmuxTestDiagnostics.diagnostic_include(
+    @__MODULE__,
+    joinpath(SOURCE_ROOT, "packages", "LibTmuxWorkspace", "test", "config.jl"),
+)
+LibTmuxTestDiagnostics.diagnostic_include(
+    @__MODULE__,
+    joinpath(SOURCE_ROOT, "packages", "LibTmuxWorkspace", "test", "script.jl"),
+)
+LibTmuxTestDiagnostics.diagnostic_include(
+    @__MODULE__,
+    joinpath(SOURCE_ROOT, "packages", "LibTmuxWorkspace", "test", "readiness.jl"),
+)
 const FILE_CHECKS = (
     config=(
         test_config_strict_parser_admission,

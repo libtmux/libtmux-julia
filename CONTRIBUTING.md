@@ -396,8 +396,35 @@ Version probes use the same deadline and owned process retirement as test
 commands. Receipts must explicitly describe their active, pending and planned
 phases; malformed progress blocks further work while retaining known failures.
 
-Exit observation and timer joins share a separate two-second allowance. The
-runner records direct-child reap and retained identities when observation
+Preparation develops the private test observer in the tooling project and
+queries the core, workspace and MCP runners for their unit and complete file
+inventories. These offline queries stop before test execution. The prepared
+metadata binds each file to its source hash. Product dependencies are unchanged.
+Admitted commands receive a directory scoped to their invocation and phase;
+native test processes write separate files identified by a process token and
+PID. Schema 4 receipts retain the independently admitted direct-process IDs
+and expected files. Child admission is still unproved, so complete test
+coverage remains partial even when every observed file and testset finishes.
+Commands outside those three runners retain process receipts without native
+test inventories.
+
+The diagnostic checkpoint does not yet produce CPU or wall-time profiles.
+The standalone artifact assembler supports summaries, timing CSV and JUnit
+results, but the runner and CI upload do not yet include them. It accepts
+bound profile checkpoints; native decoding remains unverified. CI uploads
+the existing receipts and logs.
+
+The runner records process launch, positive exit observation and reap times.
+First-output-byte timing is unavailable with direct log-file output. Native
+event decoding runs in a separate owned process with a two-second diagnostic
+limit and its own two-second cleanup allowance. Finalization time counts in
+the aggregate loops and is recorded separately; decoder failure preserves the
+original test result. The supervisor reserves up to six seconds for worker
+retirement across test cleanup and diagnostic finalization, including on
+interruption. These reserves admit no additional tests after the work deadline.
+
+Test-phase exit observation and timer joins share a separate two-second
+allowance. The runner records direct-child reap and retained identities when observation
 cannot finish. File writes, ownership locks and worker-pool shutdown are not
 covered by that wait bound. Escaped descendants and tmux fixtures still need
 their own cleanup evidence. The supervisor and CI job remain the external

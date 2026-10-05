@@ -3,6 +3,7 @@ uuid = "f3bb817e-ea69-444c-a26a-a84e39ac706a"
 version = "0.1.0"
 
 [deps]
+LibTmuxTestDiagnostics = "84219ba7-8c4a-4fda-82b3-4030b7b0a1bd"
 LibTmux = "1a5dcb9e-7968-44df-ad70-bf0a17628f09"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"

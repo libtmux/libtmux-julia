@@ -215,7 +215,11 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
 end
 
 if isempty(ARGS) || any(arg -> arg in ("effects", "integration", "all"), ARGS)
-    Base.include(@__MODULE__, joinpath(@__DIR__, "effects.jl"))
+    if isdefined(Main, :include_test_file)
+        Main.include_test_file(@__MODULE__, joinpath(@__DIR__, "effects.jl"))
+    else
+        Base.include(@__MODULE__, joinpath(@__DIR__, "effects.jl"))
+    end
 end
 
 if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
