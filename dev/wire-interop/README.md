@@ -4,6 +4,11 @@ The explicitly named Julia adapters translate a verified pane-scalar subset
 between two existing version-1 envelopes. The Julia-owned `encode_where`
 profile remains separate.
 
+Lua callers have a separately verified
+[producer workflow for Julia-owned criteria](lua.md). It authors the Julia
+profile directly and proves common native meanings; it does not translate
+the Lua library's own envelope. Use its separate preparation/check driver.
+
 | API | Envelope |
 | --- | --- |
 | `encode_typescript_where`, `decode_typescript_where` | `version`, `model`, `where` |

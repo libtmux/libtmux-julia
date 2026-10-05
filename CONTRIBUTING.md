@@ -67,8 +67,19 @@ $ /usr/bin/time -p julia \
 Use `--compile=min -O0` for the inner and mid semantic loops, including all
 unit tests. Normal compilation belongs in the outer loop because it includes
 Julia compilation across every public feature. Minimal compilation does not
-replace those normal checks or establish performance. The runner accepts only
-`unit`, `integration`, and `all`; omitting the argument selects `all`.
+replace those normal checks or establish performance. The runner accepts
+`unit`, `integration`, `all`, or one test file stem. Omitting the argument
+selects `all`. For a focused parser check:
+
+```console
+$ /usr/bin/time -p julia \
+    --startup-file=no \
+    --compile=min \
+    -O0 \
+    --project=. \
+    --threads=1 \
+    test/runtests.jl control_protocol
+```
 
 The forced-cleanup case belongs to the outer loop because it deliberately
 stops its owned daemon and waits for the 900 ms shutdown deadline:
@@ -262,18 +273,22 @@ $ rm -rf -- "$consumer_stage"
 
 ## Quality and compatibility
 
-The Python 3.12+ matrix driver prepares exact tooling versions, exports
-immutable consumer packages, and records commands, whole-command times and
-failure states. Preparation can access the network; subsequent checks are
-offline. Source changes invalidate the prepared export.
+The matrix driver requires Python 3.12+ on Linux and Python 3.13+ on macOS.
+It uses `waitid` with `WNOWAIT` to reserve child process identities until
+signalling and final reap finish. CI selects Python 3.13 on both platforms.
+The driver prepares exact tooling versions, exports immutable consumer
+packages, and records commands, whole-command times and failure states.
+Preparation can access the network; subsequent checks are offline. Source
+changes invalidate the prepared export.
 
 The isolated tooling project disables JuliaFormatter's optional package-wide
-precompile workload through its supported preference. The formatter check
-still uses normal compilation and inspects every owned source file. Product
-precompilation is unchanged. Prepared metadata records the preference, and
-the runner rejects preference changes before checking the cell.
-Preparation runs the same read-only formatter check at the selected thread
-count so the timed quality gate keeps its 30-second budget.
+precompile workload through its supported preference. During preparation,
+the private [compiler helper](dev/LibTmuxCheckCompiler/src/LibTmuxCheckCompiler.jl)
+formats inert syntax samples with the check's settings to cache compiler work.
+The timed formatter gate uses normal compilation, checks every owned source
+file, and includes the complete corpus work in the mid budget. Prepared
+metadata records the preference, and the runner rejects preference changes
+before checking the cell.
 
 ```console
 $ matrix_stage=$(mktemp -d "${TMPDIR:-/tmp}/ltj-matrix.XXXXXX")
@@ -321,8 +336,10 @@ Both must pass at the same source revision to complete a split cell. Use
 `--suite runtime` or `--suite delivery` to run one partition locally; omitting
 the option runs both.
 
-Pull requests run four combined QA cells: Linux floor at one thread, current
-Linux at four threads, and current macOS on each architecture at one thread.
+Pull requests require four complete Linux cells: floor and current Julia/tmux
+versions, each at one and four threads. Current macOS cells on each architecture
+are supplementary and may fail independently; their failures do not excuse a
+Linux failure.
 Intermediate releases and macOS floor evidence remain explicit compatibility
 work; an unrun release is not support.
 
@@ -349,11 +366,73 @@ MCP/workspace processes. Keep raw results and compiler flags with any claim.
 
 Measure the whole command. Libraries should aim for the stretch budget.
 
-| Loop | Budget | Stretch | Scope |
-| --- | --- | --- | --- |
-| Inner | Under 5 seconds | Under 2 seconds | Focused tests after each edit |
-| Mid | Under 30 seconds | Under 10 seconds | Unit suites, lint, and generated-file checks before handoff |
-| Outer | Under 5 minutes | Under 60 seconds | Types, builds, integration tests, and compatibility checks before commit or PR |
+| Loop | Whole-command budget | Scope |
+| --- | --- | --- |
+| Inner | Under 1 second | Focused tests after each edit |
+| Mid | Under 10 seconds | All unit suites, quality, formatting and generated-file checks |
+| Outer | Under 200 seconds temporarily | Complete prepared cell, including normal compilation, integration, documentation and installed consumers |
+
+The outer allowance is temporary. Track reductions in CI runtime and wait
+latency in [the follow-up issue](https://github.com/libtmux/libtmux-julia/issues/9).
+The long-term whole-command outer target remains under 60 seconds; inner and
+mid targets are unchanged.
+
+The matrix runner records aggregate mid and outer durations. A soft overrun
+fails the check while work continues. A completed failing mid worker still
+runs the outer checks; an interrupted, incomplete or stale worker stops them.
+Use `--tier mid` for the complete mid scope. The default complete outer
+includes the preceding mid checks.
+Individual unit/quality and runtime/delivery partitions record incomplete
+scope; they cannot establish a passing complete loop. Retain external
+whole-process timing as well as the runner's orchestration measurements.
+The aggregate clock starts after Python imports and argument parsing and
+ends before the supervisor's final receipt write and process exit.
+
+Hard limits stop work after 30 seconds for mid or 240 seconds for the complete
+outer command, including mid. Every admitted phase shares its worker's
+absolute deadline. Expired deadlines admit no new work. These diagnostic
+allowances do not change the soft acceptance limits above.
+Version probes use the same deadline and owned process retirement as test
+commands. Receipts must explicitly describe their active, pending and planned
+phases; malformed progress blocks further work while retaining known failures.
+
+Preparation develops the private test observer in the tooling project and
+queries the core, workspace and MCP runners for their unit and complete file
+inventories. These offline queries stop before test execution. The prepared
+metadata binds each file to its source hash. Product dependencies are unchanged.
+Admitted commands receive a directory scoped to their invocation and phase;
+native test processes write separate files identified by a process token and
+PID. Schema 4 receipts retain the independently admitted direct-process IDs
+and expected files. Child admission is still unproved, so complete test
+coverage remains partial even when every observed file and testset finishes.
+Commands outside those three runners retain process receipts without native
+test inventories.
+
+The diagnostic checkpoint does not yet produce CPU or wall-time profiles.
+The standalone artifact assembler supports summaries, timing CSV and JUnit
+results, but the runner and CI upload do not yet include them. It accepts
+bound profile checkpoints; native decoding remains unverified. CI uploads
+the existing receipts and logs.
+
+The runner records process launch, positive exit observation and reap times.
+First-output-byte timing is unavailable with direct log-file output. Native
+event decoding runs in a separate owned process with a two-second diagnostic
+limit and its own two-second cleanup allowance. Finalization time counts in
+the aggregate loops and is recorded separately; decoder failure preserves the
+original test result. The supervisor reserves up to six seconds for worker
+retirement across test cleanup and diagnostic finalization, including on
+interruption. These reserves admit no additional tests after the work deadline.
+
+Test-phase exit observation and timer joins share a separate two-second
+allowance. The runner records direct-child reap and retained identities when observation
+cannot finish. File writes, ownership locks and worker-pool shutdown are not
+covered by that wait bound. Escaped descendants and tmux fixtures still need
+their own cleanup evidence. The supervisor and CI job remain the external
+stop guards; CI preserves logs and receipts after a failed check.
+
+Complete timing gates remain open while the existing normal suites and
+installed launcher checks exceed these limits. Passing correctness checks
+do not waive the timing requirement.
 
 The current runnable tiers include unit checks, owned-tmux integration,
 forced-cleanup cases, generated criteria and external imports. Four CI product

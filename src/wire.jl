@@ -159,7 +159,7 @@ function _wire_operator(op)
         op isa Type && return Dict("op"=>name, "value"=>_wire_scalar(op.value))
     end
     op isa Filters.OneOf &&
-        return Dict("op"=>"in", "values"=>[_wire_scalar(v) for v in op.values])
+        return Dict("op"=>"in", "values"=>Any[_wire_scalar(v) for v in op.values])
     for (Type, name) in (
         (Filters.Contains, "contains"),
         (Filters.StartsWith, "startsWith"),
@@ -178,17 +178,21 @@ function _wire_operator(op)
     _wire_error(:unsupported, "\$", "criterion operator is not portable")
 end
 function _wire_node(q::Criterion)
-    q isa Filters.AllOf &&
-        return Dict("op"=>"all", "args"=>[_wire_node(c) for c in q.criteria])
-    q isa Filters.AnyOf &&
-        return Dict("op"=>"any", "args"=>[_wire_node(c) for c in q.criteria])
+    q isa Filters.AllOf && return Dict(
+        "op"=>"all",
+        "args"=>Dict{String,Any}[_wire_node(c) for c in q.criteria],
+    )
+    q isa Filters.AnyOf && return Dict(
+        "op"=>"any",
+        "args"=>Dict{String,Any}[_wire_node(c) for c in q.criteria],
+    )
     q isa Filters.Not && return Dict("op"=>"not", "arg"=>_wire_node(q.criterion))
     entity = _criterion_entity(q)
     haskey(_WIRE_CONSTRUCTORS, entity) && q isa _WIRE_CONSTRUCTORS[entity] ||
         _wire_error(:unsupported, "\$", "only built-in criteria are portable")
     Dict(
         "op"=>"fields",
-        "fields"=>[
+        "fields"=>Dict{String,Any}[
             Dict(
                 "field"=>_FIELD_WIRE[(entity, clause.field)],
                 "match"=>_wire_operator(clause.constraint),

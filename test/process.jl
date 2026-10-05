@@ -170,4 +170,8 @@ end
     )
 end
 
-include("process_retirement.jl")
+if isdefined(Main, :include_test_file)
+    Main.include_test_file(@__MODULE__, joinpath(@__DIR__, "process_retirement.jl"))
+else
+    include("process_retirement.jl")
+end

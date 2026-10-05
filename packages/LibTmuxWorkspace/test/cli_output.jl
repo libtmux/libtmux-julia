@@ -113,7 +113,7 @@ end
     end
 end
 
-@testset "owned full pipe interrupts an active write" begin
+@testset "owned CLI emit waits for its write and propagates a full pipe deadline" begin
     output = Pipe()
     Base.link_pipe!(output; reader_supports_async=true, writer_supports_async=true)
     owner = LibTmuxWorkspace._CLIOwnedOutput(
@@ -121,14 +121,25 @@ end
         IOBuffer();
         timeout=0.2,
     )
+    writer = LibTmuxWorkspace._CLIOutput(owner.out, owner.err, "human", owner)
+    emitter = Threads.@spawn try
+        LibTmuxWorkspace._cli_emit(writer, :out, repeat("x", 1024^2))
+        :completed
+    catch error
+        error
+    end
     try
-        LibTmuxWorkspace._cli_output_enqueue(owner, :out, repeat("x", 1024^2))
         @test read(output.out, UInt8) == UInt8('x')
+        result = fetch(emitter)
+        @test result isa LibTmuxWorkspace._CLIOutputError
+        @test result isa LibTmuxWorkspace._CLIOutputError &&
+              result.reason == :write_deadline
         @test_throws LibTmuxWorkspace._CLIOutputError close(owner)
         @test istaskdone(owner.worker) && LibTmux.iscancelled(owner.cancel)
         @test !isopen(output.in) && !isopen(output.out)
     finally
         close(output)
+        wait(emitter)
         try
             close(owner)
         catch

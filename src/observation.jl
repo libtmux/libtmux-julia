@@ -95,6 +95,9 @@ mutable struct ObservationStream
     error::Union{Nothing,Exception}
     cleanup_done::Bool
     reserved::Bool
+    _wait_decoder::Union{Nothing,TextDecoder}
+    _wait_cursor::ObservationCursor
+    _wait_active::Bool
 end
 
 mutable struct _ObservationHub <: _ControlObservationState
@@ -454,6 +457,9 @@ function _new_observation(
             nothing,
             false,
             true,
+            nothing,
+            cursor,
+            false,
         )
         finalizer(_finalize_observation!, stream)
         push!(hub.streams, WeakRef(stream))
@@ -652,7 +658,7 @@ function Base.close(stream::ObservationStream)
     nothing
 end
 
-function _take_observation(stream; timeout=nothing, cancel=nothing)
+function _take_observation(stream; timeout=nothing, cancel=nothing, _text_wait::Bool=false)
     connection = stream.connection
     timeout === nothing ||
         (isfinite(timeout) && timeout > 0) ||
@@ -674,6 +680,9 @@ function _take_observation(stream; timeout=nothing, cancel=nothing)
         on_cancel(() -> interrupt(RequestCancelled(false)), cancel)
     try
         lock(connection.lock) do
+            stream._wait_active &&
+                !_text_wait &&
+                throw(ArgumentError("raw reads cannot interleave with an active text wait"))
             if stream.consumer === nothing
                 stream.consumer = current_task()
                 notify(connection.changed; all=true)

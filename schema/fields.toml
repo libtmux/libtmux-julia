@@ -13,6 +13,13 @@ fields = [
   { name = "current_command", wire = "tmux.pane.current_command", type = "String", nullable = true, tmux = "pane_current_command", availability = "May be uncaptured; nonempty dead-pane fallback is retained.", summary = "Command name observed by tmux." },
   { name = "current_path", wire = "tmux.pane.current_path", type = "String", nullable = true, tmux = "pane_current_path", availability = "May be uncaptured when tmux cannot resolve cwd.", summary = "Path observed on the tmux host; text matching is lexical." },
   { name = "title", wire = "tmux.pane.title", type = "String", tmux = "pane_title", summary = "Pane title, including literal format-like text." },
+  { name = "pid", wire = "tmux.pane.pid", type = "Integer", tmux = "pane_pid", summary = "Observed initial pane process ID; not an identity guard." },
+  { name = "tty", wire = "tmux.pane.tty", type = "String", nullable = true, tmux = "pane_tty", summary = "Pane PTY path, or captured absence for a pane without a PTY." },
+  { name = "exit_status", wire = "tmux.pane.exit_status", type = "Integer", nullable = true, tmux = "pane_dead_status", summary = "Normal-exit status retained by tmux; live or signal-terminated panes have captured absence." },
+  { name = "history_size", wire = "tmux.pane.history_size", type = "Integer", tmux = "history_size", summary = "Retained scrollback lines." },
+  { name = "history_limit", wire = "tmux.pane.history_limit", type = "Integer", tmux = "history_limit", summary = "Configured maximum scrollback lines." },
+  { name = "cursor_x", wire = "tmux.pane.cursor_x", type = "Integer", tmux = "cursor_x", summary = "Zero-based cursor column in the pane's base screen." },
+  { name = "cursor_y", wire = "tmux.pane.cursor_y", type = "Integer", tmux = "cursor_y", summary = "Zero-based cursor row in the pane's base screen." },
   { name = "window", wire = "tmux.pane.window", type = "relation", relation = "one", target = "window", tmux = "window_id", summary = "Physical containing window." },
 ]
 
@@ -24,6 +31,10 @@ fields = [
   { name = "name", wire = "tmux.window.name", type = "String", tmux = "window_name", summary = "Window name." },
   { name = "width", wire = "tmux.window.width", type = "Integer", tmux = "window_width", summary = "Window width in cells." },
   { name = "height", wire = "tmux.window.height", type = "Integer", tmux = "window_height", summary = "Window height in cells." },
+  { name = "layout", wire = "tmux.window.layout", type = "String", tmux = "window_layout", summary = "Full window layout, including saved layout while zoomed." },
+  { name = "visible_layout", wire = "tmux.window.visible_layout", type = "String", tmux = "window_visible_layout", summary = "Currently visible layout, including the zoomed pane." },
+  { name = "zoomed", wire = "tmux.window.zoomed", type = "Bool", tmux = "window_zoomed_flag", summary = "Whether the window is zoomed." },
+  { name = "activity", wire = "tmux.window.activity", type = "Integer", tmux = "window_activity", summary = "Observed window activity time in Unix seconds." },
   { name = "panes", wire = "tmux.window.panes", type = "relation", relation = "many", target = "pane", tmux = "pane_id", summary = "Complete captured physical pane membership." },
   { name = "windowlinks", wire = "tmux.window.windowlinks", type = "relation", relation = "many", target = "windowlink", tmux = "session_id/window_index", summary = "Complete captured links to sessions." },
 ]
@@ -35,6 +46,9 @@ fields = [
   { name = "id", wire = "tmux.session.id", type = "SessionID", tmux = "session_id", summary = "Session identity." },
   { name = "name", wire = "tmux.session.name", type = "String", tmux = "session_name", summary = "Session name." },
   { name = "attached_clients", wire = "tmux.session.attached_clients", type = "Integer", tmux = "session_attached", summary = "Attached client count observed by tmux." },
+  { name = "created", wire = "tmux.session.created", type = "Integer", tmux = "session_created", summary = "Session creation time in Unix seconds." },
+  { name = "activity", wire = "tmux.session.activity", type = "Integer", tmux = "session_activity", summary = "Observed session activity time in Unix seconds." },
+  { name = "last_attached", wire = "tmux.session.last_attached", type = "Integer", nullable = true, tmux = "session_last_attached", summary = "Last attachment time in Unix seconds, or captured absence when tmux has no recorded attachment." },
   { name = "windows", wire = "tmux.session.windows", type = "relation", relation = "many", target = "window", tmux = "window_id", summary = "Unique windows reached through complete captured session links." },
   { name = "windowlinks", wire = "tmux.session.windowlinks", type = "relation", relation = "many", target = "windowlink", tmux = "window_index", summary = "Complete captured links including session-specific indices." },
 ]
@@ -47,6 +61,7 @@ fields = [
   { name = "name", wire = "tmux.client.name", type = "String", tmux = "client_name", summary = "Exact tmux client name." },
   { name = "pid", wire = "tmux.client.pid", type = "Integer", tmux = "client_pid", summary = "Observed client process ID." },
   { name = "created", wire = "tmux.client.created", type = "Integer", tmux = "client_created", summary = "Observed creation time; not a strict identity guard." },
+  { name = "activity", wire = "tmux.client.activity", type = "Integer", tmux = "client_activity", summary = "Observed client activity time in Unix seconds." },
   { name = "session", wire = "tmux.client.session", type = "relation", nullable = true, relation = "one", target = "session", tmux = "session_id", summary = "Captured session or known absence; normal acquisition lists attached clients." },
 ]
 

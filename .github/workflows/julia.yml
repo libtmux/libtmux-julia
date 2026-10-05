@@ -6,6 +6,22 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      debug_runner:
+        description: Open an actor-restricted SSH session after a selected cell fails
+        type: boolean
+        default: false
+      debug_cell:
+        description: Matrix cell to inspect when debug_runner is enabled
+        type: choice
+        default: Linux-x86_64-julia1.13.0-tmux3.7c-t4-all
+        options:
+          - Linux-x86_64-julia1.10.0-tmux3.2a-t1-all
+          - Linux-x86_64-julia1.10.0-tmux3.2a-t4-all
+          - Linux-x86_64-julia1.13.0-tmux3.7c-t1-all
+          - Linux-x86_64-julia1.13.0-tmux3.7c-t4-all
+          - Darwin-arm64-julia1.13.0-tmux3.7c-t1-all
+          - Darwin-x86_64-julia1.13.0-tmux3.7c-t1-all
 
 permissions:
   contents: read
@@ -23,6 +39,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
       - name: Verify release tag metadata
         if: >-
           github.event_name == 'push' &&
@@ -53,6 +72,7 @@ jobs:
     needs: matrix
     name: ${{ matrix.job_label }}
     runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.optional }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.matrix.outputs.cells) }}
@@ -63,6 +83,11 @@ jobs:
       - name: Choose owned preparation stage
         run: echo "MATRIX_STAGE=$RUNNER_TEMP/libtmux-julia-matrix" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
       - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
         with:
           version: ${{ matrix.julia }}
@@ -120,6 +145,49 @@ jobs:
             ${{ env.MATRIX_STAGE }}/environment/LocalPreferences.toml
             ${{ env.MATRIX_STAGE }}/environment/Manifest.toml
             ${{ env.MATRIX_STAGE }}/logs/*.log
+
+      - name: Inspect failed cell with actor-restricted SSH
+        id: runner_debug
+        if: >-
+          failure() &&
+          github.event_name == 'workflow_dispatch' &&
+          github.repository == 'libtmux/libtmux-julia' &&
+          inputs.debug_runner &&
+          inputs.debug_cell == matrix.job_label
+        timeout-minutes: 10
+        uses: owenthereal/action-upterm@7df5fa550d6dc458335f4b2685452a0e42d0ba7e # v2.4.0
+        with:
+          limit-access-to-actor: true
+          wait-timeout-minutes: 3
+          upterm-version: v0.34.0
+          detached: true
+      - name: Record actor-restricted debug access
+        id: debug_access
+        if: failure() && steps.runner_debug.outputs.ssh-command != ''
+        env:
+          DEBUG_SSH_COMMAND: ${{ steps.runner_debug.outputs.ssh-command }}
+          DEBUG_CELL: ${{ matrix.job_label }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, pathlib, subprocess
+          checkout = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          assert checkout == os.environ["GITHUB_SHA"]
+          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "libtmux-julia-debug-access.json"
+          with path.open("x") as output:
+              path.chmod(0o600)
+              json.dump(dict(schema=1, checkout=checkout, run_id=os.environ["GITHUB_RUN_ID"],
+                             run_attempt=os.environ["GITHUB_RUN_ATTEMPT"], cell=os.environ["DEBUG_CELL"],
+                             ssh_command=os.environ["DEBUG_SSH_COMMAND"]), output)
+              output.write("\n")
+          PYTHON
+      - name: Preserve actor-restricted debug access
+        if: failure() && steps.debug_access.conclusion == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.job_label }}-debug-access
+          retention-days: 1
+          if-no-files-found: error
+          path: ${{ runner.temp }}/libtmux-julia-debug-access.json
 
   tag-install:
     name: Verify public tag install

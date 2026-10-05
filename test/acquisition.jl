@@ -1,3 +1,7 @@
+using Test, LibTmux
+isdefined(@__MODULE__, :OwnedTmux) || include("support/owned_tmux.jl")
+using .OwnedTmux: with_tmux
+
 @testset "captured tmux graph" begin
     @test isdefined(LibTmux, :snapshot)
     if isdefined(LibTmux, :snapshot)
@@ -45,6 +49,11 @@
             @test length(LibTmux.windowlinks(snap)) == 3
             @test length(LibTmux.paneoccurrences(snap)) == 5
             @test isempty(LibTmux.clients(snap))
+            @test all(
+                p -> p.pid > 0 && p.tty !== nothing && p.exit_status === nothing,
+                panes(snap),
+            )
+            @test @inferred((p -> p.pid)(first(panes(snap)))) isa Int
             @test count(p -> p.title == title, LibTmux.panes(snap)) == 1
             @test any(p -> p.current_path == expected_path, LibTmux.panes(snap))
             @test count(
@@ -59,10 +68,95 @@
                 WindowLinkWhere(index=4, session=SessionWhere(name="ops")),
                 windowlinks(snap),
             ).window.name == "api"
+            ops = onlymatch(SessionWhere(name="ops"), sessions(snap)).ref
+            api = onlymatch(WindowWhere(name="api"), windows(snap)).ref
+            dev = onlymatch(SessionWhere(name="dev"), sessions(snap)).ref
+            open_control(server, dev) do connection
+                for transport in (server, connection)
+                    scoped_session = snapshot(transport, ops)
+                    @test scoped_session isa SessionSnapshot && scoped_session.ref == ops
+                    scoped_windows = windows(scoped_session)
+                    @test length(scoped_windows) == 1 &&
+                          length(panes(only(scoped_windows))) == 2
+                    @test length(windowlinks(scoped_session)) == 1
+                    @test_throws SnapshotCoverageError windowlinks(only(scoped_windows))
+                    scoped_window = snapshot(transport, api)
+                    @test scoped_window isa WindowSnapshot && scoped_window.ref == api
+                    @test length(panes(scoped_window)) == 2
+                    @test [link.session.name for link in windowlinks(scoped_window)] == ["dev", "ops"]
+                    @test all(
+                        p -> snapshotof(p) === snapshotof(scoped_window),
+                        panes(scoped_window),
+                    )
+                    @test all(
+                        key -> !hascoverage(snapshotof(scoped_window), key),
+                        (
+                            :sessions,
+                            :windows,
+                            :panes,
+                            :clients,
+                            :windowlinks,
+                            :paneoccurrences,
+                        ),
+                    )
+                    @test_throws SnapshotCoverageError panes(snapshotof(scoped_window))
+                    @test_throws SnapshotCoverageError windows(
+                        first(windowlinks(scoped_window)).session,
+                    )
+                    correlated = PaneWhere(
+                        window=WindowWhere(
+                            windowlinks=Filters.AnyRelated(
+                                WindowLinkWhere(session=SessionWhere(name="ops")),
+                            ),
+                        ),
+                    )
+                    @test count(correlated, panes(scoped_window)) == 2
+                    @test_throws SnapshotCoverageError count(
+                        correlated,
+                        panes(only(scoped_windows)),
+                    )
+                    stale = WindowRef(
+                        ServerIdentity(
+                            socket_path=fixture.socket,
+                            generation="scope-stale",
+                        ),
+                        api.id,
+                    )
+                    @test_throws StaleReference snapshot(transport, stale)
+                    foreign = SessionRef(
+                        ServerIdentity(
+                            socket_path=joinpath(fixture.directory, "other"),
+                            generation=ops.server.generation,
+                        ),
+                        ops.id,
+                    )
+                    submitted = connection.submitted
+                    @test_throws CrossServerReference snapshot(transport, foreign)
+                    @test connection.submitted == submitted
+                    @test_throws InconsistentSnapshot snapshot(
+                        transport,
+                        SessionRef(ops.server, "\$999999"),
+                    )
+                    @test_throws InconsistentSnapshot snapshot(
+                        transport,
+                        WindowRef(api.server, "@999999"),
+                    )
+                    token = CancellationToken()
+                    cancel!(token)
+                    @test_throws RequestCancelled snapshot(transport, api; cancel=token)
+                end
+                @test process_running(fixture.process) && isopen(connection)
+            end
             run_command(server, "rename-window", "-t", "dev:api", "changed")
+            run_command(server, "resize-pane", "-Z", "-t", "dev:changed.0")
             fresh = LibTmux.snapshot(server)
             @test any(w -> w.name == "api", LibTmux.windows(snap))
             @test any(w -> w.name == "changed", LibTmux.windows(fresh))
+            original_window = onlymatch(WindowWhere(name="api"), windows(snap))
+            zoomed_window = onlymatch(WindowWhere(name="changed"), windows(fresh))
+            @test !original_window.zoomed && zoomed_window.zoomed
+            @test zoomed_window.layout == original_window.layout
+            @test zoomed_window.visible_layout != zoomed_window.layout
             @test LibTmux.entitykey(first(LibTmux.panes(snap))) ==
                   LibTmux.entitykey(first(LibTmux.panes(fresh)))
             token = CancellationToken()
@@ -80,15 +174,56 @@ end
     identity =
         ServerIdentity(socket_path="/tmp/libtmux-julia-observation", generation="1:1")
     rows = (
-        ss=[["\$0", "dev", "0"]],
-        ws=[["@0", "api", "80", "24", "\$0", "0", "1"]],
-        ps=[["%0", "@0", "0", "1", "1", "80", "24", "cat", "", "title"]],
+        ss=[["\$0", "dev", "0", "1", "2", ""]],
+        ws=[["@0", "api", "80", "24", "\$0", "0", "1", "layout", "visible", "0", "2"]],
+        ps=[[
+            "%0",
+            "@0",
+            "0",
+            "1",
+            "1",
+            "80",
+            "24",
+            "cat",
+            "",
+            "title",
+            "12",
+            "",
+            "",
+            "0",
+            "2000",
+            "2",
+            "3",
+        ]],
         cs=Vector{String}[],
     )
     snap = LibTmux._snapshot_from_rows(identity, rows, (1.0, 2.0))
     pane = only(panes(snap))
     @test_throws SnapshotCoverageError pane.current_path
     @test pane.current_command == "cat"
+    @test (pane.tty, pane.exit_status) === (nothing, nothing)
+    @test (
+        pane.pid,
+        pane.history_size,
+        pane.history_limit,
+        pane.cursor_x,
+        pane.cursor_y,
+    ) === (12, 0, 2000, 2, 3)
+    @test (pane.window.layout, pane.window.visible_layout, pane.window.zoomed) ===
+          ("layout", "visible", false)
+    @test (
+        only(sessions(snap)).created,
+        only(sessions(snap)).activity,
+        only(sessions(snap)).last_attached,
+    ) === (1, 2, nothing)
+    changed = merge(rows, (; cs=[["client", "12", "1", "\$0", "2"]]))
+    @test LibTmux._graph_signature(changed) == LibTmux._graph_signature(
+        merge(changed, (; cs=[["client", "12", "1", "\$0", "9"]])),
+    )
+    exited = deepcopy(rows)
+    exited.ps[1][13] = "7"
+    @test only(panes(LibTmux._snapshot_from_rows(identity, exited, (1.0, 2.0)))).exit_status ===
+          7
     @test_throws SnapshotCoverageError LibTmux._observed_int("", "pane_width")
 end
 

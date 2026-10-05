@@ -106,6 +106,11 @@ struct _CapturedRecord
     fields::NamedTuple
 end
 
+struct _Adjacency
+    offsets::Vector{Int}
+    rows::Vector{Int}
+end
+
 """
     Snapshot
 
@@ -115,42 +120,52 @@ process-relative monotonic seconds, not UTC or a tmux transaction. Obtain
 collections with `panes`, `windows`, `sessions`, `clients`, `windowlinks`,
 and `paneoccurrences`.
 """
-struct Snapshot
-    identity::ServerIdentity
-    acquired::Tuple{Float64,Float64}
-    _sessions::Vector{_CapturedRecord}
-    _windows::Vector{_CapturedRecord}
-    _panes::Vector{_CapturedRecord}
-    _clients::Vector{_CapturedRecord}
-    _windowlinks::Vector{_CapturedRecord}
-    _complete::Set{Any}
+mutable struct Snapshot{SI<:Tuple,WI<:Tuple,PI<:Tuple,CI<:Tuple,LI<:Tuple}
+    const identity::ServerIdentity
+    const acquired::Tuple{Float64,Float64}
+    const _sessions::Vector{_CapturedRecord}
+    const _windows::Vector{_CapturedRecord}
+    const _panes::Vector{_CapturedRecord}
+    const _clients::Vector{_CapturedRecord}
+    const _windowlinks::Vector{_CapturedRecord}
+    const _complete::Set{Any}
+    const _session_index::Dict{SessionID,Int}
+    const _window_index::Dict{WindowID,Int}
+    const _pane_index::Dict{PaneID,Int}
+    const _client_index::Dict{ClientID,Int}
+    const _window_panes::_Adjacency
+    const _window_links::_Adjacency
+    const _session_links::_Adjacency
+    const _unknown_pane_window::Union{Nothing,PaneID}
 end
-Base.propertynames(::Snapshot, private::Bool=false) =
-    private ? fieldnames(Snapshot) : (:identity, :acquired)
+Base.propertynames(snap::Snapshot, private::Bool=false) =
+    private ? fieldnames(typeof(snap)) : (:identity, :acquired)
 function Base.getproperty(snap::Snapshot, key::Symbol)
     key in (:identity, :acquired) && return getfield(snap, key)
     throw(ArgumentError("snapshot storage is private; use collection accessors"))
 end
+Base.setproperty!(::Snapshot, ::Symbol, value) =
+    throw(ArgumentError("snapshot storage is private and read-only"))
 Base.show(io::IO, snap::Snapshot) = print(io, "Snapshot(acquired=", snap.acquired, ")")
 
 abstract type EntitySnapshot end
 for name in (:SessionSnapshot, :WindowSnapshot, :PaneSnapshot, :ClientSnapshot, :WindowLink)
-    @eval struct $name <: EntitySnapshot
-        _snapshot::Snapshot
+    @eval struct $name{S<:Snapshot} <: EntitySnapshot
+        _snapshot::S
         _index::Int
     end
 end
 
 """A physical pane viewed through one captured session/window link."""
-struct PaneOccurrence
-    pane::PaneSnapshot
-    link::WindowLink
+struct PaneOccurrence{P<:PaneSnapshot,L<:WindowLink}
+    pane::P
+    link::L
 
     function PaneOccurrence(pane::PaneSnapshot, link::WindowLink)
         snapshotof(pane) === snapshotof(link) && pane.window_id == link.window_id || throw(
             ArgumentError("pane occurrence must use its own snapshot and window link"),
         )
-        new(pane, link)
+        new{typeof(pane),typeof(link)}(pane, link)
     end
 end
 
@@ -167,7 +182,7 @@ struct Selection{T} <: AbstractVector{T}
     _snapshot::Union{Nothing,Snapshot}
 
     function Selection{T}(
-        items::AbstractVector{T},
+        items::AbstractVector{<:T},
         snapshot::Union{Nothing,Snapshot},
     ) where {T}
         for item in items
@@ -176,7 +191,7 @@ struct Selection{T} <: AbstractVector{T}
                     throw(ArgumentError("selection contains another snapshot"))
             end
         end
-        new{T}(collect(items), snapshot)
+        new{T}(Vector{T}(items), snapshot)
     end
 end
 function Selection(
@@ -208,7 +223,16 @@ _kind(::PaneSnapshot) = :pane
 _kind(::ClientSnapshot) = :client
 _kind(::WindowLink) = :windowlink
 _storage(snap::Snapshot, kind::Symbol) = getfield(snap, Symbol("_", kind, "s"))
-_record(x::EntitySnapshot) = _storage(snapshotof(x), _kind(x))[getfield(x, :_index)]
+for (View, rows) in (
+    (SessionSnapshot, :_sessions),
+    (WindowSnapshot, :_windows),
+    (PaneSnapshot, :_panes),
+    (ClientSnapshot, :_clients),
+    (WindowLink, :_windowlinks),
+)
+    @eval _record(x::$View) =
+        getfield(snapshotof(x), $(QuoteNode(rows)))[getfield(x, :_index)]
+end
 _identifier(record::_CapturedRecord) = record.fields.id
 
 function _captured(x::EntitySnapshot, key::Symbol)
@@ -218,9 +242,43 @@ function _captured(x::EntitySnapshot, key::Symbol)
     throw(SnapshotCoverageError(_kind(x), id, key))
 end
 function _lookup(snap::Snapshot, kind::Symbol, id, View)
-    idx = findfirst(r -> _identifier(r) == id, _storage(snap, kind))
+    index =
+        kind === :window ? getfield(snap, :_window_index) :
+        kind === :session ? getfield(snap, :_session_index) :
+        kind === :pane ? getfield(snap, :_pane_index) : getfield(snap, :_client_index)
+    idx = get(index, id, nothing)
     idx === nothing && throw(InconsistentSnapshot("missing $(kind) $(repr(string(id)))"))
     View(snap, idx)
+end
+
+"Validate a reference against captured identity, without contacting the daemon."
+function _captured_reference(snap::Snapshot, ref)
+    ref.server.socket_path == snap.identity.socket_path ||
+        throw(CrossServerReference(string(ref.id)))
+    ref.server == snap.identity || throw(StaleReference(string(ref.id)))
+    nothing
+end
+
+for (Ref, View, root, index) in (
+    (SessionRef, SessionSnapshot, :sessions, :_session_index),
+    (WindowRef, WindowSnapshot, :windows, :_window_index),
+    (PaneRef, PaneSnapshot, :panes, :_pane_index),
+    (ClientRef, ClientSnapshot, :clients, :_client_index),
+)
+    @eval function Base.get(snap::Snapshot, ref::$Ref, default)
+        _captured_reference(snap, ref)
+        row = get(getfield(snap, $(QuoteNode(index))), ref.id, nothing)
+        if row === nothing
+            _require_coverage(snap, $(QuoteNode(root)))
+            return default
+        end
+        $View(snap, row)
+    end
+    @eval function Base.getindex(snap::Snapshot, ref::$Ref)
+        found = get(snap, ref, nothing)
+        found === nothing && throw(KeyError(ref))
+        found
+    end
 end
 
 for (View, Ref) in (
@@ -229,7 +287,7 @@ for (View, Ref) in (
     (PaneSnapshot, PaneRef),
     (ClientSnapshot, ClientRef),
 )
-    @eval function Base.getproperty(x::$View, key::Symbol)
+    @eval Base.@constprop :aggressive function Base.getproperty(x::$View, key::Symbol)
         key === :ref && return $Ref(snapshotof(x).identity, _captured(x, :id))
         key === :window && x isa PaneSnapshot && return window(x)
         key === :session && x isa ClientSnapshot && return session(x)
@@ -238,13 +296,13 @@ for (View, Ref) in (
         key === :windowlinks &&
             x isa Union{SessionSnapshot,WindowSnapshot} &&
             return windowlinks(x)
-        _captured(x, key)
+        _typed_captured(x, key)
     end
 end
-function Base.getproperty(link::WindowLink, key::Symbol)
+Base.@constprop :aggressive function Base.getproperty(link::WindowLink, key::Symbol)
     key === :window && return window(link)
     key === :session && return session(link)
-    _captured(link, key)
+    _typed_captured(link, key)
 end
 function Base.propertynames(x::EntitySnapshot, private::Bool=false)
     private && return fieldnames(typeof(x))
@@ -290,58 +348,67 @@ for (accessor, View) in (
     @eval function $accessor(snap::Snapshot)
         _require_coverage(snap, $(QuoteNode(accessor)))
         rows = getfield(snap, $(QuoteNode(Symbol("_", accessor))))
-        Selection{$View}([$View(snap, i) for i in eachindex(rows)], snap)
+        Selection([$View(snap, i) for i in eachindex(rows)]; snapshot=snap)
     end
 end
 
 function window(pane::PaneSnapshot)
-    _lookup(snapshotof(pane), :window, _captured(pane, :window_id), WindowSnapshot)
+    _lookup(
+        snapshotof(pane),
+        :window,
+        _captured(pane, :window_id)::WindowID,
+        WindowSnapshot,
+    )
 end
 window(link::WindowLink) =
     _lookup(snapshotof(link), :window, link.window_id, WindowSnapshot)
 session(link::WindowLink) =
     _lookup(snapshotof(link), :session, link.session_id, SessionSnapshot)
 function session(client::ClientSnapshot)
-    id = _captured(client, :session_id)
+    id = _captured(client, :session_id)::Union{Nothing,SessionID}
     id === nothing ? nothing : _lookup(snapshotof(client), :session, id, SessionSnapshot)
 end
 function panes(win::WindowSnapshot)
     snap = snapshotof(win)
     _require_coverage(snap, (:window, win.id, :panes))
-    items = PaneSnapshot[]
-    for (i, row) in enumerate(getfield(snap, :_panes))
-        haskey(row.fields, :window_id) ||
-            throw(SnapshotCoverageError(:pane, string(row.fields.id), :window_id))
-        row.fields.window_id == win.id && push!(items, PaneSnapshot(snap, i))
+    unknown = getfield(snap, :_unknown_pane_window)
+    unknown === nothing || throw(SnapshotCoverageError(:pane, string(unknown), :window_id))
+    adjacency = getfield(snap, :_window_panes)
+    parent = getfield(win, :_index)
+    items = PaneSnapshot{typeof(snap)}[]
+    for edge = adjacency.offsets[parent]:(adjacency.offsets[parent+1]-1)
+        push!(items, PaneSnapshot(snap, adjacency.rows[edge]))
     end
-    Selection{PaneSnapshot}(items, snap)
+    Selection(items; snapshot=snap)
 end
 function windowlinks(parent::Union{SessionSnapshot,WindowSnapshot})
     snap = snapshotof(parent)
     _require_coverage(snap, (_kind(parent), parent.id, :windowlinks))
-    key = parent isa SessionSnapshot ? :session_id : :window_id
-    items = WindowLink[]
-    for (i, row) in enumerate(getfield(snap, :_windowlinks))
-        getproperty(row.fields, key) == parent.id && push!(items, WindowLink(snap, i))
+    adjacency =
+        getfield(snap, parent isa SessionSnapshot ? :_session_links : :_window_links)
+    index = getfield(parent, :_index)
+    items = WindowLink{typeof(snap)}[]
+    for edge = adjacency.offsets[index]:(adjacency.offsets[index+1]-1)
+        push!(items, WindowLink(snap, adjacency.rows[edge]))
     end
-    Selection{WindowLink}(items, snap)
+    Selection(items; snapshot=snap)
 end
 function windows(parent::SessionSnapshot)
-    items, seen = WindowSnapshot[], Set{WindowID}()
+    items, seen = WindowSnapshot{typeof(snapshotof(parent))}[], Set{WindowID}()
     for link in windowlinks(parent)
         link.window_id in seen && continue
         push!(seen, link.window_id)
         push!(items, window(link))
     end
-    Selection{WindowSnapshot}(items, snapshotof(parent))
+    Selection(items; snapshot=snapshotof(parent))
 end
 function paneoccurrences(snap::Snapshot)
     _require_coverage(snap, :paneoccurrences)
-    items = PaneOccurrence[]
+    items = PaneOccurrence{PaneSnapshot{typeof(snap)},WindowLink{typeof(snap)}}[]
     for link in windowlinks(snap), pane in panes(window(link))
         push!(items, PaneOccurrence(pane, link))
     end
-    Selection{PaneOccurrence}(items, snap)
+    Selection(items; snapshot=snap)
 end
 
 _freeze_value(x::Union{Nothing,Symbol,TmuxID,ClientID}) = x
@@ -400,6 +467,53 @@ end
 
 const _SNAPSHOT_SOURCES =
     (:sessions, :windows, :panes, :clients, :windowlinks, :paneoccurrences)
+
+function _numeric_schema(rows, specs)
+    types = map(specs) do (key, nullable)
+        type = nothing
+        for row in rows
+            haskey(row.fields, key) || continue
+            value = getproperty(row.fields, key)
+            value === nothing && nullable && continue
+            value isa Integer && !(value isa Bool) ||
+                throw(ArgumentError("captured $key must be an integer"))
+            observed_type = typeof(value)
+            type === observed_type && continue
+            type = type === nothing ? observed_type : Union{type,observed_type}
+        end
+        type === nothing ? Int : type
+    end
+    Tuple{types...}
+end
+
+function _id_index(::Type{ID}, rows) where {ID}
+    index = Dict{ID,Int}()
+    for (i, row) in enumerate(rows)
+        index[_identifier(row)] = i
+    end
+    index
+end
+
+function _adjacency(index, rows, key)
+    offsets = ones(Int, length(index)+1)
+    for row in rows
+        haskey(row.fields, key) || continue
+        parent = index[getproperty(row.fields, key)]
+        offsets[parent+1] += 1
+    end
+    for parent = 2:length(offsets)
+        offsets[parent] += offsets[parent-1]-1
+    end
+    edges = Vector{Int}(undef, last(offsets)-1)
+    next = copy(offsets)
+    for (i, row) in enumerate(rows)
+        haskey(row.fields, key) || continue
+        parent = index[getproperty(row.fields, key)]
+        edges[next[parent]] = i
+        next[parent] += 1
+    end
+    _Adjacency(offsets, edges)
+end
 
 """
     _build_snapshot(identity; sessions=(), windows=(), panes=(), clients=(),
@@ -480,5 +594,35 @@ function _build_snapshot(
             push!(coverage, key)
         end
     end
-    Snapshot(identity, (start, stop), ss, ws, ps, cs, ls, coverage)
+    si, wi, pi, ci = _id_index(SessionID, ss),
+    _id_index(WindowID, ws),
+    _id_index(PaneID, ps),
+    _id_index(ClientID, cs)
+    unknown = findfirst(row -> !haskey(row.fields, :window_id), ps)
+    unknown_id = unknown === nothing ? nothing : _identifier(ps[unknown])
+    Type = Snapshot{
+        _numeric_schema(ss, _snapshot_integer_fields(Val(:session))),
+        _numeric_schema(ws, _snapshot_integer_fields(Val(:window))),
+        _numeric_schema(ps, _snapshot_integer_fields(Val(:pane))),
+        _numeric_schema(cs, _snapshot_integer_fields(Val(:client))),
+        _numeric_schema(ls, _snapshot_integer_fields(Val(:windowlink))),
+    }
+    Type(
+        identity,
+        (start, stop),
+        ss,
+        ws,
+        ps,
+        cs,
+        ls,
+        coverage,
+        si,
+        wi,
+        pi,
+        ci,
+        _adjacency(wi, ps, :window_id),
+        _adjacency(wi, ls, :window_id),
+        _adjacency(si, ls, :session_id),
+        unknown_id,
+    )
 end

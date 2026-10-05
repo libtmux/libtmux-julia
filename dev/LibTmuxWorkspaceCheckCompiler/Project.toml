@@ -1,0 +1,13 @@
+name = "LibTmuxWorkspaceCheckCompiler"
+uuid = "aeab73e4-c8ca-4717-9496-282f6d19fbb2"
+version = "0.1.0"
+
+[deps]
+LibTmuxTestDiagnostics = "84219ba7-8c4a-4fda-82b3-4030b7b0a1bd"
+LibTmux = "1a5dcb9e-7968-44df-ad70-bf0a17628f09"
+LibTmuxWorkspace = "dc7c1d2a-fec3-4b55-92f0-7133c728c990"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+
+[compat]
+julia = "1.10"

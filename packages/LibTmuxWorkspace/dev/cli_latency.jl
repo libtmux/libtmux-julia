@@ -36,6 +36,40 @@ function measure_cli(args, budget)
     (seconds=(time_ns() - started) / 1e9, text=String(result.stdout))
 end
 
+function record_cli_failure!(report, error)
+    report["status"] = "fail"
+    report["error_type"] = string(nameof(typeof(error)))
+    if !isempty(report["results"]) && last(report["results"])["status"] == "running"
+        last(report["results"])["status"] = "fail"
+    end
+    error isa BeforeScriptError || return nothing
+    result = error.result
+    report["script_failure"] = Dict{String,Any}(
+        "reason" => string(error.code),
+        "cause_type" =>
+            error.cause === nothing ? nothing : string(nameof(typeof(error.cause))),
+        "child" =>
+            result === nothing ? nothing :
+            Dict(
+                "pid" => result.pid,
+                "reaped" => true,
+                "exitcode" => result.exitcode,
+                "termsignal" => result.termsignal,
+                "stdout" => Dict(
+                    "encoding" => "uint8",
+                    "data" => result.stdout,
+                    "sha256" => bytes2hex(SHA.sha256(result.stdout)),
+                ),
+                "stderr" => Dict(
+                    "encoding" => "uint8",
+                    "data" => result.stderr,
+                    "sha256" => bytes2hex(SHA.sha256(result.stderr)),
+                ),
+            ),
+    )
+    nothing
+end
+
 function main()
     1 <= length(ARGS) <= 3 ||
         error("usage: cli_latency.jl OUTPUT.json [normal|o0|minimal|all] [samples]")
@@ -92,6 +126,7 @@ function main()
                 "mode"=>mode,
                 "flags"=>flags,
                 "status"=>"running",
+                "phase"=>"setup",
             )
             push!(results, row)
             endpoint = Ref{Server}()
@@ -114,16 +149,17 @@ function main()
                     ),
                 )
                 selectors = ["--socket", server.socket_path, "--tmux", tmux]
-                loaded = measure_cli(
-                    [launcher, "load", config, selectors..., "--output", "ndjson"],
-                    remaining(),
-                )
+                row["phase"] = "load"
+                command = [launcher, "load", config, selectors..., "--output", "ndjson"]
+                row["command"] = command
+                loaded = measure_cli(command, remaining())
                 records = JSON.parse.(split(chomp(loaded.text), '\n'))
                 last(records)["event"] == "result" || error("load did not complete")
-                frozen = measure_cli(
-                    [launcher, "freeze", "latency", selectors..., "--output", "json"],
-                    remaining(),
-                )
+                row["phase"] = "freeze"
+                command =
+                    [launcher, "freeze", "latency", selectors..., "--output", "json"]
+                row["command"] = command
+                frozen = measure_cli(command, remaining())
                 document = JSON.parse(frozen.text)
                 validate(document["workspace"]).windows[1].name == "main" ||
                     error("freeze mismatch")
@@ -138,6 +174,8 @@ function main()
             end
             ispath(dirname(endpoint[].socket_path)) &&
                 error("owned daemon directory survived close")
+            delete!(row, "phase")
+            delete!(row, "command")
             merge!(
                 row,
                 Dict(
@@ -172,8 +210,7 @@ function main()
         )
         report["status"] = "pass"
     catch error
-        report["status"] = "fail"
-        report["error_type"] = string(nameof(typeof(error)))
+        record_cli_failure!(report, error)
         rethrow()
     finally
         report["source_unchanged"] = workspace_source_hashes() == report["source_sha256"]
@@ -186,4 +223,4 @@ function main()
     report["status"] == "pass" || error("measurement source changed")
 end
 
-main()
+abspath(PROGRAM_FILE) == (@__FILE__) && main()

@@ -91,9 +91,10 @@ function consumer_self_test()
     @assert failure.cause isa ProcessFailedException
     @assert only(failure.cause.procs).exitcode == 7
     @assert success(run_consumer_child("successful child", `/bin/sh -c "exit 0"`))
-    println(
-        "PASS consumer child output, exit evidence, inspectable cause and diagnostic omission",
-    )
+    installation = Module(:ReleaseInstallChecks)
+    Base.include(installation, joinpath(@__DIR__, "check-tag-install.jl"))
+    Base.invokelatest(installation.self_test)
+    println("PASS consumer child diagnostics and Git installation metadata")
 end
 
 function package_files(root)
