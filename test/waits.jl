@@ -59,17 +59,22 @@ using Test, LibTmux
                     send_keys(connection, pane, "-prefix"; literal=true)
                     wait_for_text(stream, "-prefix"; timeout=0.9)
                     seen = OutputWaitResult[]
+                    token = CancellationToken()
                     crossed = try
-                        wait_for(stream; baseline=true, timeout=0.05) do result
+                        wait_for(stream; baseline=true, timeout=0.9, cancel=token) do result
                             push!(seen, result)
-                            result.source === :baseline &&
+                            matched = occursin("-prefix-suffix", result.text)
+                            if result.source === :baseline
                                 send_keys(connection, pane, "-suffix"; literal=true)
-                            occursin("-prefix-suffix", result.text)
+                            elseif !matched && occursin("-suffix", result.text)
+                                cancel!(token)
+                            end
+                            matched
                         end
                     catch error
                         error
                     end
-                    @test crossed isa DeadlineExceeded
+                    @test crossed isa RequestCancelled
                     @test first(seen).source === :baseline
                     @test any(
                         result ->
@@ -81,6 +86,7 @@ using Test, LibTmux
                             result.source !== :output || !occursin("-prefix", result.text),
                         seen,
                     )
+                    @test_throws DeadlineExceeded wait_for(_ -> false, stream; timeout=0.02)
 
                     send_keys(connection, pane, repeat("a", 64) * "λend"; literal=true)
                     bounded = wait_for(stream; max_bytes=8, timeout=0.9) do result
