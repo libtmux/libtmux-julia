@@ -1,9 +1,11 @@
+include(joinpath(@__DIR__, "..", "dev", "test-diagnostics.jl"))
 using Test
 using LibTmux
 
 if get(ENV, "LIBTMUX_TEST_COMPILER_CACHE", "0") == "1"
     import LibTmuxCoreCheckCompiler
 end
+finish_test_imports()
 
 const UNIT_FILES = (
     "server",
@@ -60,11 +62,20 @@ elseif suite in (UNIT_FILES..., INTEGRATION_FILES...)
 else
     error("expected unit, integration, all, or a test file stem")
 end
+if CI_TEST_DIAGNOSTICS !== nothing || get(ENV, "LIBTMUX_TEST_INVENTORY_ONLY", "0") == "1"
+    inventory = [joinpath(@__DIR__, file * ".jl") for file in files]
+    "process" in files && push!(inventory, joinpath(@__DIR__, "process_retirement.jl"))
+    "lifecycle" in files && push!(inventory, joinpath(@__DIR__, "lifecycle_retirement.jl"))
+    declare_test_files(inventory)
+end
 for file in files
     if isdefined(@__MODULE__, :LibTmuxCoreCheckCompiler) &&
        hasproperty(LibTmuxCoreCheckCompiler.FILE_CHECKS, Symbol(file))
-        LibTmuxCoreCheckCompiler.run_file(file)
+        run_test_file(joinpath(@__DIR__, file * ".jl")) do
+            LibTmuxCoreCheckCompiler.run_file(file)
+        end
     else
-        include(file * ".jl")
+        include_test_file(@__MODULE__, joinpath(@__DIR__, file * ".jl"))
     end
 end
+finish_test_diagnostics()

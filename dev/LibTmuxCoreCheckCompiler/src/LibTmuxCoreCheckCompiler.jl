@@ -1,17 +1,36 @@
 module LibTmuxCoreCheckCompiler
 using Test
+import LibTmuxTestDiagnostics
 using LibTmux
 using TOML
 const SOURCE_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
 const TEST_CACHE_DEFINITIONS_ONLY = true
 const TEST_CACHE_ENTRIES = Ref(0)
 const TEST_CACHE_FIXTURES = Ref(0)
-include(joinpath(SOURCE_ROOT, "test", "model.jl"))
-include(joinpath(SOURCE_ROOT, "test", "lookup.jl"))
-include(joinpath(SOURCE_ROOT, "test", "criteria.jl"))
-include(joinpath(SOURCE_ROOT, "test", "wire.jl"))
-include(joinpath(SOURCE_ROOT, "test", "sibling_wire.jl"))
-include(joinpath(SOURCE_ROOT, "test", "projection.jl"))
+LibTmuxTestDiagnostics.diagnostic_include(
+    @__MODULE__,
+    joinpath(SOURCE_ROOT, "test", "model.jl"),
+)
+LibTmuxTestDiagnostics.diagnostic_include(
+    @__MODULE__,
+    joinpath(SOURCE_ROOT, "test", "lookup.jl"),
+)
+LibTmuxTestDiagnostics.diagnostic_include(
+    @__MODULE__,
+    joinpath(SOURCE_ROOT, "test", "criteria.jl"),
+)
+LibTmuxTestDiagnostics.diagnostic_include(
+    @__MODULE__,
+    joinpath(SOURCE_ROOT, "test", "wire.jl"),
+)
+LibTmuxTestDiagnostics.diagnostic_include(
+    @__MODULE__,
+    joinpath(SOURCE_ROOT, "test", "sibling_wire.jl"),
+)
+LibTmuxTestDiagnostics.diagnostic_include(
+    @__MODULE__,
+    joinpath(SOURCE_ROOT, "test", "projection.jl"),
+)
 const FILE_CHECKS = (
     model=(
         test_model_captured_identity_and_local_collections,

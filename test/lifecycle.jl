@@ -249,4 +249,8 @@ if get(ENV, "LIBTMUX_TEST_LIFECYCLE_ESCALATION", "0") == "1"
     end
 end
 
-include("lifecycle_retirement.jl")
+if isdefined(Main, :include_test_file)
+    Main.include_test_file(@__MODULE__, joinpath(@__DIR__, "lifecycle_retirement.jl"))
+else
+    include("lifecycle_retirement.jl")
+end

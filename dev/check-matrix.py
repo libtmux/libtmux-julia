@@ -14,6 +14,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import signal
 import socket
@@ -44,6 +45,13 @@ SUITES = ("runtime", "delivery")
 LOOP_BUDGETS = {"mid": 10, "outer": 200}
 HARD_LIMITS = {"mid": 30, "outer": 240}
 CLEANUP_SECONDS = 2.0
+DIAGNOSTIC_FINALIZATION_SECONDS = 2.0
+WORKER_RETIREMENT_SECONDS = CLEANUP_SECONDS * 2 + DIAGNOSTIC_FINALIZATION_SECONDS
+TEST_RUNNERS = frozenset(("test/runtests.jl", "packages/LibTmuxWorkspace/test/runtests.jl",
+                          "packages/LibTmuxMCP/test/runtests.jl"))
+DIAGNOSTIC_BINDINGS = ("LIBTMUX_CI_DIAGNOSTICS_DIR", "LIBTMUX_CI_DIAGNOSTICS_ROOT",
+                       "LIBTMUX_CI_INVOCATION", "LIBTMUX_CI_SOURCE_DIGEST", "LIBTMUX_CI_PHASE",
+                       "LIBTMUX_CI_PROCESS_TOKEN", "LIBTMUX_CI_TEST_FILE_INVENTORY", "LIBTMUX_CI_STAGE")
 
 
 def remaining(deadline):
@@ -304,7 +312,8 @@ class PhaseGroup:
         return True
 
 
-def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, deadline=None):
+def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, deadline=None,
+          cleanup_seconds=None, interrupt_grace=0.9, progress_path=None):
     """Wait on a child-exit event; retire only this run's process group."""
     if not callable(getattr(os, "waitid", None)) or not hasattr(os, "WNOWAIT"):
         raise RuntimeError("owned process retirement needs waitid/WNOWAIT; use Python 3.13+ on macOS")
@@ -312,12 +321,20 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
         raise ValueError("hard allowance must be finite and nonnegative")
     if soft_budget is not None and (not math.isfinite(soft_budget) or soft_budget < 0):
         raise ValueError("soft allowance must be finite and nonnegative")
+    cleanup_seconds = CLEANUP_SECONDS if cleanup_seconds is None else cleanup_seconds
     start = time.monotonic()
     deadline = min(start + budget, deadline) if deadline is not None else start + budget
     log.parent.mkdir(parents=True, exist_ok=True)
     answer = dict(name=name, command=argv, status="NOT RUN", budget_seconds=budget,
                   started=False, soft_limit_seconds=soft_budget, soft_limit_exceeded=False,
-                  hard_deadline=deadline, direct_child_reaped=False, cleanup_status="NOT NEEDED")
+                  hard_deadline=deadline, direct_child_reaped=False, cleanup_status="NOT NEEDED",
+                  coverage_complete=False, test_inventory_complete=False,
+                  diagnostics_status="UNAVAILABLE", test_process_birth_ids=[],
+                  timings=dict(first_output_byte=dict(status="UNAVAILABLE",
+                      reason="stdout is written directly to the owned log without a first-byte observer")))
+    for field, key in (("invocation", "LIBTMUX_CI_INVOCATION"), ("source_digest", "LIBTMUX_CI_SOURCE_DIGEST")):
+        if key in env:
+            answer[field] = env[key]
     owned_group = group or PhaseGroup()
     process = None
     waiter = None
@@ -325,11 +342,55 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
     observed_exit = threading.Event()
     observer_errors = []
     cleanup_deadline = None
+    diagnostic_receipt = Path(progress_path) if progress_path is not None else None
+
+    def save_progress():
+        if diagnostic_receipt is None:
+            return
+        try:
+            temporary = diagnostic_receipt.with_suffix(".tmp")
+            snapshot = answer | dict(timings=answer["timings"].copy(), seconds=time.monotonic() - start)
+            temporary.write_text(json.dumps(snapshot, indent=2) + "\n")
+            temporary.replace(diagnostic_receipt)
+        except OSError as error:
+            answer.update(diagnostics_status="FAIL", diagnostic_write_error=type(error).__name__)
+
+    def bind_diagnostics():
+        nonlocal diagnostic_receipt
+        child_env = env.copy()
+        root = child_env.get("LIBTMUX_CI_DIAGNOSTICS_ROOT")
+        if root is None:
+            return child_env
+        invocation = child_env.get("LIBTMUX_CI_INVOCATION", "")
+        digest = child_env.get("LIBTMUX_CI_SOURCE_DIGEST", "")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", name) or name in (".", ".."):
+            raise ValueError("diagnostic phase names must be portable path segments")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", invocation) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("diagnostics require an invocation and SHA256 source digest")
+        directory = Path(root).resolve() / name
+        stage = child_env.get("LIBTMUX_CI_STAGE")
+        if stage is not None and Path(stage).resolve() not in directory.parents:
+            raise ValueError("diagnostics directory escaped its owned matrix stage")
+        directory.mkdir(parents=True, exist_ok=False)
+        token = uuid.uuid4().hex
+        child_env.update(LIBTMUX_CI_DIAGNOSTICS_DIR=str(directory), LIBTMUX_CI_PHASE=name,
+                         LIBTMUX_CI_PROCESS_TOKEN=token)
+        inventory = json.loads(child_env.get("LIBTMUX_CI_TEST_FILE_INVENTORY", "{}"))
+        selected = inventory.get(name)
+        answer.update(invocation=invocation, source_digest=digest,
+                      diagnostics_directory=str(directory), diagnostics_status="PARTIAL" if selected is not None else "UNAVAILABLE",
+                      diagnostics_scope="native_runner" if selected is not None else "process_receipt_only",
+                      process_token=token, expected_test_file_inventory=selected,
+                      test_inventory_status="PARTIAL_CHILD_ADMISSION_UNAVAILABLE" if selected is not None
+                                            else "UNAVAILABLE_NATIVE_INVENTORY")
+        diagnostic_receipt = directory / "phase.json"
+        save_progress()
+        return child_env
 
     def cleanup_time():
         nonlocal cleanup_deadline
         if cleanup_deadline is None:
-            cleanup_deadline = min(time.monotonic() + CLEANUP_SECONDS, deadline + CLEANUP_SECONDS)
+            cleanup_deadline = min(time.monotonic() + cleanup_seconds, deadline + cleanup_seconds)
         return remaining(cleanup_deadline)
 
     def observe_exit():
@@ -337,6 +398,7 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
             observed = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
             if observed is None or observed.si_pid != process.pid:
                 raise RuntimeError("owned leader exit identity was not observed")
+            answer["timings"]["exit_observed_seconds"] = time.monotonic() - start
             observed_exit.set()
         except BaseException as error:
             observer_errors.append(error)
@@ -357,8 +419,15 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
             if remaining(deadline) == 0:
                 answer["reason"] = "hard deadline expired before phase admission"
                 return answer
-            process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+            child_env = bind_diagnostics()
+            if remaining(deadline) == 0:
+                answer["reason"] = "hard deadline expired before phase admission"
+                return answer
+            launch_started = time.monotonic()
+            process = subprocess.Popen(argv, cwd=cwd, env=child_env, stdin=subprocess.DEVNULL,
                                        stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            answer["timings"].update(process_launch_seconds=time.monotonic() - start,
+                                     popen_seconds=time.monotonic() - launch_started)
             answer["started"] = True
             answer.update(pid=process.pid, process_group=process.pid)
             owned_group.add(process)
@@ -366,6 +435,9 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
                           owned_identity=owned_group.identities.get(process, dict(
                               pid=process.pid, parent=os.getpid(), group=process.pid,
                               reservation="direct child retained until WNOWAIT reap")))
+            if answer.get("expected_test_file_inventory") is not None:
+                answer["test_process_birth_ids"] = [f"{answer['process_token']}-{process.pid}"]
+            save_progress()
             waiter = threading.Thread(target=observe_exit, name=f"matrix-{name}", daemon=True)
             waiter.start()
             if soft_budget is not None:
@@ -375,14 +447,16 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
                     if answer["soft_limit_exceeded"]:
                         record = json.dumps(dict(event="soft-limit", phase=name, pid=process.pid,
                             seconds=time.monotonic() - start, soft_limit_seconds=soft_budget,
-                            hard_deadline=deadline))
+                            hard_deadline=deadline, invocation=answer.get("invocation"),
+                            source_digest=answer.get("source_digest")))
                         output.write((record + "\n").encode())
                         output.flush()
                         print(record, flush=True)
+                        save_progress()
             timed_out = not done.wait(remaining(deadline))
             if timed_out:
                 owned_group.signal(signal.SIGINT, process)
-                if not done.wait(min(0.9, cleanup_time())):
+                if not done.wait(min(interrupt_grace, cleanup_time())):
                     owned_group.signal(signal.SIGKILL, process)
                     if not done.wait(cleanup_time()):
                         unretired("owned leader exit was not observed after SIGKILL")
@@ -396,6 +470,7 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
             if not observed_exit.is_set():
                 raise RuntimeError("cannot reap an unobserved owned leader")
             code = owned_group.reap(process, retire_group=timed_out)
+            answer["timings"]["reaped_seconds"] = time.monotonic() - start
             status = ("TIMEOUT" if timed_out else "CANCELLED" if owned_group.cancelled
                       else "PASS" if code == 0 else "FAIL")
             answer.update(status=status, semantic_status=status,
@@ -405,11 +480,13 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
                 answer["cleanup"] = "owned process group signalled; escaped descendants not proved retired"
     except FileNotFoundError:
         answer["reason"] = "required executable is unavailable"
-    except BaseException:
+    except BaseException as error:
+        answer.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
+                      error_type=type(error).__name__)
         if process is not None and process.returncode is None and waiter is not None:
             # Let an owned worker retire its separately grouped children and receipt.
             owned_group.signal(signal.SIGINT, process)
-            done.wait(min(0.9, cleanup_time()))
+            done.wait(min(interrupt_grace, cleanup_time()))
         raise
     finally:
         if process is not None and process.returncode is None and answer["status"] != "UNRETIRED":
@@ -419,6 +496,7 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
                 waiter.start()
             if done.wait(cleanup_time()) and observed_exit.is_set() and not observer_errors:
                 owned_group.reap(process)
+                answer["timings"]["reaped_seconds"] = time.monotonic() - start
                 answer.update(direct_child_reaped=True, cleanup_status="REAPED",
                               owned_identity_reserved=False, leader_exit_observed=True)
             else:
@@ -431,11 +509,18 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
             if not owned_group.close(cleanup_deadline):
                 unretired("owned escalation timer did not retire before cleanup expired")
         answer["seconds"] = time.monotonic() - start
-        if soft_budget is not None and answer["seconds"] >= soft_budget:
-            answer["soft_limit_exceeded"] = True
-            if answer["status"] == "PASS":
-                answer["status"] = "FAIL"
         answer["log"] = str(log)
+        save_progress()
+        try:
+            if diagnostic_receipt is not None and answer["direct_child_reaped"] and answer.get("expected_test_file_inventory"):
+                finalize_diagnostics(answer, env=env)
+        finally:
+            answer["seconds"] = time.monotonic() - start
+            if soft_budget is not None and answer["seconds"] >= soft_budget:
+                answer["soft_limit_exceeded"] = True
+                if answer["status"] == "PASS":
+                    answer["status"] = "FAIL"
+            save_progress()
     return answer
 
 
@@ -445,6 +530,77 @@ def version_probe(name, argv, *, env, log, deadline):
     if answer["status"] == "PASS":
         answer["version"] = log.read_text().strip()
     return answer
+
+
+DIAGNOSTIC_FINALIZER = r'''
+import importlib.util
+import json
+from pathlib import Path
+import sys
+helper, directory, invocation, digest, phase_name, direct_birth, expected = sys.argv[1:]
+directory = Path(directory)
+spec = importlib.util.spec_from_file_location("libtmux_ci_artifacts", helper)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+evidence = module.collect_process_evidence(sorted(directory.glob("events-*.jsonl")),
+    invocation=invocation, expected_source_digest=digest,
+    source_roots=[(Path(helper).resolve().parent.parent, "repository"), (directory, "diagnostics")],
+    expected_phase=phase_name)
+direct = [process for process in evidence["processes"] if process["process_id"] == direct_birth]
+expected_files = {item["path"] for item in json.loads(expected)["files"]}
+matches = len(direct) == 1 and set(direct[0].get("file_coverage", {}).get("declared", [])) == expected_files
+proof = dict(schema=1, invocation=invocation, source_digest=digest, phase=phase_name,
+    observed_file_coverage_complete=evidence["observed_file_coverage_complete"],
+    expected_file_inventory_matches=matches,
+    observed_process_birth_ids=evidence["process_birth_ids"],
+    issues=evidence["issues"],
+    process_issues=[dict(process_birth_id=process["process_id"], issues=process["issues"])
+                    for process in evidence["processes"] if process["issues"]],
+    test_inventory_complete=False, child_inventory_status="UNPROVED")
+temporary = directory / "diagnostics-proof.tmp"
+temporary.write_text(json.dumps(proof, indent=2) + "\n")
+temporary.replace(directory / "diagnostics-proof.json")
+'''
+
+
+def finalize_diagnostics(answer, *, env):
+    """Retire an owned decoder independently; preserve the test's original verdict."""
+    directory = Path(answer["diagnostics_directory"])
+    child_env = env.copy()
+    for key in DIAGNOSTIC_BINDINGS:
+        child_env.pop(key, None)
+    child_env.update(LIBTMUX_CI_INVOCATION=answer["invocation"], LIBTMUX_CI_SOURCE_DIGEST=answer["source_digest"])
+    answer["diagnostic_finalizer_progress"] = str(directory / "finalization-phase.json")
+    started = time.monotonic()
+    try:
+        argv = [sys.executable, "-c", DIAGNOSTIC_FINALIZER, str(ROOT / "dev/ci-artifacts.py"),
+                str(directory), answer["invocation"], answer["source_digest"], answer["name"],
+                answer["test_process_birth_ids"][0], json.dumps(answer["expected_test_file_inventory"])]
+        decoder = phase("diagnostic-finalizer", argv, cwd=ROOT, env=child_env,
+                        log=directory / "finalization.log", budget=DIAGNOSTIC_FINALIZATION_SECONDS,
+                        progress_path=directory / "finalization-phase.json")
+        answer["diagnostic_finalizer"] = decoder
+        if decoder["status"] != "PASS" or not decoder["direct_child_reaped"]:
+            answer.update(diagnostics_status="FAIL", diagnostic_error="owned diagnostic finalizer did not retire successfully")
+            return
+        path = directory / "diagnostics-proof.json"
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 256 * 1024:
+            raise ValueError("diagnostic finalizer proof is unavailable or exceeds its bound")
+        proof = json.loads(path.read_text())
+        if (not isinstance(proof, dict) or proof.get("invocation") != answer["invocation"]
+                or proof.get("source_digest") != answer["source_digest"] or proof.get("phase") != answer["name"]):
+            raise ValueError("diagnostic finalizer proof differs from the admitted phase")
+        answer["diagnostics_proof"] = proof
+        answer["diagnostics_status"] = "PASS" if (proof.get("observed_file_coverage_complete") is True
+            and proof.get("expected_file_inventory_matches") is True and not proof.get("issues")
+            and not proof.get("process_issues")) else "PARTIAL"
+    except BaseException as error:
+        answer.update(diagnostics_status="FAIL", diagnostic_error=type(error).__name__)
+        if isinstance(error, (KeyboardInterrupt, SystemExit)):
+            raise
+    finally:
+        answer["timings"]["diagnostic_finalization_seconds"] = time.monotonic() - started
 
 
 def parallel_mid(commands, *, stage, env, result, save, deadline=None):
@@ -608,6 +764,7 @@ Pkg.activate(project)
 Pkg.develop([PackageSpec(path=root),
              PackageSpec(path=joinpath(root, "packages", "LibTmuxWorkspace")),
              PackageSpec(path=joinpath(root, "packages", "LibTmuxMCP")),
+             PackageSpec(path=joinpath(root, "dev", "LibTmuxTestDiagnostics")),
              PackageSpec(path=joinpath(root, "dev", "LibTmuxCheckCompiler")),
              PackageSpec(path=joinpath(root, "dev", "LibTmuxCoreCheckCompiler")),
              PackageSpec(path=joinpath(root, "dev", "LibTmuxWorkspaceCheckCompiler")),
@@ -627,6 +784,9 @@ def environment(stage, *, offline):
     env = os.environ.copy()
     env.pop("TMUX", None)
     env.pop("TMUX_PANE", None)
+    for key in DIAGNOSTIC_BINDINGS:
+        env.pop(key, None)
+    env.pop("LIBTMUX_TEST_INVENTORY_ONLY", None)
     env.update(JULIA_DEPOT_PATH=str(stage / "depot"), JULIA_LOAD_PATH="@:@stdlib",
                JULIA_PKG_OFFLINE="true" if offline else "false", JULIA_PKG_PRECOMPILE_AUTO="0")
     return env
@@ -698,6 +858,64 @@ def stdlib_cache_profile(julia, env):
     return dict(julia=lines[0], version=lines[1], modules=lines[2:])
 
 
+def prepare_test_inventory(args, stage, project, digest):
+    """Query each source-owned runner's selection without executing its files."""
+    env = environment(stage, offline=True)
+    env["LIBTMUX_TEST_INVENTORY_ONLY"] = "1"
+    inventory = {}
+    plan = command_plan(args, stage, dict(project=str(project), consumers="unused"))
+    for name, argv, _, _ in plan:
+        if not TEST_RUNNERS.intersection(argv):
+            continue
+        log = stage / "logs" / f"inventory-{name}.log"
+        query = phase(f"inventory-{name}", argv, cwd=ROOT, env=env, log=log,
+                      budget=HARD_LIMITS["outer"])
+        if query["status"] != "PASS" or not query.get("direct_child_reaped"):
+            raise ValueError(f"test inventory query did not finish: {name}")
+        paths = [line.removeprefix("LIBTMUX_TEST_FILE\t") for line in log.read_text().splitlines()
+                 if line.startswith("LIBTMUX_TEST_FILE\t")]
+        if not paths or len(paths) != len(set(paths)):
+            raise ValueError("test inventory must declare unique source-owned files")
+        files = []
+        for relative in paths:
+            path = Path(relative)
+            source = ROOT / path
+            if path.is_absolute() or ".." in path.parts or "\\" in relative or source.is_symlink() or not source.is_file() or ROOT.resolve() not in source.resolve().parents:
+                raise ValueError("test inventory must stay in regular checkout files")
+            files.append(dict(path=path.as_posix(), sha256=hashlib.sha256(source.read_bytes()).hexdigest()))
+        inventory[name] = dict(source_digest=digest, files=files, query=query)
+    return inventory
+
+
+def checked_test_inventory(metadata):
+    inventory = metadata.get("test_file_inventory", {})
+    if not isinstance(inventory, dict):
+        raise ValueError("prepared test inventory is malformed")
+    if metadata.get("schema_version", 1) >= 2 and set(inventory) != {
+            "core-unit", "workspace-unit", "mcp-unit", "core-normal", "workspace-normal", "mcp-normal"}:
+        raise ValueError("prepared test inventory does not cover the owned runners")
+    for name, declaration in inventory.items():
+        if not isinstance(name, str) or not isinstance(declaration, dict) or declaration.get("source_digest") != metadata["source_digest"]:
+            raise ValueError("prepared test inventory is not source-bound")
+        files = declaration.get("files")
+        if not isinstance(files, list) or not files:
+            raise ValueError("prepared test inventory has no files")
+        names = []
+        for item in files:
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                raise ValueError("prepared test inventory file is malformed")
+            relative = Path(item["path"])
+            source = ROOT / relative
+            if relative.is_absolute() or ".." in relative.parts or "\\" in item["path"] or source.is_symlink() or not source.is_file() or ROOT.resolve() not in source.resolve().parents:
+                raise ValueError("prepared test inventory escaped its source")
+            if item.get("sha256") != hashlib.sha256(source.read_bytes()).hexdigest():
+                raise ValueError("prepared test inventory file changed")
+            names.append(item["path"])
+        if len(names) != len(set(names)):
+            raise ValueError("prepared test inventory repeats files")
+    return inventory
+
+
 def prepare(args):
     stage = checked_stage(args.stage, create=True)
     initial_digest = source_digest()
@@ -737,12 +955,13 @@ println("PREPARED QA entries=", LibTmuxQualityCheckCompiler.QUALITY_ENTRIES[],
     subprocess.run([args.julia, "--startup-file=no", "--compile=yes", "-O2",
                     str(ROOT / "dev/check-consumers.jl"), "prepare", str(consumers)],
                    cwd=ROOT, env=env, check=True)
+    inventory = prepare_test_inventory(args, stage, project, initial_digest)
     if initial_digest != source_digest():
         raise ValueError("source changed during preparation; rerun with stable source (dependency cache retained)")
-    metadata = dict(schema_version=1, source_digest=initial_digest, tools=PINNED_TOOLS,
+    metadata = dict(schema_version=2, source_digest=initial_digest, tools=PINNED_TOOLS,
                     consumers=str(consumers), project=str(project), registry_seed=registry_seed,
                     stdlib_seed=stdlib_seed,
-                    tool_preferences=tomllib.loads(TOOL_PREFERENCES))
+                    tool_preferences=tomllib.loads(TOOL_PREFERENCES), test_file_inventory=inventory)
     (stage / "prepared.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print("PASS prepared dependencies and immutable external consumers; no timed checks run")
 
@@ -817,18 +1036,31 @@ def run_checks(args):
     if tomllib.loads(preferences.read_text()) != metadata["tool_preferences"]:
         raise ValueError("tool preferences changed since preparation; prepare a fresh stage")
     env = environment(stage, offline=True)
+    invocation = getattr(args, "invocation", None) or uuid.uuid4().hex
+    inventory = checked_test_inventory(metadata)
+    declarations = {name: dict(source_digest=item["source_digest"], files=item["files"])
+                    for name, item in inventory.items()}
     env.update(LIBTMUX_TEST_TMUX=args.tmux, LIBTMUX_TEST_CLI_COMPILE="normal",
-               LIBTMUX_TEST_MINIMAL_CHILD="0")
-    result = dict(schema_version=2, source_digest=metadata["source_digest"],
+               LIBTMUX_TEST_MINIMAL_CHILD="0", LIBTMUX_CI_INVOCATION=invocation,
+               LIBTMUX_CI_SOURCE_DIGEST=metadata["source_digest"],
+               LIBTMUX_CI_STAGE=str(stage),
+               LIBTMUX_CI_DIAGNOSTICS_ROOT=str(stage / "diagnostics" / invocation / batch),
+               LIBTMUX_CI_TEST_FILE_INVENTORY=json.dumps(declarations))
+    result = dict(schema_version=4, source_digest=metadata["source_digest"],
                   platform=platform.system(), machine=platform.machine(), kernel=platform.release(),
                   wsl="microsoft" in platform.release().lower(), threads=args.threads,
                   tools=metadata["tools"], status="NOT RUN", phases=[], suite=args.suite,
                   tier=args.tier, active_phase=None, active_phases=[], pending_phases=[],
                   planned_phases=[], probes=[], loops={}, completion_status="INCOMPLETE",
-                  invocation=getattr(args, "invocation", None))
+                  invocation=invocation, coverage_complete=False, test_inventory_complete=False,
+                  test_inventory_status="PARTIAL_CHILD_ADMISSION_UNAVAILABLE", test_process_birth_ids=[],
+                  test_inventory_limits=["child admission is unproved", "commands outside native runners have process receipts only"],
+                  test_file_inventory=declarations)
     destination = result_path(stage, args, worker=getattr(args, "worker", False))
 
     def save():
+        result["test_process_birth_ids"] = [identity for item in result["phases"]
+                                            for identity in item.get("test_process_birth_ids", [])]
         temporary = destination.with_suffix(".tmp")
         temporary.write_text(json.dumps(result, indent=2) + "\n")
         temporary.replace(destination)
@@ -952,6 +1184,18 @@ def receipt_issues(details):
             or not isinstance(item.get("name"), str) or not item["name"]
             or not isinstance(item.get("status"), str) or item["status"] not in statuses for item in phases):
         issues.append("phases")
+    if isinstance(phases, list) and any(isinstance(item, dict) and (
+            not isinstance(item.get("test_process_birth_ids", []), list)
+            or any(not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", identity)
+                   for identity in item.get("test_process_birth_ids", []))) for item in phases):
+        issues.append("phase_process_inventory")
+    if details.get("schema_version") == 4:
+        if any(type(details.get(field)) is not bool for field in ("coverage_complete", "test_inventory_complete")):
+            issues.append("coverage_fields")
+        if not isinstance(details.get("test_process_birth_ids"), list) or any(
+                not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", identity)
+                for identity in details.get("test_process_birth_ids", [])):
+            issues.append("test_process_birth_ids")
     return issues
 
 
@@ -989,6 +1233,12 @@ def worker_receipt(path, invocation, digest):
                             and isinstance(item.get("name"), str) and item["name"]] \
             if isinstance(phases, list) else []
         details.update(status="FAIL", receipt_status="INVALID", receipt_errors=issues)
+        if "phase_process_inventory" in issues:
+            for item in details["phases"]:
+                identities = item.get("test_process_birth_ids", [])
+                item["test_process_birth_ids"] = [identity for identity in identities
+                    if isinstance(identity, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", identity)] \
+                    if isinstance(identities, list) else []
         if "active_phase" in issues:
             details["active_phase"] = None
         for field in ("active_phases", "pending_phases", "planned_phases"):
@@ -1031,15 +1281,25 @@ def run(args):
     plan = selected_commands(args, stage, metadata)
     invocation = uuid.uuid4().hex
     batches = ("mid", "outer") if args.tier in ("all", "outer") else ("mid",)
-    result = dict(schema_version=3, status="RUNNING", phases=[], loops={},
+    inventory = checked_test_inventory(metadata)
+    result = dict(schema_version=4, status="RUNNING", phases=[], loops={},
                   tier=args.tier, suite=args.suite, threads=args.threads,
                   invocation=invocation, workers=[], active_phase=None,
                   source_digest=metadata["source_digest"],
                   soft_limits=LOOP_BUDGETS, hard_limits=HARD_LIMITS, cleanup_seconds=CLEANUP_SECONDS,
+                  diagnostic_finalization_seconds=DIAGNOSTIC_FINALIZATION_SECONDS,
+                  worker_retirement_seconds=WORKER_RETIREMENT_SECONDS,
+                  coverage_complete=False, test_inventory_complete=False,
+                  test_inventory_status="PARTIAL_CHILD_ADMISSION_UNAVAILABLE", test_process_birth_ids=[],
+                  test_inventory_limits=["child admission is unproved", "commands outside native runners have process receipts only"],
+                  test_file_inventory={name: item for name, item in inventory.items()
+                                       if name in {command[0] for command in plan}},
                   required_phases=[item[0] for item in plan],
                   timing_boundary="worker launch through exit; outer includes supervisor orchestration")
     destination = result_path(stage, args)
     def save():
+        result["test_process_birth_ids"] = [identity for item in result["phases"]
+                                            for identity in item.get("test_process_birth_ids", [])]
         temporary = destination.with_suffix(".tmp")
         temporary.write_text(json.dumps(result, indent=2) + "\n")
         temporary.replace(destination)
@@ -1068,10 +1328,16 @@ def run(args):
         soft_budget = max(0.0, started + LOOP_BUDGETS[batch] - time.monotonic())
         worker_args = argparse.Namespace(**(vars(args) | dict(worker=True, worker_phase=batch)))
         receipt = result_path(stage, worker_args, worker=True)
+        worker_env = os.environ.copy()
+        for key in DIAGNOSTIC_BINDINGS:
+            worker_env.pop(key, None)
+        worker_env.update(LIBTMUX_CI_INVOCATION=invocation, LIBTMUX_CI_SOURCE_DIGEST=metadata["source_digest"])
         try:
-            worker = phase(batch, argv, cwd=ROOT, env=os.environ.copy(),
+            worker = phase(batch, argv, cwd=ROOT, env=worker_env,
                            log=stage / "logs" / f"whole-{batch}-t{args.threads}.log",
-                           budget=budget, soft_budget=soft_budget, deadline=deadline)
+                           budget=budget, soft_budget=soft_budget, deadline=deadline,
+                           cleanup_seconds=WORKER_RETIREMENT_SECONDS,
+                           interrupt_grace=WORKER_RETIREMENT_SECONDS)
         except BaseException as error:
             result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
                           active_phase=batch, error_type=type(error).__name__,
@@ -1233,6 +1499,43 @@ println("PASS admitted version arguments construct real Pkg specifications")
                             budget=1, deadline=time.monotonic() - 1)
             launch.assert_not_called()
         assert expired["status"] == "NOT RUN" and not expired["started"]
+        diagnostic_env = os.environ.copy()
+        diagnostic_env.update(LIBTMUX_CI_DIAGNOSTICS_ROOT=str(base / "diagnostics"),
+                              LIBTMUX_CI_STAGE=str(base), LIBTMUX_CI_INVOCATION="control",
+                              LIBTMUX_CI_SOURCE_DIGEST="a" * 64,
+                              LIBTMUX_CI_DIAGNOSTICS_DIR="inherited-unowned-directory")
+        bound = phase("owned-diagnostics", [sys.executable, "-c",
+            "import os;print(os.environ['LIBTMUX_CI_DIAGNOSTICS_DIR']);print(os.environ['LIBTMUX_CI_PHASE'])"],
+            cwd=base, env=diagnostic_env, log=base / "bound.log", budget=0.9)
+        assert bound["status"] == "PASS" and bound["invocation"] == "control"
+        assert (base / "bound.log").read_text().splitlines() == [
+            str(base.resolve() / "diagnostics" / "owned-diagnostics"), "owned-diagnostics"]
+        assert bound["timings"]["first_output_byte"]["status"] == "UNAVAILABLE"
+        assert bound["timings"]["reaped_seconds"] >= bound["timings"]["exit_observed_seconds"]
+        assert not bound["coverage_complete"] and not bound["test_inventory_complete"]
+        with patch.object(subprocess, "Popen") as launch:
+            try:
+                phase("../escaped", [], cwd=base, env=diagnostic_env, log=base / "escaped.log", budget=0.9)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("diagnostic phase escaped its owned directory")
+            launch.assert_not_called()
+        decoder_root = base / "blocked-decoder"
+        helper = decoder_root / "dev" / "ci-artifacts.py"
+        helper.parent.mkdir(parents=True)
+        helper.write_text("import threading\ndef collect_process_evidence(*args, **kwargs):\n threading.Event().wait()\n")
+        diagnostic_env["LIBTMUX_CI_TEST_FILE_INVENTORY"] = json.dumps({
+            "original-failure": dict(source_digest="a" * 64, files=[dict(path="test/fixture.jl", sha256="b" * 64)])})
+        with patch(__name__ + ".ROOT", decoder_root), \
+             patch(__name__ + ".DIAGNOSTIC_FINALIZATION_SECONDS", 0.04):
+            original = phase("original-failure", [sys.executable, "-c", "raise SystemExit(7)"],
+                cwd=base, env=diagnostic_env, log=base / "original.log", budget=0.9)
+        assert original["status"] == original["semantic_status"] == "FAIL" and original["exit_code"] == 7
+        assert original["direct_child_reaped"] and original["diagnostics_status"] == "FAIL"
+        assert original["diagnostic_finalizer"]["status"] == "TIMEOUT"
+        assert original["diagnostic_finalizer"]["direct_child_reaped"]
+        assert original["seconds"] < 0.5
         release_observer, exit_seen = threading.Event(), threading.Event()
         original_waitid = os.waitid
         ownership = PhaseGroup()
@@ -1718,7 +2021,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert admitted == ["mid", "outer"] and retained["loops"]["mid"]["complete"]
         assert retained["status"] == "FAIL" and retained["phases"][0]["status"] == "FAIL"
         for invalid in ("stale", "stale-source", "incomplete", "unretired", "malformed",
-                        "missing-active", "malformed-active", "missing-pending", "malformed-plan"):
+                        "missing-active", "malformed-active", "missing-pending", "malformed-plan", "malformed-births"):
             admitted.clear()
             def stopped_worker(name, argv, **kwargs):
                 answer = completed_failure(name, argv, **kwargs)
@@ -1741,6 +2044,8 @@ println("PASS admitted version arguments construct real Pkg specifications")
                     details.pop("pending_phases")
                 elif invalid == "malformed-plan":
                     details["planned_phases"] = [dict(name="mid-case")]
+                elif invalid == "malformed-births":
+                    details["phases"][0]["test_process_birth_ids"] = 7
                 receipt.write_text("{" if invalid == "malformed" else json.dumps(details))
                 return answer
             with patch(__name__ + ".command_plan", return_value=continuation_plan), \
@@ -1750,7 +2055,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
             retained = json.loads(result_path(base, continuation_args).read_text())
             assert admitted == ["mid"] and not retained["loops"]["mid"]["complete"], invalid
             assert retained["loops"]["outer"]["status"] == "NOT RUN" and retained["status"] == "FAIL"
-            if invalid in ("missing-active", "malformed-active", "missing-pending", "malformed-plan"):
+            if invalid in ("missing-active", "malformed-active", "missing-pending", "malformed-plan", "malformed-births"):
                 assert retained["phases"][0]["status"] == "FAIL", "known source-bound failure was lost"
         admitted.clear()
         clock = [0.0]
