@@ -52,16 +52,20 @@ function quality()
     end
 end
 
+# Example files are reader-facing and stay within 80 columns.
+format_margin(relative) = occursin(r"(^|/)examples/", relative) ? 80 : 92
+
 function format_check()
     mismatches = String[]
     files = source_files()
     for path in files
         source = read(path, String)
+        relative = relpath(path, QUALITY_ROOT)
         formatted = JuliaFormatter.format_text(
             source;
             style=JuliaFormatter.DefaultStyle(),
             indent=4,
-            margin=92,
+            margin=format_margin(relative),
             format_docstrings=false,
             whitespace_in_kwargs=false,
         )

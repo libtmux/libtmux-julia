@@ -22,7 +22,8 @@ source:
 
 ```@eval
 using Markdown
-Markdown.parse("```julia\n" * read(joinpath(@__DIR__, "..", "..", "examples", "shared_windows.jl"), String) * "\n```")
+example = joinpath(@__DIR__, "..", "..", "examples", "shared_windows.jl")
+Markdown.parse("```julia\n" * read(example, String) * "\n```")
 ```
 
 Fields in one criterion are conjoined. Nested relations preserve correlation:
@@ -50,6 +51,8 @@ julia> criterion = PaneWhere(active=true);
 julia> criterion isa Function
 true
 
-julia> encode_where(decode_where(encode_where(criterion))) == encode_where(criterion)
+julia> wire = encode_where(criterion);
+
+julia> encode_where(decode_where(wire)) == wire
 true
 ```

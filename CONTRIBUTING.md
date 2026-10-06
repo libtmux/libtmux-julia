@@ -132,7 +132,13 @@ Prepare the manual environment outside timed checks:
 $ julia \
     --startup-file=no \
     --project=docs \
-    -e 'using Pkg; Pkg.develop([PackageSpec(path="."), PackageSpec(path="packages/LibTmuxMCP"), PackageSpec(path="packages/LibTmuxWorkspace")]); Pkg.instantiate()'
+    -e 'using Pkg;
+        Pkg.develop([
+            PackageSpec(path="."),
+            PackageSpec(path="packages/LibTmuxMCP"),
+            PackageSpec(path="packages/LibTmuxWorkspace"),
+        ]);
+        Pkg.instantiate()'
 ```
 
 Build the Documenter manual with normal compilation:
@@ -157,6 +163,19 @@ $ julia \
     --compile=min \
     -O0 \
     dev/check-doc-examples.jl check
+```
+
+Check that example code stays within 80 columns. The check reads the files
+that [.github/example-width.toml](.github/example-width.toml) names and needs
+only Python 3.11+. Its self-test plants a wide line to prove the check can
+fail:
+
+```console
+$ python3 dev/check_example_width.py --self-test
+```
+
+```console
+$ python3 dev/check_example_width.py
 ```
 
 The [example inventory](docs/example-inventory.md) distinguishes exact pure

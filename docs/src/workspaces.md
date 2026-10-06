@@ -11,7 +11,15 @@ same public Git tag:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
+    -e '
+    using Pkg
+    Pkg.activate(".")
+    repo = "https://github.com/libtmux/libtmux-julia.git"
+    tag = "v0.1.0-alpha.1"
+    Pkg.add([
+        Pkg.PackageSpec(url=repo, rev=tag),
+        Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace"),
+    ])'
 ```
 
 The following executable source example needs a checkout and its own consumer
@@ -33,7 +41,15 @@ Create a local environment for the example:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate(".workspace-env"); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
+    -e '
+    using Pkg
+    Pkg.activate(".workspace-env")
+    repo = "https://github.com/libtmux/libtmux-julia.git"
+    tag = "v0.1.0-alpha.1"
+    Pkg.add([
+        Pkg.PackageSpec(url=repo, rev=tag),
+        Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace"),
+    ])'
 ```
 
 It loads two panes, checks their layout and focus, freezes the supported
@@ -50,7 +66,16 @@ The code below is included from that executable program:
 
 ```@eval
 using Markdown
-Markdown.parse("```julia\n" * read(joinpath(@__DIR__, "..", "..", "packages", "LibTmuxWorkspace", "examples", "owned_load.jl"), String) * "\n```")
+example = joinpath(
+    @__DIR__,
+    "..",
+    "..",
+    "packages",
+    "LibTmuxWorkspace",
+    "examples",
+    "owned_load.jl",
+)
+Markdown.parse("```julia\n" * read(example, String) * "\n```")
 ```
 
 ## Install the command
