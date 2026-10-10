@@ -2,7 +2,7 @@ schema_version = 1
 status = "unregistered prerelease"
 
 [support]
-julia_development = "1.13.0"
+julia_development = "1.13.1"
 julia_proposed_floor = "1.10"
 tmux_proposed_floor = "3.2a"
 platforms_proposed = ["Linux x86_64", "macOS arm64", "macOS x86_64"]
