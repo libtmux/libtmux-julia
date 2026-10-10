@@ -90,9 +90,9 @@ def qa_cells():
                           status="NOT RUN"))
 
     add("Linux", "ubuntu-24.04", "x86_64", "1.10.0", "3.2a", suites=("all",))
-    add("Linux", "ubuntu-24.04", "x86_64", "1.13.0", "3.7c", 4, ("all",))
+    add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.7c", 4, ("all",))
     for runner, arch in (("macos-15", "arm64"), ("macos-15-intel", "x86_64")):
-        add("Darwin", runner, arch, "1.13.0", "3.7c", suites=("all",))
+        add("Darwin", runner, arch, "1.13.1", "3.7c", suites=("all",))
     return cells
 
 
@@ -532,9 +532,9 @@ println("PASS admitted version arguments construct real Pkg specifications")
             for cell in cells
         ] == [
             ("Linux", "x86_64", "1.10.0", "3.2a", 1),
-            ("Linux", "x86_64", "1.13.0", "3.7c", 4),
-            ("Darwin", "arm64", "1.13.0", "3.7c", 1),
-            ("Darwin", "x86_64", "1.13.0", "3.7c", 1),
+            ("Linux", "x86_64", "1.13.1", "3.7c", 4),
+            ("Darwin", "arm64", "1.13.1", "3.7c", 1),
+            ("Darwin", "x86_64", "1.13.1", "3.7c", 1),
         ]
         assert sum(len(cell["suites"]) for cell in cells) == 4
         assert len({cell["label"] for cell in cells}) == len(cells)
