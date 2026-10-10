@@ -124,6 +124,45 @@ Check the staged diff before committing:
 $ git diff --cached --check
 ```
 
+## Documentation API export
+
+The documentation environment also exports the API for the shared website.
+Prepare it with the manual setup command below, then run:
+
+```console
+$ julia \
+    --startup-file=no \
+    --project=docs \
+    docs/export-api.jl
+```
+
+The artifact at `docs/build/api.json` records public and qualified bindings,
+constructors, fields, methods, keyword defaults, type parameters, docstrings
+and source locations. It combines Julia syntax with native method and
+documentation metadata, including declarations generated through `@eval`.
+Methods extending Base and dependency APIs remain separate from package
+bindings. The exporter captures the base inventory before loading optional
+JSON and Tables extensions and identifies their added methods.
+
+The selected environment determines the LibTmux checkout. The artifact
+records that checkout's revision and source hashes independently of the
+exporter's hash and tool versions. Uncommitted API sources or source changes
+during extraction fail the export. An optional positional argument selects
+another output path.
+
+Check the artifact against native inventories and the generated-method,
+keyword-default, source and optional-extension regressions:
+
+```console
+$ julia \
+    --startup-file=no \
+    --project=docs \
+    docs/test-export-api.jl
+```
+
+These checks verify extraction. They do not execute the documented programs
+or establish website rendering or publication.
+
 ## Manual and examples
 
 Prepare the manual environment outside timed checks:
