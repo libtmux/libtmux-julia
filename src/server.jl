@@ -36,7 +36,31 @@ end
     from_env(; env=ENV, socket_path=nothing, socket_name=nothing, tmux="tmux")
 
 Read the endpoint from `TMUX`, or select the named `default` socket when it
-is absent. Explicit selectors take precedence. This function performs no I/O.
+is absent. Explicit selectors take precedence. Return a [`Server`](@ref)
+description without contacting tmux or starting a daemon.
+
+# Arguments
+
+- `env=ENV`: Mapping used to read `TMUX`. The value must contain a socket
+  path, process ID, and session index separated by commas. An absent or empty
+  value selects the named `default` socket; a malformed value raises
+  `ArgumentError`. Explicit socket selectors bypass this lookup.
+- `socket_path=nothing`: Path to a tmux socket. When supplied, select this
+  endpoint instead of reading `env`; relative paths become absolute against
+  the current directory. Supply either `socket_path` or `socket_name`, never
+  both. An empty path or a path containing NUL raises `ArgumentError`.
+- `socket_name=nothing`: Name of a tmux socket, used as tmux's `-L` selector.
+  When supplied, select this endpoint instead of reading `env`. The name must
+  be nonempty and contain neither a slash nor NUL. Supply either
+  `socket_name` or `socket_path`, never both.
+- `tmux="tmux"`: Executable name or path for later operations on the returned
+  server. A bare name is resolved through `PATH` when an operation runs.
+  This call checks that the value is a nonempty string without NUL; it does
+  not check whether the executable or socket exists.
+
+# See also
+
+[`Server`](@ref) and [`snapshot`](@ref).
 """
 function from_env(; env=ENV, socket_path=nothing, socket_name=nothing, tmux="tmux")
     if socket_path !== nothing || socket_name !== nothing
