@@ -42,6 +42,7 @@ TOOL_PREFERENCES = "[JuliaFormatter]\nprecompile_workload = false\n"
 
 DELIVERY_PHASES = frozenset(("extensions", "docs", "doc-snippets", "doc-contextual",
                             "imports", "external-examples", "external-launchers"))
+PROFILE_CONSUMER_PHASES = frozenset(("imports", "external-examples", "external-launchers"))
 SUITES = ("runtime", "delivery")
 LOOP_BUDGETS = {"mid": 10, "outer": 200}
 HARD_LIMITS = {"mid": 30, "outer": 240}
@@ -75,6 +76,31 @@ def diagnostic_module(name):
 
 def remaining(deadline):
     return max(0.0, deadline - time.monotonic())
+
+
+def sampling_configuration(env):
+    mode = env.get("LIBTMUX_CI_PROFILE", "off")
+    symbolization = env.get("LIBTMUX_CI_PROFILE_SYMBOLIZATION", "native")
+    if mode not in ("off", "cpu", "wall") or symbolization not in ("native", "deferred"):
+        raise ValueError("sampler mode or symbolization policy is unsupported")
+    return dict(mode=mode, symbolization=symbolization)
+
+
+def phase_profile_request(name, inventory, configuration):
+    selected = inventory.get(name)
+    mode = configuration["mode"] if (selected is not None and not name.endswith("-unit")
+                                     or name in PROFILE_CONSUMER_PHASES) else "off"
+    return dict(mode=mode, symbolization=configuration["symbolization"],
+                require_direct_native=selected is not None and mode != "off")
+
+
+def worker_sampling_configuration(args, env):
+    mode = getattr(args, "worker_sampler_mode", None)
+    policy = getattr(args, "worker_sampler_symbolization", None)
+    if (mode is None) != (policy is None) or mode is not None and not getattr(args, "worker", False):
+        raise ValueError("private sampler transport needs a worker and both policy arguments")
+    return sampling_configuration(env if mode is None else dict(
+        LIBTMUX_CI_PROFILE=mode, LIBTMUX_CI_PROFILE_SYMBOLIZATION=policy))
 
 TMUX_SHA256 = {
     "3.2a": "551553a4f82beaa8dadc9256800bcc284d7c000081e47aa6ecbb6ff36eacd05f",
@@ -340,6 +366,8 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
         raise ValueError("hard allowance must be finite and nonnegative")
     if soft_budget is not None and (not math.isfinite(soft_budget) or soft_budget < 0):
         raise ValueError("soft allowance must be finite and nonnegative")
+    configuration = sampling_configuration(env)
+    symbolization = configuration["symbolization"]
     cleanup_seconds = CLEANUP_SECONDS if cleanup_seconds is None else cleanup_seconds
     start = time.monotonic()
     deadline = min(start + budget, deadline) if deadline is not None else start + budget
@@ -349,6 +377,8 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
                   hard_deadline=deadline, direct_child_reaped=False, cleanup_status="NOT NEEDED",
                   coverage_complete=False, test_inventory_complete=False,
                   diagnostics_status="UNAVAILABLE", test_process_birth_ids=[],
+                  profile_request=dict(mode="off", symbolization=symbolization, require_direct_native=False),
+                  profile_request_status="NOT_REQUESTED",
                   timings=dict(first_output_byte=dict(status="UNAVAILABLE",
                       reason="phase has not produced observed output")))
     for field, key in (("invocation", "LIBTMUX_CI_INVOCATION"), ("source_digest", "LIBTMUX_CI_SOURCE_DIGEST")):
@@ -379,6 +409,7 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
     def bind_diagnostics():
         nonlocal diagnostic_receipt
         child_env = env.copy()
+        child_env.update(LIBTMUX_CI_PROFILE="off", LIBTMUX_CI_PROFILE_SYMBOLIZATION=symbolization)
         root = child_env.get("LIBTMUX_CI_DIAGNOSTICS_ROOT")
         if root is None:
             return child_env
@@ -400,12 +431,17 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
                          LIBTMUX_CI_PROCESS_TOKEN=token, LIBTMUX_CI_SOURCE_ROOT=str(ROOT))
         inventory = json.loads(child_env.get("LIBTMUX_CI_TEST_FILE_INVENTORY", "{}"))
         selected = inventory.get(name)
+        request = phase_profile_request(name, inventory, configuration)
+        mode = request["mode"]
+        child_env["LIBTMUX_CI_PROFILE"] = mode
         if selected is not None:
             child_env["LIBTMUX_CI_TEST_CONSOLE"] = "1"
         answer.update(invocation=invocation, source_digest=digest,
                       diagnostics_directory=str(directory), diagnostics_status="PARTIAL" if selected is not None else "UNAVAILABLE",
                       diagnostics_scope="native_runner" if selected is not None else "process_receipt_only",
                       process_token=token, expected_test_file_inventory=selected,
+                      profile_request=request,
+                      profile_request_status="NOT_REQUESTED" if mode == "off" else "UNVERIFIED",
                       test_inventory_status="PARTIAL_CHILD_ADMISSION_UNAVAILABLE" if selected is not None
                                             else "UNAVAILABLE_NATIVE_INVENTORY")
         diagnostic_receipt = directory / "phase.json"
@@ -618,6 +654,7 @@ report = module.assemble_phase(sorted(directory.glob("events-*.jsonl")),
     output=directory / "public", phase_path=directory / "phase.json",
     expected_phase=phase_name, expected_direct_birth=direct_birth or None)
 proof = dict(schema=1, invocation=invocation, source_digest=digest, phase=phase_name,
+    profile_request=report["profile_request"], profile_request_status=report["profile_request_status"],
     observed_assertion_counts=report["assertion_counts"],
     observed_native_failure=(report["assertion_counts"]["failed"] + report["assertion_counts"]["errored"] > 0
         or any(process["assertion_problems"] for process in report["processes"])),
@@ -857,7 +894,18 @@ def finalize_diagnostics(answer, *, env):
         if (not isinstance(proof, dict) or proof.get("invocation") != answer["invocation"]
                 or proof.get("source_digest") != answer["source_digest"] or proof.get("phase") != answer["name"]):
             raise ValueError("diagnostic finalizer proof differs from the admitted phase")
+        request = proof.get("profile_request")
+        profile_status = proof.get("profile_request_status")
+        if (not isinstance(request, dict) or type(request.get("require_direct_native")) is not bool
+                or request != answer["profile_request"]
+                or (request["mode"] == "off" and profile_status != "NOT_REQUESTED")
+                or (request["mode"] != "off" and request["require_direct_native"]
+                    and profile_status not in ("CAPTURED", "EMPTY", "FAIL"))
+                or (request["mode"] != "off" and not request["require_direct_native"]
+                    and profile_status != "UNVERIFIED")):
+            raise ValueError("diagnostic sampler proof differs from the admitted request")
         answer["diagnostics_proof"] = proof
+        answer["profile_request_status"] = profile_status
         answer["observed_native_failure"] = proof.get("observed_native_failure") is True
         answer["observed_assertion_counts"] = proof.get("observed_assertion_counts")
         manifest_path = directory / "public" / "manifest.json"
@@ -871,7 +919,9 @@ def finalize_diagnostics(answer, *, env):
         if proof.get("original_logs"):
             answer["log_sha256"] = proof["original_logs"][0]["input_sha256"]
             answer["log_binding_scope"] = proof["original_logs"][0]["binding_scope"]
-        answer["diagnostics_status"] = "FAIL" if proof.get("artifact_export_status") != "PASS" else "PASS" if (proof.get("observed_file_coverage_complete") is True
+        answer["diagnostics_status"] = "FAIL" if (proof.get("artifact_export_status") != "PASS"
+            or profile_status == "FAIL") else "PASS" if (profile_status not in ("EMPTY", "UNVERIFIED")
+            and proof.get("observed_file_coverage_complete") is True
             and proof.get("expected_file_inventory_matches") is True and not proof.get("issues")
             and not proof.get("process_issues")) else "PARTIAL"
     except BaseException as error:
@@ -1440,6 +1490,9 @@ def run_checks(args):
     if tomllib.loads(preferences.read_text()) != metadata["tool_preferences"]:
         raise ValueError("tool preferences changed since preparation; prepare a fresh stage")
     env = environment(stage, offline=True)
+    configuration = worker_sampling_configuration(args, env)
+    env.update(LIBTMUX_CI_PROFILE=configuration["mode"],
+               LIBTMUX_CI_PROFILE_SYMBOLIZATION=configuration["symbolization"])
     invocation = getattr(args, "invocation", None) or uuid.uuid4().hex
     inventory = checked_test_inventory(metadata)
     declarations = {name: dict(source_digest=item["source_digest"], files=item["files"])
@@ -1459,7 +1512,7 @@ def run_checks(args):
                   invocation=invocation, coverage_complete=False, test_inventory_complete=False,
                   test_inventory_status="PARTIAL_CHILD_ADMISSION_UNAVAILABLE", test_process_birth_ids=[],
                   test_inventory_limits=["child admission is unproved", "commands outside native runners have process receipts only"],
-                  test_file_inventory=declarations)
+                  test_file_inventory=declarations, sampling_configuration=configuration)
     destination = result_path(stage, args, worker=getattr(args, "worker", False))
 
     def save():
@@ -1509,7 +1562,9 @@ def run_checks(args):
             commands = selected_commands(args, stage, metadata)
             scope_args = argparse.Namespace(**(vars(args) | dict(worker=False)))
             result.update(status="RUNNING", planned_phases=[item[0] for item in commands],
-                          required_phases=[item[0] for item in selected_commands(scope_args, stage, metadata)])
+                          required_phases=[item[0] for item in selected_commands(scope_args, stage, metadata)],
+                          expected_profile_requests={item[0]: phase_profile_request(item[0], inventory, configuration)
+                                                     for item in commands})
             loop_started = command_started
             active_loop = None
             try:
@@ -1716,10 +1771,14 @@ def run(args):
     invocation = uuid.uuid4().hex
     batches = ("mid", "outer") if args.tier in ("all", "outer") else ("mid",)
     inventory = checked_test_inventory(metadata)
+    configuration = worker_sampling_configuration(args, os.environ)
+    expected_requests = {item[0]: phase_profile_request(item[0], inventory, configuration) for item in plan}
     result = dict(schema_version=4, status="RUNNING", phases=[], loops={},
                   tier=args.tier, suite=args.suite, threads=args.threads,
                   invocation=invocation, workers=[], active_phase=None,
                   source_digest=metadata["source_digest"],
+                  sampling_configuration=configuration, expected_profile_requests=expected_requests,
+                  sampling_request_status="NOT_REQUESTED" if configuration["mode"] == "off" else "UNVERIFIED",
                   soft_limits=LOOP_BUDGETS, hard_limits=HARD_LIMITS, cleanup_seconds=CLEANUP_SECONDS,
                   diagnostic_finalization_seconds=DIAGNOSTIC_FINALIZATION_SECONDS,
                   worker_retirement_seconds=WORKER_RETIREMENT_SECONDS,
@@ -1753,7 +1812,9 @@ def run(args):
         argv = [sys.executable, str(Path(__file__).resolve()), "run", str(stage),
                 "--julia", args.julia, "--tmux", args.tmux, "--threads", str(args.threads),
                 "--tier", args.tier, "--suite", args.suite, "--worker",
-                "--worker-phase", batch, "--invocation", invocation, "--deadline", repr(deadline)]
+                "--worker-phase", batch, "--invocation", invocation, "--deadline", repr(deadline),
+                "--worker-sampler-mode", configuration["mode"],
+                "--worker-sampler-symbolization", configuration["symbolization"]]
         for name in ("julia", "tmux", "os", "arch"):
             value = getattr(args, f"expected_{name}")
             if value is not None:
@@ -1790,6 +1851,20 @@ def run(args):
         result["workers"].append(worker)
         details = worker_receipt(receipt, invocation, metadata["source_digest"])
         if details:
+            if configuration["mode"] != "off":
+                errors = []
+                if details.get("sampling_configuration") != configuration:
+                    errors.append("worker_sampling_configuration")
+                observed_requests = {item["name"]: item.get("profile_request") for item in details["phases"]}
+                for name in cancellation["planned_phases"]:
+                    if observed_requests.get(name) != expected_requests[name]:
+                        errors.append("phase_profile_request:" + name)
+                if errors:
+                    details["status"] = "FAIL"
+                    worker.update(status="FAIL", sampling_request_status="FAIL", sampling_request_errors=errors)
+                    result["sampling_request_status"] = "FAIL"
+                else:
+                    worker["sampling_request_status"] = "PASS"
             result["phases"].extend(details["phases"])
             result["active_phase"] = details["active_phase"]
             for name in ("source_digest", "platform", "machine", "kernel", "wsl", "tools", "julia", "tmux"):
@@ -1817,6 +1892,9 @@ def run(args):
     else:
         result["status"] = "PASS" if all(loop["status"] == "PASS" for loop in result["loops"].values()) \
             and all(worker["status"] == "PASS" for worker in result["workers"]) else "FAIL"
+        if configuration["mode"] != "off" and result["sampling_request_status"] != "FAIL":
+            result["sampling_request_status"] = "PASS" if all(
+                worker.get("sampling_request_status") == "PASS" for worker in result["workers"]) else "UNVERIFIED"
     if result["status"] != "PASS":
         cancelled_receipts(result, cancellation | details
                            if details else cancellation)
@@ -1827,7 +1905,114 @@ def run(args):
     return 0 if result["status"] == "PASS" else 1
 
 
+def self_test_profile_transport(evidence_directory=None):
+    """Exercise the real supervisor and worker boundary without installed products."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from contextlib import nullcontext
+    retained = nullcontext(str(evidence_directory)) if evidence_directory is not None else \
+        tempfile.TemporaryDirectory(prefix="libtmux-profile-transport-")
+    with retained as directory:
+        base = Path(directory)
+        base.mkdir(parents=True, exist_ok=evidence_directory is None)
+        (base / ".libtmux-julia-matrix").touch()
+        (base / "LocalPreferences.toml").write_text(TOOL_PREFERENCES)
+        source = "test/runtests.jl"
+        metadata = dict(source_digest=source_digest(), project=str(base), tools={},
+            tool_preferences=tomllib.loads(TOOL_PREFERENCES), test_file_inventory={
+                "core-normal": dict(source_digest=source_digest(), files=[dict(path=source,
+                    sha256=hashlib.sha256((ROOT / source).read_bytes()).hexdigest())])})
+        (base / "prepared.json").write_text(json.dumps(metadata))
+        observed = base / "native-environment.json"
+        command = [sys.executable, "-c",
+            "import json,os,pathlib;pathlib.Path(" + repr(str(observed)) + ").write_text(json.dumps({"
+            "'mode':os.environ['LIBTMUX_CI_PROFILE'],"
+            "'symbolization':os.environ['LIBTMUX_CI_PROFILE_SYMBOLIZATION']}))"]
+        plan = [("core-normal", command, 1, "outer")]
+        helper = base / "worker.py"
+        helper.write_text("""import importlib.util,json,os,pathlib,sys
+spec=importlib.util.spec_from_file_location('transport_worker',sys.argv.pop(1))
+module=importlib.util.module_from_spec(spec)
+sys.modules[spec.name]=module
+spec.loader.exec_module(module)
+base=pathlib.Path(sys.argv[2])
+(base/'worker-environment.json').write_text(json.dumps({'mode':os.environ['LIBTMUX_CI_PROFILE']}))
+plan=json.loads((base/'transport-plan.json').read_text())
+module.command_plan=lambda *args: plan
+module.version_probe=lambda *args,**kwargs:dict(status='PASS',version='version')
+sys.argv[0]=str(pathlib.Path(module.__file__))
+raise SystemExit(module.main())
+""")
+        (base / "transport-plan.json").write_text(json.dumps(plan))
+        args = SimpleNamespace(stage=str(base), julia=sys.executable, tmux=sys.executable,
+            threads=1, tier="outer", suite="runtime", worker=False,
+            expected_julia=None, expected_tmux=None, expected_os=None, expected_arch=None)
+        real_phase = phase
+        def worker_phase(name, argv, **kwargs):
+            return real_phase(name, [argv[0], str(helper), argv[1], *argv[2:]], **kwargs)
+        with patch.dict(os.environ, {"LIBTMUX_CI_PROFILE": "cpu", "LIBTMUX_CI_PROFILE_SYMBOLIZATION": "deferred"}), \
+             patch(__name__ + ".command_plan", return_value=plan), \
+             patch(__name__ + ".phase", side_effect=worker_phase):
+            assert run(args) == 1, "synthetic native process must fail its absent requested profile capture"
+        assert json.loads((base / "worker-environment.json").read_text())["mode"] == "off"
+        assert json.loads(observed.read_text()) == dict(mode="cpu", symbolization="deferred"), \
+            "supervisor discarded the sampling request before native admission"
+        report = json.loads(result_path(base, args).read_text())
+        native = next(item for item in report["phases"] if item["name"] == "core-normal")
+        assert native["profile_request"] == dict(mode="cpu", symbolization="deferred", require_direct_native=True)
+        assert native["profile_request_status"] == "FAIL" and native["exit_code"] == 0
+        assert native["semantic_status"] == "PASS" and native["status"] == "FAIL"
+        assert all(item["profile_request"]["mode"] == "off" for item in report["workers"])
+
+
+def self_test_profile_request_guard():
+    """A completed worker cannot silently discard a required sampling request."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory(prefix="libtmux-profile-request-") as directory:
+        base = Path(directory)
+        (base / ".libtmux-julia-matrix").touch()
+        source = "test/runtests.jl"
+        metadata = dict(source_digest=source_digest(), test_file_inventory={
+            "core-normal": dict(source_digest=source_digest(), files=[dict(path=source,
+                sha256=hashlib.sha256((ROOT / source).read_bytes()).hexdigest())])})
+        (base / "prepared.json").write_text(json.dumps(metadata))
+        args = SimpleNamespace(stage=str(base), julia=sys.executable, tmux=sys.executable,
+            threads=1, tier="outer", suite="runtime", worker=False,
+            expected_julia=None, expected_tmux=None, expected_os=None, expected_arch=None)
+        def contrary_worker(name, argv, **kwargs):
+            expected = [] if name == "mid" else ["core-normal"]
+            worker_args = SimpleNamespace(**(vars(args) | dict(worker_phase=name)))
+            result_path(base, worker_args, worker=True).write_text(json.dumps(dict(
+                invocation=argv[argv.index("--invocation") + 1], source_digest=metadata["source_digest"],
+                status="PASS", sampling_configuration=dict(mode="cpu", symbolization="deferred"),
+                phases=[dict(name=case, status="PASS", seconds=0.01, started=True, direct_child_reaped=True,
+                    profile_request=dict(mode="off", symbolization="deferred", require_direct_native=False),
+                    profile_request_status="NOT_REQUESTED") for case in expected],
+                active_phase=None, active_phases=[], pending_phases=[], planned_phases=expected)))
+            return dict(name=name, status="PASS", seconds=0.01, direct_child_reaped=True)
+        with patch.dict(os.environ, {"LIBTMUX_CI_PROFILE": "cpu", "LIBTMUX_CI_PROFILE_SYMBOLIZATION": "deferred"}), \
+             patch(__name__ + ".command_plan", return_value=[("core-normal", [], 1, "outer")]), \
+             patch(__name__ + ".phase", side_effect=contrary_worker):
+            assert run(args) == 1, "contrary worker receipt hid the required CPU request"
+        report = json.loads(result_path(base, args).read_text())
+        assert report["sampling_request_status"] == "FAIL"
+        assert report["workers"][-1]["sampling_request_errors"] == ["phase_profile_request:core-normal"]
+        assert report["phases"][0]["status"] == "PASS", "original phase verdict was overwritten"
+        for supplied in (dict(worker=False, worker_sampler_mode="cpu", worker_sampler_symbolization="deferred"),
+                         dict(worker=True, worker_sampler_mode="cpu", worker_sampler_symbolization=None),
+                         dict(worker=True, worker_sampler_mode="invalid", worker_sampler_symbolization="deferred")):
+            try:
+                worker_sampling_configuration(SimpleNamespace(**supplied), {})
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("invalid private worker transport was accepted")
+
+
 def self_test(julia=None):
+    self_test_profile_transport()
+    self_test_profile_request_guard()
     diagnostic_module("ci_streams").self_test(diagnostic_module("ci_artifacts"), ROOT.resolve())
     import unittest
     console_tests = diagnostic_module("test_ci_streams")
@@ -1926,7 +2111,54 @@ println("PASS admitted version arguments construct real Pkg specifications")
         diagnostic_env.update(LIBTMUX_CI_DIAGNOSTICS_ROOT=str(base / "diagnostics"),
                               LIBTMUX_CI_STAGE=str(base), LIBTMUX_CI_INVOCATION="control",
                               LIBTMUX_CI_SOURCE_DIGEST="a" * 64,
-                              LIBTMUX_CI_DIAGNOSTICS_DIR="inherited-unowned-directory")
+                              LIBTMUX_CI_DIAGNOSTICS_DIR="inherited-unowned-directory",
+                              LIBTMUX_CI_PROFILE="off", LIBTMUX_CI_PROFILE_SYMBOLIZATION="deferred")
+        profile_env = diagnostic_env | dict(LIBTMUX_CI_PROFILE="cpu",
+            LIBTMUX_CI_TEST_FILE_INVENTORY=json.dumps({name: dict(source_digest="a" * 64,
+                files=[dict(path="test/fixture.jl", sha256="b" * 64)])
+                for name in ("profile-normal", "profile-unit")}))
+        profile_probe = "import json,os;print(json.dumps([os.environ['LIBTMUX_CI_PROFILE'],os.environ['LIBTMUX_CI_PROFILE_SYMBOLIZATION']]))"
+        for name, mode, required in (("profile-normal", "cpu", True),
+                                     ("profile-unit", "off", False),
+                                     ("imports", "cpu", False),
+                                     ("profile-uninstrumented", "off", False)):
+            sampled = phase(name, [sys.executable, "-c", profile_probe], cwd=base,
+                env=profile_env, log=base / (name + ".log"), budget=0.9)
+            assert sampled["semantic_status"] == "PASS" and sampled["exit_code"] == 0
+            assert json.loads((base / (name + ".log")).read_text()) == [mode, "deferred"]
+            assert sampled["profile_request"] == dict(mode=mode, symbolization="deferred",
+                                                       require_direct_native=required)
+            assert sampled["profile_request_status"] == ("FAIL" if required else
+                "NOT_REQUESTED" if mode == "off" else "UNVERIFIED")
+            if required:
+                assert sampled["status"] == sampled["diagnostics_status"] == "FAIL"
+                assert sampled["observed_assertion_counts"] == dict(passed=0, failed=0, errored=0, broken=0)
+        unbound_profile = phase("imports", [sys.executable, "-c", profile_probe], cwd=base,
+            env=os.environ.copy() | dict(LIBTMUX_CI_PROFILE="cpu", LIBTMUX_CI_PROFILE_SYMBOLIZATION="deferred"),
+            log=base / "unbound-profile.log", budget=0.9)
+        assert unbound_profile["status"] == "PASS"
+        assert json.loads((base / "unbound-profile.log").read_text()) == ["off", "deferred"]
+        assert unbound_profile["profile_request"] == dict(mode="off", symbolization="deferred", require_direct_native=False)
+        from unittest.mock import patch
+        for binding, invalid in (("LIBTMUX_CI_PROFILE", "unknown"),
+                                 ("LIBTMUX_CI_PROFILE_SYMBOLIZATION", "unknown")):
+            with patch.object(subprocess, "Popen") as launch:
+                try:
+                    phase("invalid-profile", [], cwd=base, env=profile_env | {binding: invalid},
+                          log=base / "invalid-profile.log", budget=0.9)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("invalid sampler settings reached child admission")
+                launch.assert_not_called()
+        mismatched_profile_proof = DIAGNOSTIC_FINALIZER + "\nproof['profile_request']['mode']='cpu'\n(Path(directory)/'diagnostics-proof.json').write_text(json.dumps(proof))\n"
+        with patch(__name__ + ".DIAGNOSTIC_FINALIZER", mismatched_profile_proof):
+            mismatched = phase("profile-proof-mismatch", [sys.executable, "-c", "pass"],
+                cwd=base, env=diagnostic_env, log=base / "profile-proof-mismatch.log", budget=0.9)
+        assert mismatched["semantic_status"] == "PASS" and mismatched["exit_code"] == 0
+        assert mismatched["diagnostic_finalizer"]["exit_code"] == 0
+        assert mismatched["status"] == mismatched["diagnostics_status"] == "FAIL"
+        assert mismatched["diagnostic_error"] == "ValueError"
         failed = phase("failure", [sys.executable, "-c", "raise SystemExit(7)"],
                        cwd=base, env=diagnostic_env, log=base / "failure.log", budget=0.9)
         assert failed["status"] == "FAIL" and failed["exit_code"] == 7
@@ -2776,10 +3008,14 @@ def main():
     execution.add_argument("--worker-phase", choices=("mid", "outer"), help=argparse.SUPPRESS)
     execution.add_argument("--invocation", help=argparse.SUPPRESS)
     execution.add_argument("--deadline", type=float, help=argparse.SUPPRESS)
+    execution.add_argument("--worker-sampler-mode", choices=("off", "cpu", "wall"), help=argparse.SUPPRESS)
+    execution.add_argument("--worker-sampler-symbolization", choices=("native", "deferred"), help=argparse.SUPPRESS)
     for option in ("julia", "tmux", "os", "arch"):
         execution.add_argument(f"--expected-{option}")
     args = parser.parse_args()
     try:
+        if args.command == "run":
+            worker_sampling_configuration(args, os.environ)
         if getattr(args, "deadline", None) is not None and (not math.isfinite(args.deadline) or args.deadline <= 0):
             raise ValueError("worker deadline must be finite and positive")
         if args.command == "matrix":

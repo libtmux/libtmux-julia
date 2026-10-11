@@ -91,12 +91,27 @@ class SourceMap:
                 raise ValueError("filesystem root is not a source root")
             self.roots.append((physical.rstrip(os.sep), label))
         self.roots.sort(key=lambda item: len(item[0]), reverse=True)
+        self.source_aliases = []
+        home = str(Path.home().resolve()).rstrip(os.sep)
+        for physical, logical in self.roots:
+            prefixes = [physical]
+            if physical.startswith(home + os.sep):
+                prefixes.append("~" + physical[len(home):])
+            for prefix in prefixes:
+                pattern = (r"(?<![\w~])" + re.escape(prefix)
+                    + r"(?=$|[/\\\s:;,\"'<>`\)])(?P<tail>[/\\][^\s\"'<>`),;]*)?")
+                self.source_aliases.append((re.compile(pattern), logical))
 
     def text(self, value):
         text = str(value)
-        for physical, logical in self.roots:
-            pattern = re.escape(physical) + r"(?=$|[/\\\s:;,\"'<>`\)])"
-            text = re.sub(pattern, lambda _: logical, text)
+        for pattern, logical in self.source_aliases:
+            def owned(match):
+                tail = match.group("tail") or ""
+                if ".." in re.split(r"[/\\]", tail):
+                    self.redacted_paths += 1
+                    return "redacted-path"
+                return logical + tail.replace("\\", "/")
+            text = pattern.sub(owned, text)
         def redact(_):
             self.redacted_paths += 1
             return "redacted-path"
@@ -458,7 +473,8 @@ Observed streams alone cannot establish that all admitted children reported.
 def profile_shape(payload):
     if not isinstance(payload.get("data"), list) or not isinstance(payload.get("lookup"), dict):
         return False
-    if any(type(word) is not int or not 0 <= word < 2**64 for word in payload["data"]):
+    words = payload["data"]
+    if set(map(type, words)) - {int} or min(words, default=0) < 0 or max(words, default=0) >= 2**64:
         return False
     for address, frames in payload["lookup"].items():
         if (not isinstance(address, str) or not 1 <= len(address) <= 20 or not address.isascii() or not address.isdecimal()
@@ -489,13 +505,16 @@ def profile_observations(payload, event):
         raise ValueError("unresolved-address count differs from the lookup")
     if declared is not None and (declared == "complete") != (unresolved == 0):
         raise ValueError("symbolization status differs from the lookup")
-    for field in ("symbolization_status", "unresolved_addresses", "buffer_full", "truncated"):
+    if payload.get("symbolization_policy") not in (None, "native", "deferred"):
+        raise ValueError("unsupported checkpoint symbolization policy")
+    for field in ("symbolization_policy", "symbolization_status", "unresolved_addresses", "buffer_full", "truncated"):
         if field in event and (event[field] != payload.get(field) or type(event[field]) is not type(payload.get(field))):
             raise ValueError("checkpoint observation differs from its payload")
     for field in ("buffer_full", "truncated"):
         if field in payload and type(payload[field]) is not bool:
             raise ValueError("checkpoint prefix flag is not Boolean")
-    return dict(symbolization_status="PARTIAL" if unresolved else "COMPLETE" if declared == "complete" else "UNAVAILABLE",
+    return dict(symbolization_policy=payload.get("symbolization_policy"),
+                symbolization_status="PARTIAL" if unresolved else "COMPLETE" if declared == "complete" else "UNAVAILABLE",
                 unresolved_addresses=unresolved, buffer_full=payload.get("buffer_full"), truncated=payload.get("truncated"),
                 sample_coverage_status="UNPROVED", symbolization_scope="checkpoint lookup only; not sample/process/time coverage")
 
@@ -546,7 +565,7 @@ def copy_profiles(processes, event_paths, *, invocation, source_digest, mapping,
                 payload = parse_json(raw)
             except (ValueError, UnicodeError, RecursionError):
                 payload = None
-            if (not isinstance(payload, dict) or not bounded_structure(payload) or type(payload.get("schema")) is not int or payload["schema"] != 2
+            if (not isinstance(payload, dict) or not bounded_structure({key: value for key, value in payload.items() if key != "data"}) or type(payload.get("schema")) is not int or payload["schema"] != 2
                     or payload.get("invocation") != invocation or payload.get("source_digest") != source_digest
                     or payload.get("process_birth_id") != process["process_id"] or type(payload.get("pid")) is not int or payload["pid"] != process["pid"]
                     or type(payload.get("checkpoint_seq")) is not int or payload["checkpoint_seq"] != seq or payload.get("mode") != event["mode"]
@@ -566,11 +585,14 @@ def copy_profiles(processes, event_paths, *, invocation, source_digest, mapping,
                 record["reason"] = "checkpoint_observation_fault"
                 continue
             filename = f"profile-{len(records):04d}-{event['mode']}.json"
-            safe = mapping.value(payload)
+            # Sample words are validated UInt64 values, so only metadata needs path mapping.
+            safe = mapping.value({key: value for key, value in payload.items() if key not in ("data", "lookup")})
+            safe["data"] = payload["data"]
+            safe["lookup"] = {address: mapping.value(frames) for address, frames in payload["lookup"].items()}
             # Do not trust a producer-supplied decoder verdict.
             safe["decoder_status"] = "RAW_PRESERVED_NATIVE_DECODER_UNVERIFIED"
             safe["measurement_scope"] = "cumulative_checkpoint; checkpoints overlap"
-            (output / filename).write_text(json.dumps(safe, sort_keys=True) + "\n")
+            (output / filename).write_text(json.dumps(safe, sort_keys=True, separators=(",", ":")) + "\n")
             record.update(observations, file=filename, status="RAW_PRESERVED", capture_status=payload["status"],
                           input_sha256=digest, data_words=len(payload["data"]), lookup_addresses=len(payload["lookup"]),
                           julia=payload["julia"], threads=payload["threads"],
@@ -840,18 +862,60 @@ def junit(report):
     return ET.tostring(root, encoding="unicode", xml_declaration=True) + "\n"
 
 
+PROGRESS_PREFIX = "LIBTMUX_TEST_PROGRESS "
+UNPARSED_PROGRESS = "[unparsed diagnostic progress redacted]"
+
+
+def decoded_progress(line):
+    if not line.startswith(PROGRESS_PREFIX) or len(line.encode("utf-8")) > MAX_RECORD_BYTES:
+        return None
+    try:
+        value = parse_json(line[len(PROGRESS_PREFIX):])
+    except (ValueError, UnicodeError, RecursionError):
+        return None
+    return value if type(value) is dict and bounded_structure(value) else None
+
+
+def sanitized_original_text(text, mapping, *, issues=None):
+    output, redacted = [], 0
+    for line in text.split("\n"):
+        body = line.rstrip("\r\n")
+        ending = line[len(body):]
+        packet = decoded_progress(body)
+        if packet is not None:
+            output.append(PROGRESS_PREFIX + json.dumps(mapping.value(packet), sort_keys=True) + ending)
+        elif body.startswith(PROGRESS_PREFIX):
+            output.append(UNPARSED_PROGRESS + ending)
+            redacted += 1
+        else:
+            output.append(mapping.text(line))
+    if redacted and issues is not None:
+        issues.append(fault("unparsed_progress_redacted", "original byte hash retained; public progress payload unavailable",
+                            records=redacted))
+    return "\n".join(output)
+
+
 def export_strings(path):
     """Inspect decoded values so XML syntax and JSON escapes cannot hide paths."""
     def strings(value):
-        if isinstance(value, str):
+        kind = type(value)
+        if kind is str:
             yield value
-        elif isinstance(value, list):
+        elif kind is list:
+            if not set(map(type, value)) & {str, list, dict}:
+                return
             for item in value:
-                yield from strings(item)
-        elif isinstance(value, dict):
+                if type(item) is str:
+                    yield item
+                elif type(item) is list or type(item) is dict:
+                    yield from strings(item)
+        elif kind is dict:
             for key, item in value.items():
                 yield key
-                yield from strings(item)
+                if type(item) is str:
+                    yield item
+                elif type(item) is list or type(item) is dict:
+                    yield from strings(item)
     if path.suffix == ".json":
         yield from strings(json.loads(path.read_text()))
     elif path.suffix == ".jsonl":
@@ -869,11 +933,21 @@ def export_strings(path):
             for row in csv.reader(stream):
                 yield from row
     else:
-        yield path.read_text()
+        for line in path.read_text().split("\n"):
+            packet = decoded_progress(line)
+            if packet is not None:
+                yield from strings(packet)
+            elif line.startswith(PROGRESS_PREFIX):
+                raise ValueError("unparsed diagnostic progress")
+            else:
+                yield line
 
 
 def unsafe_export(path):
-    return any(PRIVATE_PATH_REJECT.search(value) or ABSOLUTE_PATH.search(value) for value in export_strings(path))
+    try:
+        return any(PRIVATE_PATH_REJECT.search(value) or ABSOLUTE_PATH.search(value) for value in export_strings(path))
+    except (ValueError, UnicodeError, RecursionError, ET.ParseError):
+        return True
 
 
 def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, mapping,
@@ -915,6 +989,36 @@ def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, m
     report["profile_sample_coverage_status"] = "UNPROVED"
     report["profile_checkpoint_counts"] = dict(attempted=attempted, copied=copied)
     report["profile_copy_scope"] = "attempted checkpoint payloads only; not complete sampling/process/time coverage"
+    request = report.get("profile_request")
+    report["profile_request_status"] = "UNVERIFIED"
+    if request is not None:
+        valid = (isinstance(request, dict) and request.get("mode") in ("off", "cpu", "wall")
+            and request.get("symbolization") in ("native", "deferred")
+            and type(request.get("require_direct_native")) is bool
+            and not (request["require_direct_native"] and request["mode"] == "off"))
+        if not valid:
+            report["profile_request_status"] = "FAIL"
+        elif request["mode"] == "off":
+            report["profile_request_status"] = "NOT_REQUESTED"
+        elif request["require_direct_native"]:
+            direct_birth = report.get("direct_process_birth_id")
+            direct_profiles = [event for process in processes if process["process_id"] == direct_birth
+                               for event in process["profiles"]]
+            starts = [event for event in direct_profiles if event["event"] == "profile_start"]
+            start_matches = (len(starts) == 1 and starts[0].get("mode") == request["mode"]
+                             and starts[0].get("symbolization_policy") == request["symbolization"])
+            checkpoints_match = start_matches and all(
+                event.get("mode") == request["mode"] and event.get("symbolization_policy") == request["symbolization"]
+                and event["seq"] > starts[0]["seq"]
+                for event in direct_profiles if event["event"] == "profile_checkpoint")
+            selected = [record for record in retained if record["process_id"] == direct_birth
+                        and record["mode"] == request["mode"]
+                        and record["symbolization_policy"] == request["symbolization"]]
+            report["profile_request_status"] = ("CAPTURED" if any(record["data_words"] > 0 for record in selected)
+                else "EMPTY") if checkpoints_match and selected else "FAIL"
+        if report["profile_request_status"] == "FAIL":
+            issues.append(fault("missing_requested_profile", "admitted native sampler start or bound raw checkpoint unavailable", severe=True))
+            report["check_status"] = "FAIL"
     with (output / "partial-progress.jsonl").open("w") as stream:
         for process in processes:
             for event in process["events"]:
@@ -938,7 +1042,7 @@ def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, m
             issues.append(fault("stale_log", "original log bytes differ from its bound receipt", severe=True))
             continue
         filename = f"original-log-{index:04d}.txt"
-        (output / filename).write_text(mapping.text(raw.decode("utf-8", errors="replace")))
+        (output / filename).write_text(sanitized_original_text(raw.decode("utf-8", errors="replace"), mapping, issues=issues))
         report["original_logs"].append(dict(file=filename, phase=mapping.text(item["phase"]), input_sha256=digest,
             process_birth_id=item.get("process_birth_id"), binding_scope=item.get("binding_scope", "explicit_log_byte_binding")))
     for snapshot in snapshots:
@@ -955,6 +1059,7 @@ def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, m
     (output / "junit.xml").write_text(junit(report))
     summary = [f"Supervisor verdict: {report.get('check_status', (receipt or {}).get('status', 'UNVERIFIED'))}.",
                f"Tests: {test_status}. Coverage: {report['coverage_status']}.",
+               f"Requested sampler: {request.get('mode', 'unverified') if isinstance(request, dict) else 'unverified'}. Capture contract: {report['profile_request_status']}. Sample/process/time coverage remains UNPROVED.",
                f"Checkpoint copy: {report['profile_copy_status']} ({copied}/{attempted}). Symbolization: {report['profile_symbolization_status']}. Sample/process/time coverage: UNPROVED.",
                f"Invocation: {invocation}. Source digest: {expected_source_digest}.",
                f"Assertion counts ({report['count_scope']}): {json.dumps(report['assertion_counts'], sort_keys=True)}.",
@@ -1221,6 +1326,7 @@ A process-only phase preserves its command verdict without inventing test counts
                     test_inventory_complete=False, test_process_birth_ids=evidence["process_birth_ids"],
                     active_phase=None, child_inventory_status="UNPROVED") if phase is not None else None)
     proof = dict(phase=expected_phase, direct_process_birth_id=direct_birth,
+        profile_request=phase.get("profile_request") if phase is not None else None,
         observed_file_coverage_complete=evidence["observed_file_coverage_complete"],
         expected_file_inventory_matches=matches, observed_process_birth_ids=evidence["process_birth_ids"],
         process_issues=[dict(process_birth_id=process["process_id"], issues=process["issues"])
@@ -1367,6 +1473,72 @@ def self_test():
         assert mapping.text(r"prefixC:\private\test.jl") == "prefixredacted-path"
         assert mapping.text(r"source:\\private\server\test.jl") == "source:redacted-path"
         assert mapping.text("bad\ufffe\uffff") == "bad??"
+
+        owned_root = Path.home() / ".synthetic-owned-root"
+        alias = "~/.synthetic-owned-root"
+        aliases = SourceMap([(owned_root, "repository"), (owned_root / "nested", "nested-source")])
+        for prefix in (str(owned_root), alias):
+            assert aliases.text(prefix + "/test/error.jl:49") == "repository/test/error.jl:49"
+            for tail in ("/../private.jl:7", "/a:b/../../private.jl:7"):
+                assert aliases.text(prefix + tail) == "redacted-path"
+        assert aliases.text(alias + "/nested/error.jl:49") == "nested-source/error.jl:49"
+        unknown = ("/private/unowned/private.jl:7", "~/not-owned/private.jl:7",
+                   r"C:\private\private.jl:7", r"prefixC:\private\private.jl:7",
+                   r"\\private\server\private.jl:7", alias + "-other/private.jl:7")
+        progress_log = root / "progress-privacy.txt"
+        detail = "Stacktrace:\n    [1] f()"
+        progress = PROGRESS_PREFIX + json.dumps(dict(detail=detail)) + "\n"
+        safe = sanitized_original_text(progress, aliases)
+        assert parse_json(safe[len(PROGRESS_PREFIX):])["detail"] == detail
+        progress_log.write_text(safe)
+        assert not unsafe_export(progress_log)
+        for value in unknown:
+            progress = PROGRESS_PREFIX + json.dumps(dict(detail=value))
+            progress_log.write_text(progress)
+            assert unsafe_export(progress_log)
+            safe = sanitized_original_text(progress, aliases)
+            assert "private.jl" not in parse_json(safe[len(PROGRESS_PREFIX):])["detail"]
+            progress_log.write_text(safe)
+            assert not unsafe_export(progress_log)
+        malformed = (
+            r'{"detail":"\u002fprivate\u002funowned\u002fsecret.jl:7',
+            r'{"detail":"\u007e\u002funowned\u002fsecret.jl:7',
+            r'{"detail":"C:\u005cprivate\u005csecret.jl:7',
+            r'{"detail":"\u005c\u005cprivate\u005cserver\u005csecret.jl:7',
+            r'{"detail":"ok","detail":"\u002fprivate\u002fsecret.jl:7"}',
+            '{"detail":' + '[' * 34 + '"relative"' + ']' * 34 + '}',
+            json.dumps(dict(detail="relative")) + " " * MAX_RECORD_BYTES,
+        )
+        for value in malformed:
+            progress = PROGRESS_PREFIX + value + "\n"
+            progress_log.write_text(progress)
+            assert unsafe_export(progress_log), "independent reader accepted unparsed progress"
+            redactions = []
+            safe = sanitized_original_text(progress, aliases, issues=redactions)
+            assert safe == UNPARSED_PROGRESS + "\n" and not safe.startswith(PROGRESS_PREFIX)
+            assert redactions == [fault("unparsed_progress_redacted",
+                "original byte hash retained; public progress payload unavailable", records=1)]
+            progress_log.write_text(safe)
+            assert not unsafe_export(progress_log)
+        assert sanitized_original_text("plain /private/unowned/private.jl:7\n", aliases) == "plain redacted-path\n"
+
+        for separator in ("\u2028", "\u2029", "\u0085"):
+            for escaped in (r"\u002fprivate\u002funowned\u002fsecret.jl:7",
+                            r"\u007e\u002funowned\u002fsecret.jl:7"):
+                for ending in ("\n", "\r\n", ""):
+                    progress = PROGRESS_PREFIX + '{"detail":"before' + separator + escaped + '"}' + ending
+                    progress_log.write_text(progress)
+                    assert unsafe_export(progress_log), "Unicode separator split the decoded privacy scan"
+                    safe = sanitized_original_text(progress, aliases)
+                    assert safe.endswith(ending)
+                    decoded = decoded_progress(safe.rstrip("\r\n"))
+                    assert decoded and separator in decoded["detail"] and "secret.jl" not in decoded["detail"]
+                    progress_log.write_text(safe)
+                    assert not unsafe_export(progress_log)
+                    truncated = PROGRESS_PREFIX + '{"detail":"before' + separator + escaped + ending
+                    progress_log.write_text(truncated)
+                    assert unsafe_export(progress_log)
+                    assert sanitized_original_text(truncated, aliases) == UNPARSED_PROGRESS + ending
         def event(name, seq, **fields):
             return dict(schema=2, event=name, seq=seq, pid=123, elapsed_ns=seq, invocation="current",
                         source_digest=digest, process_birth_id="birth-one", **fields)
@@ -1567,8 +1739,28 @@ def self_test():
         write(items[:-1] + [items[-2]] + items[-1:])
         result = run("duplicate-checkpoint")
         assert result["export_status"] == "FAIL" and result["profile_copy_status"] == "PARTIAL"
-        write(profile_events(payload | dict(data=[2**64, 123, 0])))
-        assert run("invalid-profile-word")["export_status"] == "FAIL"
+        for label, word in (("overflow", 2**64), ("boolean", True), ("negative", -1),
+                            ("nested", ["/home/private/sample"]), ("string", "/home/private/sample")):
+            write(profile_events(payload | dict(data=[word, 123, 0])))
+            result = run("invalid-profile-word-" + label)
+            assert result["export_status"] == "FAIL" and result["profile_copy_status"] == "UNAVAILABLE"
+        write(profile_events(payload | dict(lookup={"0123": [None]})))
+        assert run("noncanonical-profile-address")["export_status"] == "FAIL"
+        metadata = {"nested": [{"prefixC:\\private": "prefix/home/private/value"}],
+                    "escaped": "\u002fhome\u002fprivate\u002fvalue"}
+        frame = payload["lookup"]["123"][0] | dict(extension=metadata)
+        value = payload | dict(extension=metadata, lookup=payload["lookup"] | {"123": [frame]})
+        write(profile_events(value))
+        result = run("profile-extension-privacy")
+        assert result["export_status"] == "PASS" and result["profile_copy_status"] == "RAW_PRESERVED"
+        kept = json.loads((root / "profile-extension-privacy" / result["profile_records"][0]["file"]).read_text())
+        assert kept["data"] == payload["data"] and kept["lookup"]["0"] == [None]
+        assert not unsafe_export(root / "profile-extension-privacy" / result["profile_records"][0]["file"])
+        nested = "safe"
+        for _ in range(34):
+            nested = [nested]
+        write(profile_events(payload | dict(extension=nested)))
+        assert run("profile-extension-depth")["export_status"] == "FAIL"
         legacy = profile_events(payload)
         for key in ("checkpoint_seq", "input_sha256"):
             legacy[-2].pop(key)
@@ -1687,6 +1879,60 @@ def self_test():
         assert result["observed_file_coverage_complete"] and result["expected_file_inventory_matches"]
         assert result["coverage_status"] == "PARTIAL" and result["test_status"] == "UNKNOWN"
         assert result["child_inventory_status"] == "UNPROVED" and result["observed_process_birth_ids"] == ["direct-123"]
+        original_counts = result["assertion_counts"].copy()
+        required_profile = dict(mode="cpu", symbolization="deferred", require_direct_native=True)
+        result = phase_run("requested-profile-missing", receipt_override=phase_receipt | dict(profile_request=required_profile))
+        assert result["profile_request_status"] == "FAIL", "requested native profiles were silently omitted"
+        assert result["export_status"] == "FAIL" and result["check_status"] == "FAIL"
+        assert result["assertion_counts"] == original_counts
+        assert 'type="missing_requested_profile"' in (root / "requested-profile-missing/junit.xml").read_text()
+        start_marker = event("profile_start", 1, mode="cpu", symbolization_policy="deferred")
+        checkpoint_payload["symbolization_policy"] = "deferred"
+        profile.write_text(json.dumps(checkpoint_payload) + "\n")
+        checkpoint_marker = checkpoint_marker | dict(symbolization_policy="deferred",
+            input_sha256=hashlib.sha256(profile.read_bytes()).hexdigest())
+        captured_events = [item | dict(process_birth_id="direct-123") for item in
+                           phase_events[:-1] + [start_marker, checkpoint_marker] + phase_events[-1:]]
+        result = phase_run("requested-profile-captured", receipt_override=phase_receipt | dict(profile_request=required_profile), items=captured_events)
+        assert result["profile_request_status"] == "CAPTURED" and result["export_status"] == "PASS"
+        assert result["assertion_counts"] == original_counts and result["profile_sample_coverage_status"] == "UNPROVED"
+        assert result["profile_symbolization_status"] == "PARTIAL", "capture contract cannot imply symbolization"
+        conflicting = [item | dict(process_birth_id="direct-123") for item in phase_events[:-1] +
+            [start_marker, start_marker | dict(mode="wall", symbolization_policy="native"), checkpoint_marker] + phase_events[-1:]]
+        result = phase_run("requested-profile-conflicting-start", receipt_override=phase_receipt | dict(profile_request=required_profile), items=conflicting)
+        assert result["profile_request_status"] == "FAIL", "contradictory sampler starts were accepted"
+        assert result["export_status"] == "FAIL" and result["assertion_counts"] == original_counts
+        profile.write_text(json.dumps(checkpoint_payload | dict(symbolization_policy="native")) + "\n")
+        conflicting_marker = checkpoint_marker | dict(symbolization_policy="native",
+            input_sha256=hashlib.sha256(profile.read_bytes()).hexdigest())
+        conflicting = [item | dict(process_birth_id="direct-123") for item in
+            phase_events[:-1] + [start_marker, conflicting_marker] + phase_events[-1:]]
+        result = phase_run("requested-profile-conflicting-policy", receipt_override=phase_receipt | dict(profile_request=required_profile), items=conflicting)
+        assert result["profile_request_status"] == "FAIL", "checkpoint contradicted the admitted symbolization policy"
+        assert result["export_status"] == "FAIL" and result["assertion_counts"] == original_counts
+        profile.write_text(json.dumps(checkpoint_payload) + "\n")
+        wrong_request = required_profile | dict(mode="wall")
+        result = phase_run("requested-profile-wrong-mode", receipt_override=phase_receipt | dict(profile_request=wrong_request), items=captured_events)
+        assert result["profile_request_status"] == "FAIL" and result["export_status"] == "FAIL"
+        unsupported = [item | dict(process_birth_id="direct-123") for item in phase_events[:-1] +
+            [event("profile_unavailable", 1, mode="wall", reason="requires_julia_1_13")] + phase_events[-1:]]
+        result = phase_run("requested-profile-unsupported", receipt_override=phase_receipt | dict(profile_request=wrong_request), items=unsupported)
+        assert result["profile_request_status"] == "FAIL" and result["assertion_counts"] == original_counts
+        empty_payload = checkpoint_payload | dict(data=[], status="empty", unresolved_addresses=0,
+                                                 symbolization_status="complete", lookup={"0": [None]})
+        profile.write_text(json.dumps(empty_payload) + "\n")
+        empty_marker = checkpoint_marker | dict(status="empty", data_words=0, unresolved_addresses=0,
+            symbolization_status="complete",
+            input_sha256=hashlib.sha256(profile.read_bytes()).hexdigest())
+        empty_events = [item | dict(process_birth_id="direct-123") for item in
+                       phase_events[:-1] + [start_marker, empty_marker] + phase_events[-1:]]
+        result = phase_run("requested-profile-empty", receipt_override=phase_receipt | dict(profile_request=required_profile), items=empty_events)
+        assert result["profile_request_status"] == "EMPTY" and result["export_status"] == "PASS"
+        assert result["assertion_counts"] == original_counts and result["profile_records"][0]["data_words"] == 0
+        profile.write_text(json.dumps(checkpoint_payload) + "\n")
+        for name, request in (("bad-shape", {}), ("off-required", required_profile | dict(mode="off"))):
+            result = phase_run("requested-profile-" + name, receipt_override=phase_receipt | dict(profile_request=request))
+            assert result["profile_request_status"] == "FAIL" and result["export_status"] == "FAIL"
         assert (root / "bound-phase" / "original-log-0001.txt").read_text() == "source:owned/test.jl\n"
         timings = (root / "bound-phase" / "timings.csv").read_text()
         assert "reaping" in timings and "first_output_byte" in timings and "UNAVAILABLE" in timings
@@ -1811,6 +2057,19 @@ def self_test():
             globals()["copy_profiles"] = original_copy_profiles
         for artifact in (root / "bound-log").iterdir():
             assert not unsafe_export(artifact)
+        encoded_paths = (
+            r'{"items":[0,true,null,"prefix\u002fhome\u002fprivate\u002fvalue",[1],{"relative":"ok"}]}',
+            r'{"items":[0,true,null,[{"\u002fhome\u002fprivate\u002fkey":"ok"}]]}',
+            r'{"items":[0,true,null,{"relative":"C:\u005cprivate\u005cvalue"}]}',
+            r'{"items":[0,true,null,{"relative":"\u005c\u005cprivate\u005cserver"}]}',
+        )
+        for suffix in (".json", ".jsonl"):
+            rejected = root / ("encoded-path" + suffix)
+            for encoded in encoded_paths:
+                rejected.write_text(encoded + "\n")
+                assert unsafe_export(rejected), "independent decoded privacy scan missed an escaped path"
+            rejected.write_text('{"items":[0,true,null,3.5,"relative/path",[1],{"relative":"ok"}]}\n')
+            assert not unsafe_export(rejected)
         rejected = root / "unsafe.xml"
         rejected.write_text('<testsuites><testcase name="prefix/home/private/test.jl" /></testsuites>')
         assert unsafe_export(rejected), "independent reject scan missed an embedded private root"

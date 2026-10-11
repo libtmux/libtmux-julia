@@ -123,6 +123,9 @@ jobs:
           python3 dev/check-matrix.py prepare "$MATRIX_STAGE"
           --threads '${{ matrix.threads }}'
       - name: Check prepared cell offline
+        env:
+          LIBTMUX_CI_PROFILE: cpu
+          LIBTMUX_CI_PROFILE_SYMBOLIZATION: deferred
         run: >-
           python3 dev/check-matrix.py run "$MATRIX_STAGE"
           --tmux "$MATRIX_STAGE/tmux/${{ matrix.tmux }}/bin/tmux"
