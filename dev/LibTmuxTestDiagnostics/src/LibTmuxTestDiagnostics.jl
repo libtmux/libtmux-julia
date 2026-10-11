@@ -19,6 +19,18 @@ end
 
 const OBSERVER = Ref{Union{Nothing,Observer}}(nothing)
 const TESTSET_ALIAS = :__LibTmuxDiagnosticTestSet
+const PROFILE_SESSION = Ref{Any}(nothing)
+
+function start_profiles end
+function stop_profiles end
+function checkpoint_profile end
+function decode_profile end
+
+function load_profiling()
+    isdefined(LibTmuxTestDiagnostics, :ProfileSession) ||
+        include(joinpath(@__DIR__, "profiling.jl"))
+    nothing
+end
 
 function source_file(file, observer=OBSERVER[])
     text = string(file)
@@ -142,11 +154,14 @@ function start_observer(
     source_digest::AbstractString,
     process_birth_id::AbstractString,
     phase=get(ENV, "LIBTMUX_CI_PHASE", nothing),
+    profile_mode=get(ENV, "LIBTMUX_CI_PROFILE", "off"),
 )
     OBSERVER[] === nothing || error("an observer already owns this process")
     run_id = identity(invocation, "invocation")
     birth_id = identity(process_birth_id, "process birth identity")
     phase_id = phase === nothing ? nothing : identity(phase, "phase")
+    profile_mode in ("off", "cpu", "wall") ||
+        throw(ArgumentError("profile mode must be off, cpu or wall"))
     occursin(r"\A[0-9a-f]{64}\z", source_digest) ||
         throw(ArgumentError("source digest must be SHA256"))
     mkpath(directory)
@@ -174,12 +189,35 @@ function start_observer(
         phase=phase_id,
         compile_status="unavailable_no_counter_ownership",
     )
+    if profile_mode != "off"
+        import_started = time_ns()
+        try
+            load_profiling()
+            import_seconds = (time_ns()-import_started)/1e9
+            Base.invokelatest(
+                start_profiles,
+                observer,
+                abspath(directory),
+                profile_mode;
+                import_seconds,
+            )
+        catch error
+            push!(observer.faults, "profile_start:" * string(nameof(typeof(error))))
+            emit(
+                "profile_unavailable";
+                mode=profile_mode,
+                reason="sampler_start_failed",
+                error_type=string(nameof(typeof(error))),
+            )
+        end
+    end
     observer
 end
 
 function close_observer(; outcome="unknown")
     observer = OBSERVER[]
     observer === nothing && return
+    PROFILE_SESSION[] === nothing || Base.invokelatest(stop_profiles)
     emit(
         "process_finish";
         outcome,
