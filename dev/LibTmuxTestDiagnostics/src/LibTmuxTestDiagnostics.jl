@@ -155,6 +155,7 @@ function start_observer(
     process_birth_id::AbstractString,
     phase=get(ENV, "LIBTMUX_CI_PHASE", nothing),
     profile_mode=get(ENV, "LIBTMUX_CI_PROFILE", "off"),
+    profile_symbolization=get(ENV, "LIBTMUX_CI_PROFILE_SYMBOLIZATION", "native"),
 )
     OBSERVER[] === nothing || error("an observer already owns this process")
     run_id = identity(invocation, "invocation")
@@ -162,6 +163,8 @@ function start_observer(
     phase_id = phase === nothing ? nothing : identity(phase, "phase")
     profile_mode in ("off", "cpu", "wall") ||
         throw(ArgumentError("profile mode must be off, cpu or wall"))
+    profile_symbolization in ("native", "deferred") ||
+        throw(ArgumentError("profile symbolization must be native or deferred"))
     occursin(r"\A[0-9a-f]{64}\z", source_digest) ||
         throw(ArgumentError("source digest must be SHA256"))
     mkpath(directory)
@@ -200,6 +203,7 @@ function start_observer(
                 abspath(directory),
                 profile_mode;
                 import_seconds,
+                symbolization=profile_symbolization,
             )
         catch error
             push!(observer.faults, "profile_start:" * string(nameof(typeof(error))))
