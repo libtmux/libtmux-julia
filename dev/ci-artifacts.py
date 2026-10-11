@@ -32,6 +32,9 @@ MAX_INPUT_BYTES = 16 * 1024 * 1024
 MAX_PROFILE_BYTES = 32 * 1024 * 1024
 MAX_PROFILE_TOTAL_BYTES = 128 * 1024 * 1024
 MAX_PROFILE_CHECKPOINTS = 32
+MAX_SETUP_FILES = 64
+MAX_SETUP_BYTES = 32 * 1024 * 1024
+MAX_SETUP_FILE_BYTES = 8 * 1024 * 1024
 
 
 def finite_number(value):
@@ -144,7 +147,7 @@ def input_bytes(path, mapping, issues, *, limit=MAX_INPUT_BYTES):
 def read_process(path, *, invocation, source_digest, mapping, ordinal):
     issues = []
     raw = input_bytes(path, mapping, issues)
-    events, birth, pid, previous, previous_elapsed = [], None, None, 0, 0
+    events, birth, pid, phase, previous, previous_elapsed = [], None, None, None, 0, 0
     source_bound = False
     lines = raw.splitlines(keepends=True)
     for number, line in enumerate(lines, 1):
@@ -178,6 +181,7 @@ def read_process(path, *, invocation, source_digest, mapping, ordinal):
                 issues.append(fault("invalid_birth", "entire stream rejected", severe=True))
                 break
             pid = event.get("pid")
+            phase = event.get("phase")
             if type(pid) is not int or pid <= 0:
                 issues.append(fault("invalid_pid", "entire stream rejected", severe=True))
                 break
@@ -189,7 +193,8 @@ def read_process(path, *, invocation, source_digest, mapping, ordinal):
             break
         if (event.get("pid") != pid or event.get("invocation", invocation) != invocation
                 or event.get("source_digest", source_digest) != source_digest
-                or event.get("process_birth_id", birth) != birth):
+                or event.get("process_birth_id", birth) != birth
+                or event.get("phase", phase) != phase):
             issues.append(fault("identity_fault", "record rejected", severe=True))
             break
         if not finite_number(event.get("elapsed_ns")) or event["elapsed_ns"] < previous_elapsed:
@@ -409,15 +414,19 @@ def detail_counts(counts, problems):
     return dict(status=status, available=available, unavailable=unavailable, unobserved=unobserved)
 
 
+def require_binding(invocation, source_digest):
+    if (not isinstance(invocation, str) or not IDENTIFIER.fullmatch(invocation) or invocation in (".", "..")
+            or not isinstance(source_digest, str) or not SHA256.fullmatch(source_digest)):
+        raise ValueError("portable invocation and SHA256 source digest are required")
+
+
 def collect_process_evidence(event_paths, *, invocation, expected_source_digest, source_roots, expected_phase=None):
     """Read bounded native evidence without writing or certifying child admission.
 
 The supervisor must independently supply the expected process/file inventory.
 Observed streams alone cannot establish that all admitted children reported.
 """
-    if (not isinstance(invocation, str) or not IDENTIFIER.fullmatch(invocation)
-            or not isinstance(expected_source_digest, str) or not SHA256.fullmatch(expected_source_digest)):
-        raise ValueError("portable invocation and SHA256 source digest are required")
+    require_binding(invocation, expected_source_digest)
     if expected_phase is not None and (not isinstance(expected_phase, str) or not IDENTIFIER.fullmatch(expected_phase)):
         raise ValueError("expected phase must be a portable identifier")
     mapping = SourceMap(source_roots)
@@ -469,7 +478,29 @@ def profile_shape(payload):
     return True
 
 
-def copy_profiles(processes, event_paths, *, invocation, source_digest, mapping, output, issues):
+def profile_observations(payload, event):
+    """Keep copy success separate from incomplete attribution or sample prefixes."""
+    unresolved = sum(frames is None for address, frames in payload["lookup"].items() if address != "0")
+    declared = payload.get("symbolization_status")
+    if declared is not None and declared not in ("partial", "complete"):
+        raise ValueError("unsupported symbolization status")
+    if "unresolved_addresses" in payload and (type(payload["unresolved_addresses"]) is not int
+            or payload["unresolved_addresses"] != unresolved):
+        raise ValueError("unresolved-address count differs from the lookup")
+    if declared is not None and (declared == "complete") != (unresolved == 0):
+        raise ValueError("symbolization status differs from the lookup")
+    for field in ("symbolization_status", "unresolved_addresses", "buffer_full", "truncated"):
+        if field in event and (event[field] != payload.get(field) or type(event[field]) is not type(payload.get(field))):
+            raise ValueError("checkpoint observation differs from its payload")
+    for field in ("buffer_full", "truncated"):
+        if field in payload and type(payload[field]) is not bool:
+            raise ValueError("checkpoint prefix flag is not Boolean")
+    return dict(symbolization_status="PARTIAL" if unresolved else "COMPLETE" if declared == "complete" else "UNAVAILABLE",
+                unresolved_addresses=unresolved, buffer_full=payload.get("buffer_full"), truncated=payload.get("truncated"),
+                sample_coverage_status="UNPROVED", symbolization_scope="checkpoint lookup only; not sample/process/time coverage")
+
+
+def copy_profiles(processes, event_paths, *, invocation, source_digest, mapping, output, issues, metadata=None):
     """Retain hashed raw checkpoints; native decoder success needs separate proof."""
     records, previous, total_bytes, attempted = [], {}, 0, 0
     for process in processes:
@@ -477,8 +508,9 @@ def copy_profiles(processes, event_paths, *, invocation, source_digest, mapping,
         directory = Path(event_paths[process["input_ordinal"] - 1]).parent
         for event in process["profiles"]:
             if event["event"] != "profile_checkpoint":
-                records.append(dict(process_id=process["process_id"], mode=event.get("mode", "unknown"),
-                                    status="UNAVAILABLE", reason=event.get("reason", event["event"])))
+                if metadata is not None:
+                    metadata.append(mapping.value(event | dict(process_id=process["process_id"],
+                        metadata_kind="lifecycle" if event["event"] in ("profile_start", "profile_stop") else "availability")))
                 continue
             attempted += 1
             record = dict(process_id=process["process_id"], mode=event.get("mode", "unknown"),
@@ -527,18 +559,80 @@ def copy_profiles(processes, event_paths, *, invocation, source_digest, mapping,
                 issues.append(fault("profile_binding_fault", "checkpoint identity or shape differs from its process event", severe=True))
                 record["reason"] = "checkpoint_identity_or_shape_fault"
                 continue
+            try:
+                observations = profile_observations(payload, event)
+            except ValueError:
+                issues.append(fault("profile_observation_fault", "checkpoint symbolization or prefix metadata differs", severe=True))
+                record["reason"] = "checkpoint_observation_fault"
+                continue
             filename = f"profile-{len(records):04d}-{event['mode']}.json"
             safe = mapping.value(payload)
             # Do not trust a producer-supplied decoder verdict.
             safe["decoder_status"] = "RAW_PRESERVED_NATIVE_DECODER_UNVERIFIED"
             safe["measurement_scope"] = "cumulative_checkpoint; checkpoints overlap"
             (output / filename).write_text(json.dumps(safe, sort_keys=True) + "\n")
-            record.update(file=filename, status="RAW_PRESERVED", capture_status=payload["status"],
+            record.update(observations, file=filename, status="RAW_PRESERVED", capture_status=payload["status"],
                           input_sha256=digest, data_words=len(payload["data"]), lookup_addresses=len(payload["lookup"]),
                           julia=payload["julia"], threads=payload["threads"],
                           decoder_status=safe["decoder_status"],
                           capture_seconds=event["capture_seconds"] if finite_number(event.get("capture_seconds")) and event["capture_seconds"] >= 0 else None)
     return records
+
+
+def bound_phase_outcome(phase, issues):
+    """Retain failures and reject a reported PASS that contradicts retirement."""
+    normalized = phase.copy()
+    status, semantic, code = phase.get("status"), phase.get("semantic_status"), phase.get("exit_code")
+    reasons = []
+    if status == "PASS":
+        if phase.get("started") is not True:
+            reasons.append("successful command was not admitted")
+        if type(code) is not int or code != 0:
+            reasons.append("successful command has no zero exit code")
+        if semantic != "PASS":
+            reasons.append("successful command contradicts its semantic verdict")
+        if phase.get("direct_child_reaped") is not True or phase.get("cleanup_status") != "REAPED":
+            reasons.append("successful command has unproved direct-child cleanup")
+        if phase.get("soft_limit_exceeded") is True:
+            reasons.append("successful command exceeded its soft limit")
+        if phase.get("diagnostics_status") == "FAIL":
+            reasons.append("successful command lost its required diagnostics")
+    if semantic == "PASS" and code is not None and (type(code) is not int or code != 0):
+        reasons.append("semantic PASS contradicts the original exit code")
+    if reasons:
+        issues.append(fault("phase_outcome_contradiction", "; ".join(reasons), severe=True, phase=phase.get("name")))
+        normalized["reported_status"] = status
+        normalized["reported_semantic_status"] = semantic
+        normalized["status"] = "FAIL"
+        if semantic == "PASS" and type(code) is int and code != 0:
+            normalized["semantic_status"] = "FAIL"
+    return normalized
+
+
+def bound_supervisor_outcome(receipt, issues):
+    normalized = receipt.copy()
+    normalized["phases"] = [bound_phase_outcome(phase, issues) for phase in receipt.get("phases", [])]
+    planned = receipt.get("required_phases")
+    names = [phase.get("name") for phase in normalized["phases"]]
+    planned_valid = (isinstance(planned, list) and bool(planned)
+        and all(isinstance(name, str) and IDENTIFIER.fullmatch(name) for name in planned)
+        and len(planned) == len(set(planned)))
+    names_valid = all(isinstance(name, str) and IDENTIFIER.fullmatch(name) for name in names)
+    inventory_complete = planned_valid and names_valid and len(names) == len(set(names)) and set(names) == set(planned)
+    normalized["command_inventory_status"] = "COMPLETE" if inventory_complete else "PARTIAL"
+    if normalized.get("status") == "PASS" and not inventory_complete:
+        issues.append(fault("supervisor_inventory_contradiction", "supervisor PASS lacks every distinct required command receipt", severe=True))
+        normalized["reported_status"], normalized["status"] = "PASS", "FAIL"
+    loops = receipt.get("loops", {})
+    if not isinstance(loops, dict) or any(not isinstance(loop, dict) for loop in loops.values()):
+        issues.append(fault("receipt_loop_shape", "supervisor loop records rejected", severe=True))
+        normalized["loops"] = {}
+        normalized["reported_status"], normalized["status"] = receipt.get("status"), "FAIL"
+    if normalized.get("status") == "PASS" and (any(phase.get("status") != "PASS" for phase in normalized["phases"])
+            or any(loop.get("status") != "PASS" for loop in normalized.get("loops", {}).values())):
+        issues.append(fault("supervisor_outcome_contradiction", "supervisor PASS contradicts a command or loop verdict", severe=True))
+        normalized["reported_status"], normalized["status"] = "PASS", "FAIL"
+    return normalized
 
 
 def read_receipt(path, *, invocation, source_digest, mapping, issues):
@@ -561,7 +655,7 @@ def read_receipt(path, *, invocation, source_digest, mapping, issues):
            for phase in receipt.get("phases", [])):
         issues.append(fault("stale_phase", "phase invocation or source differs from its supervisor", severe=True))
         return None
-    return mapping.value(receipt)
+    return mapping.value(bound_supervisor_outcome(receipt, issues))
 
 
 def receipt_complete(receipt, processes):
@@ -622,9 +716,29 @@ def timing_rows(processes, receipt):
             rows.append(dict(kind=span.get("kind", "span"), name=span.get("label", "unknown"), process_id=process["process_id"],
                              seconds=span.get("seconds"), outcome=span.get("outcome", "unknown"), metric_scope="inclusive_span"))
     if receipt:
+        for name, loop in receipt.get("loops", {}).items():
+            if isinstance(loop, dict):
+                rows.append(dict(kind="whole_loop", name=name, process_id="supervisor",
+                    seconds=loop.get("seconds"), outcome=loop.get("status", "unknown"),
+                    metric_scope="whole_loop_orchestration; overlaps commands and contained loops"))
         for phase in receipt.get("phases", []):
-            rows.append(dict(kind="whole_command", name=phase.get("name", "unknown"), process_id="supervisor",
+            name = phase.get("name", "unknown")
+            rows.append(dict(kind="whole_command", name=name, process_id="supervisor",
                              seconds=phase.get("seconds"), outcome=phase.get("status", "unknown"), metric_scope="startup_execution_retirement_inclusive"))
+            timings = phase.get("timings", {})
+            if isinstance(timings, dict):
+                for metric, value in timings.items():
+                    component = metric in ("popen_seconds", "diagnostic_finalization_seconds")
+                    rows.append(dict(kind="command_component" if component else "command_landmark",
+                        name=f"{name}: {metric}", process_id="supervisor",
+                        seconds=value if finite_number(value) else None,
+                        outcome=phase.get("status", "unknown") if finite_number(value) else "UNAVAILABLE",
+                        metric_scope="inclusive_component; overlaps whole_command" if component
+                                     else "elapsed_from_command_start; overlaps whole_command"))
+                observed, reaped = timings.get("exit_observed_seconds"), timings.get("reaped_seconds")
+                if finite_number(observed) and finite_number(reaped) and reaped >= observed:
+                    rows.append(dict(kind="reaping", name=name, process_id="supervisor", seconds=reaped-observed,
+                        outcome=phase.get("cleanup_status", "unknown"), metric_scope="exit_observation_to_reaping; overlaps whole_command"))
     for row in rows:
         if not finite_number(row.get("seconds")) or row["seconds"] < 0:
             row["seconds"] = None
@@ -676,6 +790,23 @@ def junit(report):
             ET.SubElement(case, "error", type="IncompleteDiagnostics", message="observed counts are lower bounds; complete inventory unproved")
     if report["supervisor"]:
         suite = ET.SubElement(root, "testsuite", name="supervisor")
+        verdict = report["supervisor"].get("status", "UNKNOWN")
+        case = ET.SubElement(suite, "testcase", name="whole-check-verdict", classname="supervisor")
+        if verdict == "FAIL":
+            ET.SubElement(case, "failure", type="CheckFailure", message="original supervisor verdict retained")
+        elif verdict != "PASS":
+            ET.SubElement(case, "error", type=str(verdict), message="whole-check completion unproved")
+        for name, loop in report["supervisor"].get("loops", {}).items():
+            if not isinstance(loop, dict):
+                continue
+            case = ET.SubElement(suite, "testcase", name=name, classname="whole-loop")
+            if loop.get("status") == "FAIL":
+                measured, budget = loop.get("seconds"), loop.get("budget_seconds")
+                soft = loop.get("soft_limit_exceeded") is True or (finite_number(measured) and finite_number(budget) and measured >= budget)
+                ET.SubElement(case, "failure", type="SoftLimit" if soft else "LoopFailure",
+                    message=f"seconds={measured}; budget_seconds={budget}; complete={loop.get('complete')}")
+            elif loop.get("status") != "PASS":
+                ET.SubElement(case, "error", type=str(loop.get("status", "UNKNOWN")), message="loop completion unproved")
         for phase in report["supervisor"].get("phases", []):
             case = ET.SubElement(suite, "testcase", name=str(phase.get("name") or "unknown"), classname="process-phase")
             if phase.get("status") == "FAIL":
@@ -732,25 +863,15 @@ def unsafe_export(path):
     return any(PRIVATE_PATH_REJECT.search(value) or ABSOLUTE_PATH.search(value) for value in export_strings(path))
 
 
-def assemble(event_paths, *, invocation, expected_source_digest, source_roots, output, supervisor_path=None, logs=()):
-    """Write safe partial evidence; export_status is separate from test_status.
-
-Each log input is a dictionary binding path, invocation, source_digest and
-phase. A missing or conflicting binding cannot export the original log.
-Only source-bound hashed profile checkpoints can export raw portable payloads.
-Native decoding remains unverified until independently exercised in Julia.
-"""
+def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, mapping,
+                 output, receipt=None, logs=(), extra_report=None, snapshots=()):
+    """Write a private build; callers publish only after the reject scan."""
     started = time.monotonic()
-    event_paths = tuple(event_paths)
-    evidence = collect_process_evidence(event_paths, invocation=invocation, expected_source_digest=expected_source_digest,
-                                        source_roots=source_roots)
-    mapping = SourceMap(source_roots)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     if output.is_symlink() or any(output.iterdir()):
         raise ValueError("output must be a fresh owned directory")
     issues, processes = evidence["issues"], evidence["processes"]
-    receipt = read_receipt(supervisor_path, invocation=invocation, source_digest=expected_source_digest, mapping=mapping, issues=issues)
     complete = not issues and receipt_complete(receipt, processes)
     counts = {key: sum(process["assertion_counts"][key] for process in processes) for key in COUNT_KEYS}
     native_failed = counts["failed"] + counts["errored"] > 0 or any(process["assertion_problems"] for process in processes)
@@ -765,11 +886,22 @@ Native decoding remains unverified until independently exercised in Julia.
                   limitations=["Raw profile checkpoints need independent native Julia decoding proof.",
                                "Nested timings and process-wide GC/allocation counters overlap.",
                                "Complete native inventory requires an explicit source-bound supervisor proof.",
-                               "Profile copying is bounded to 32 checkpoints, 32 MiB each and 128 MiB total."])
+                               "Profile copying is bounded to 32 checkpoints, 32 MiB each and 128 MiB total.",
+                               "Original logs are bounded snapshots; direct-child reap does not prove descendants stopped writing.",
+                               "Assembly time covers bundle rendering; the supervisor times input collection and publication as finalizer overhead."])
+    report.update(extra_report or {})
+    report["profile_metadata"] = []
     report["profile_records"] = copy_profiles(processes, event_paths, invocation=invocation,
-                                              source_digest=expected_source_digest, mapping=mapping, output=output, issues=issues)
-    copied = sum(record["status"] == "RAW_PRESERVED" for record in report["profile_records"])
-    report["profile_copy_status"] = ("PARTIAL" if copied < len(report["profile_records"]) else "RAW_PRESERVED") if copied else "UNAVAILABLE"
+        source_digest=expected_source_digest, mapping=mapping, output=output, issues=issues, metadata=report["profile_metadata"])
+    retained = [record for record in report["profile_records"] if record["status"] == "RAW_PRESERVED"]
+    copied, attempted = len(retained), len(report["profile_records"])
+    report["profile_copy_status"] = ("PARTIAL" if copied < attempted else "RAW_PRESERVED") if copied else "UNAVAILABLE"
+    symbols = {record["symbolization_status"] for record in retained}
+    report["profile_symbolization_status"] = ("COMPLETE" if symbols == {"COMPLETE"} else
+        "UNAVAILABLE" if not symbols or symbols == {"UNAVAILABLE"} else "PARTIAL")
+    report["profile_sample_coverage_status"] = "UNPROVED"
+    report["profile_checkpoint_counts"] = dict(attempted=attempted, copied=copied)
+    report["profile_copy_scope"] = "attempted checkpoint payloads only; not complete sampling/process/time coverage"
     with (output / "partial-progress.jsonl").open("w") as stream:
         for process in processes:
             for event in process["events"]:
@@ -779,6 +911,9 @@ Native decoding remains unverified until independently exercised in Julia.
         if (not isinstance(item, dict) or item.get("invocation") != invocation or item.get("source_digest") != expected_source_digest
                 or not isinstance(item.get("phase"), str) or not IDENTIFIER.fullmatch(item["phase"])):
             issues.append(fault("unbound_log", "original log binding rejected", severe=True))
+            continue
+        if receipt is not None and item["phase"] not in {phase.get("name") for phase in receipt.get("phases", [])}:
+            issues.append(fault("log_phase_binding_fault", "original log phase differs from its supervisor", severe=True))
             continue
         if (not isinstance(item.get("path"), (str, Path)) or not isinstance(item.get("input_sha256"), str)
                 or not SHA256.fullmatch(item["input_sha256"])):
@@ -791,7 +926,13 @@ Native decoding remains unverified until independently exercised in Julia.
             continue
         filename = f"original-log-{index:04d}.txt"
         (output / filename).write_text(mapping.text(raw.decode("utf-8", errors="replace")))
-        report["original_logs"].append(dict(file=filename, phase=mapping.text(item["phase"]), input_sha256=digest))
+        report["original_logs"].append(dict(file=filename, phase=mapping.text(item["phase"]), input_sha256=digest,
+            process_birth_id=item.get("process_birth_id"), binding_scope=item.get("binding_scope", "explicit_log_byte_binding")))
+    for snapshot in snapshots:
+        filename = snapshot["file"]
+        if not isinstance(filename, str) or not IDENTIFIER.fullmatch(filename):
+            raise ValueError("snapshot export needs a portable filename")
+        (output / filename).write_text(mapping.text(snapshot["text"]))
     rows = timing_rows(processes, receipt)
     columns = ["kind", "name", "process_id", "seconds", "outcome", "file", "line", "metric_scope", "allocation_bytes", "gc_seconds", "compile_seconds", "compile_status"]
     with (output / "timings.csv").open("w", newline="") as stream:
@@ -799,11 +940,36 @@ Native decoding remains unverified until independently exercised in Julia.
         writer.writeheader()
         writer.writerows(rows)
     (output / "junit.xml").write_text(junit(report))
-    summary = [f"Tests: {test_status}. Coverage: {report['coverage_status']}. Profiles: {report['profile_copy_status']}.",
+    summary = [f"Supervisor verdict: {report.get('check_status', (receipt or {}).get('status', 'UNVERIFIED'))}.",
+               f"Tests: {test_status}. Coverage: {report['coverage_status']}.",
+               f"Checkpoint copy: {report['profile_copy_status']} ({copied}/{attempted}). Symbolization: {report['profile_symbolization_status']}. Sample/process/time coverage: UNPROVED.",
                f"Invocation: {invocation}. Source digest: {expected_source_digest}.",
-               f"Assertion counts ({report['count_scope']}): {json.dumps(counts, sort_keys=True)}.",
+               f"Assertion counts ({report['count_scope']}): {json.dumps(report['assertion_counts'], sort_keys=True)}.",
                f"Original assertion/error details: {report['failure_detail_status']}.",
-               "JUnit case counts represent diagnostic units, not native assertion totals.", "", "Ranked timings:"]
+               "JUnit case counts represent diagnostic units, not native assertion totals.", "", "Process identity:"]
+    for process in processes:
+        identity = process["events"][0] if process["events"] else {}
+        summary.append(f"{process['process_id']}: pid={process['pid']}; phase={process.get('phase')}; Julia={identity.get('julia', 'unavailable')}; threads={identity.get('threads', 'unavailable')}.")
+    if retained:
+        summary.extend(["", "Profile checkpoints:"])
+        summary.extend(f"{record['process_id']} {record['mode']} checkpoint {record['checkpoint_seq']}: symbols={record['symbolization_status']}; unresolved_addresses={record['unresolved_addresses']}; buffer_full={record['buffer_full']}; truncated={record['truncated']}." for record in retained)
+    warnings = [item for item in report["profile_metadata"] if item["metadata_kind"] == "availability"]
+    if warnings:
+        summary.extend(["", "Profile availability warnings:"])
+        summary.extend(f"{item['process_id']} {item.get('mode', 'unknown')}: {item.get('reason', item['event'])}." for item in warnings)
+    summary.extend(["", "Command verdict and cleanup:"])
+    for phase in (receipt or {}).get("phases", []):
+        summary.append(f"{phase.get('name')}: status={phase.get('status')}; semantic_status={phase.get('semantic_status', 'unavailable')}; exit_code={phase.get('exit_code', 'unavailable')}; soft_limit_exceeded={phase.get('soft_limit_exceeded', False)}; cleanup={phase.get('cleanup_status', 'unavailable')}; direct_child_reaped={phase.get('direct_child_reaped', False)}.")
+        if phase.get("cleanup"):
+            summary.append(str(phase["cleanup"]))
+    if report.get("receipt_timing_boundary"):
+        summary.extend(["", "Receipt timing boundary: " + report["receipt_timing_boundary"] + "."])
+    if report.get("setup_reason"):
+        summary.extend(["", "Setup evidence: " + report["setup_reason"] + ".", "Setup snapshots do not prove test execution."])
+    if report.get("phase_bundles"):
+        summary.extend(["", "Phase artifacts (counts remain separate):"])
+        summary.extend(f"{item['phase']}: final command={item['command_status']}; artifact={item['artifact_status']}; profiles={item.get('profile_copy_status', 'unavailable')}; symbols={item.get('profile_symbolization_status', 'unavailable')}; bundle={item.get('bundle', 'unavailable')}." for item in report["phase_bundles"])
+    summary.extend(["", "Ranked timings:"])
     summary.extend(f"{row['seconds'] if row['seconds'] is not None else 'unavailable'}s {row['kind']} {row['name']} ({row['outcome']})" for row in rows)
     summary.extend(["", "Limitations:"] + report["limitations"])
     (output / "summary.txt").write_text(mapping.text("\n".join(summary) + "\n"))
@@ -811,15 +977,266 @@ Native decoding remains unverified until independently exercised in Julia.
     report["export_status"] = "FAIL" if any(item["severe"] for item in issues) or any(item["severe"] for process in processes for item in process["issues"]) else "PASS"
     report["assembly_seconds"] = time.monotonic() - started
     (output / "diagnostics.json").write_text(json.dumps(mapping.value(report), indent=2, sort_keys=True) + "\n")
+    manifest = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in output.iterdir() if path.is_file()}
+    (output / "manifest.json").write_text(json.dumps(dict(schema=1, invocation=invocation, source_digest=expected_source_digest, files=manifest), indent=2, sort_keys=True) + "\n")
     unsafe = [path.name for path in output.iterdir() if unsafe_export(path)]
     if unsafe:
         # A rejected export keeps no uploadable unsafe payload.
         for filename in unsafe:
             (output / filename).unlink()
         raise ValueError("export reject scan found an absolute path")
-    manifest = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in output.iterdir() if path.is_file()}
-    (output / "manifest.json").write_text(json.dumps(dict(schema=1, invocation=invocation, source_digest=expected_source_digest, files=manifest), indent=2, sort_keys=True) + "\n")
     return report
+
+
+def publish_bundle(evidence, event_paths, *, invocation, expected_source_digest,
+                   mapping, output, receipt=None, logs=(), extra_report=None, snapshots=()):
+    """Expose only a complete sanitized bundle, including its hash manifest.
+
+A killed exporter can leave its private build, but the workflow never uploads
+that build. Evidence coverage may remain partial even when publication succeeds.
+"""
+    require_binding(invocation, expected_source_digest)
+    output = Path(output)
+    if not mapping.owns(output) or output.exists() or output.is_symlink():
+        raise ValueError("output must be a fresh directory inside an owned root")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".artifact-build-", dir=output.parent) as temporary:
+        build = Path(temporary) / "bundle"
+        report = write_bundle(evidence, event_paths, invocation=invocation,
+                              expected_source_digest=expected_source_digest, mapping=mapping,
+                              output=build, receipt=receipt, logs=logs, extra_report=extra_report, snapshots=snapshots)
+        build.replace(output)
+    return report
+
+
+def assemble(event_paths, *, invocation, expected_source_digest, source_roots, output,
+             supervisor_path=None, logs=(), expected_phase=None):
+    """Export the same bounded native evidence used by supervisor verification."""
+    event_paths = tuple(event_paths)
+    evidence = collect_process_evidence(event_paths, invocation=invocation,
+        expected_source_digest=expected_source_digest, source_roots=source_roots,
+        expected_phase=expected_phase)
+    mapping = SourceMap(source_roots)
+    receipt = read_receipt(supervisor_path, invocation=invocation,
+        source_digest=expected_source_digest, mapping=mapping, issues=evidence["issues"])
+    return publish_bundle(evidence, event_paths, invocation=invocation,
+        expected_source_digest=expected_source_digest, mapping=mapping, output=output,
+        receipt=receipt, logs=logs)
+
+
+def assemble_phase(event_paths, *, invocation, expected_source_digest, source_roots,
+                   output, phase_path, expected_phase, expected_direct_birth=None):
+    """Bind one admitted phase and publish its native evidence without recounting.
+
+The phase receipt authenticates the direct child; observed children cannot prove
+complete child admission. Unit and normal runs retain separate assertion counts.
+A process-only phase preserves its command verdict without inventing test counts.
+"""
+    event_paths = tuple(event_paths)
+    evidence = collect_process_evidence(event_paths, invocation=invocation,
+        expected_source_digest=expected_source_digest, source_roots=source_roots,
+        expected_phase=expected_phase)
+    mapping = SourceMap(source_roots)
+    issues = evidence["issues"]
+    raw = input_bytes(phase_path, mapping, issues)
+    try:
+        phase = parse_json(raw)
+    except (ValueError, UnicodeError, RecursionError):
+        phase = None
+    if (not isinstance(phase, dict) or not bounded_structure(phase)
+            or phase.get("invocation") != invocation
+            or phase.get("source_digest") != expected_source_digest
+            or phase.get("name") != expected_phase):
+        issues.append(fault("phase_receipt_binding_fault", "admitted phase receipt rejected", severe=True))
+        phase = None
+    direct_birth = None
+    if phase is not None and phase.get("started") is True:
+        token, pid = phase.get("process_token"), phase.get("pid")
+        if (not isinstance(token, str) or not IDENTIFIER.fullmatch(token)
+                or type(pid) is not int or pid <= 0):
+            issues.append(fault("direct_child_binding_fault", "phase direct-child identity rejected", severe=True))
+            phase = None
+        else:
+            direct_birth = f"{token}-{pid}"
+            if not IDENTIFIER.fullmatch(direct_birth):
+                issues.append(fault("direct_child_binding_fault", "direct birth exceeds the portable identifier bound", severe=True))
+                phase = None
+            if expected_direct_birth is not None and expected_direct_birth != direct_birth:
+                issues.append(fault("direct_child_binding_fault", "admitted direct birth differs from its receipt", severe=True))
+                phase = None
+    elif expected_direct_birth is not None:
+        issues.append(fault("direct_child_binding_fault", "expected direct child was not admitted", severe=True))
+        phase = None
+    if phase is not None:
+        phase = bound_phase_outcome(phase, issues)
+    expected_files, inventory_valid, matches = set(), False, False
+    if phase is not None:
+        inventory = phase.get("expected_test_file_inventory")
+        if inventory is not None:
+            inventory_valid = (isinstance(inventory, dict)
+                and inventory.get("source_digest") == expected_source_digest
+                and isinstance(inventory.get("files"), list) and bool(inventory["files"])
+                and all(isinstance(item, dict) and portable_file(item.get("path"))
+                        and isinstance(item.get("sha256"), str) and SHA256.fullmatch(item["sha256"])
+                        for item in inventory["files"]))
+            if inventory_valid:
+                expected_files = {item["path"] for item in inventory["files"]}
+                inventory_valid = len(expected_files) == len(inventory["files"])
+            if not inventory_valid:
+                issues.append(fault("file_inventory_binding_fault", "phase file inventory rejected", severe=True))
+            direct = [process for process in evidence["processes"] if process["process_id"] == direct_birth]
+            matches = (inventory_valid and len(direct) == 1 and direct[0]["pid"] == phase["pid"]
+                       and set(direct[0]["file_coverage"]["declared"]) == expected_files)
+            if direct and not matches:
+                issues.append(fault("direct_file_inventory_fault", "direct process differs from the admitted file inventory", severe=True))
+    logs = []
+    if phase is not None and phase.get("log"):
+        log_issues = []
+        log = input_bytes(phase["log"], mapping, log_issues)
+        issues.extend(log_issues)
+        if not any(item["severe"] for item in log_issues):
+            snapshot_digest = hashlib.sha256(log).hexdigest()
+            if phase.get("log_sha256", snapshot_digest) != snapshot_digest:
+                issues.append(fault("stale_log", "phase log bytes differ from the retirement receipt", severe=True))
+            else:
+                logs.append(dict(path=phase["log"], invocation=invocation,
+                    source_digest=expected_source_digest, phase=expected_phase,
+                    process_birth_id=direct_birth, input_sha256=snapshot_digest,
+                    binding_scope="current_owned_log_snapshot"))
+    receipt = (dict(schema_version=4, invocation=invocation, source_digest=expected_source_digest,
+                    status=phase.get("status", "UNKNOWN"), phases=[mapping.value(phase)],
+                    required_phases=[expected_phase], coverage_complete=False,
+                    test_inventory_complete=False, test_process_birth_ids=evidence["process_birth_ids"],
+                    active_phase=None, child_inventory_status="UNPROVED") if phase is not None else None)
+    proof = dict(phase=expected_phase, direct_process_birth_id=direct_birth,
+        observed_file_coverage_complete=evidence["observed_file_coverage_complete"],
+        expected_file_inventory_matches=matches, observed_process_birth_ids=evidence["process_birth_ids"],
+        process_issues=[dict(process_birth_id=process["process_id"], issues=process["issues"])
+                        for process in evidence["processes"] if process["issues"]],
+        test_inventory_complete=False, child_inventory_status="UNPROVED",
+        native_inventory_status="SOURCE_BOUND_DIRECT_FILES" if matches else "UNPROVED",
+        direct_log_binding_status="BOUND" if logs else "UNAVAILABLE",
+        receipt_timing_boundary="direct-command retirement before this artifact finalizer; final supervisor receipt includes finalization",
+        finalizer_timing_status="NOT_YET_IN_PHASE_SNAPSHOT")
+    return publish_bundle(evidence, event_paths, invocation=invocation,
+        expected_source_digest=expected_source_digest, mapping=mapping, output=output,
+        receipt=receipt, logs=logs, extra_report=proof)
+
+
+def assemble_job(*, invocation, expected_source_digest, source_roots, output, supervisor_path):
+    """Index the final command/loop verdict without adding repeated native counts."""
+    require_binding(invocation, expected_source_digest)
+    mapping = SourceMap(source_roots)
+    issues = []
+    receipt = read_receipt(supervisor_path, invocation=invocation,
+        source_digest=expected_source_digest, mapping=mapping, issues=issues)
+    # Keep physical inputs private; public metadata uses the same explicit mapping.
+    raw_receipt = None
+    if receipt is not None:
+        raw_receipt = parse_json(input_bytes(supervisor_path, mapping, issues))
+    bundles = []
+    for index, phase in enumerate((raw_receipt or {}).get("phases", [])):
+        final_phase = receipt["phases"][index]
+        record = dict(phase=phase.get("name"), command_status=final_phase.get("status"),
+            reported_status=final_phase.get("reported_status"), semantic_status=final_phase.get("semantic_status"),
+            exit_code=final_phase.get("exit_code"), soft_limit_exceeded=final_phase.get("soft_limit_exceeded", False),
+            cleanup_status=final_phase.get("cleanup_status"), artifact_status="UNAVAILABLE")
+        bundles.append(record)
+        directory = phase.get("diagnostics_directory")
+        if not isinstance(directory, str):
+            record["reason"] = "phase did not produce an owned diagnostics directory"
+            continue
+        public = Path(directory) / "public"
+        local_issues = []
+        raw = input_bytes(public / "diagnostics.json", mapping, local_issues)
+        manifest_raw = input_bytes(public / "manifest.json", mapping, local_issues, limit=1024*1024)
+        if local_issues:
+            record["reason"] = "phase bundle is missing or exceeded an export bound"
+            issues.append(fault("phase_bundle_unavailable", "phase bundle could not be indexed", phase=phase.get("name")))
+            continue
+        try:
+            payload, manifest = parse_json(raw), parse_json(manifest_raw)
+        except (ValueError, UnicodeError, RecursionError):
+            payload, manifest = None, None
+        token, pid = phase.get("process_token"), phase.get("pid")
+        expected_birth = f"{token}-{pid}" if phase.get("started") is True else None
+        direct_binding_valid = (phase.get("started") is not True or
+            isinstance(token, str) and IDENTIFIER.fullmatch(token) and type(pid) is int and pid > 0)
+        if (not direct_binding_valid or not isinstance(payload, dict) or not bounded_structure(payload)
+                or payload.get("direct_process_birth_id") != expected_birth
+                or payload.get("invocation") != invocation or payload.get("source_digest") != expected_source_digest
+                or payload.get("phase") != phase.get("name") or not isinstance(manifest, dict)
+                or manifest.get("invocation") != invocation or manifest.get("source_digest") != expected_source_digest
+                or not isinstance(manifest.get("files"), dict)
+                or manifest["files"].get("diagnostics.json") != hashlib.sha256(raw).hexdigest()):
+            record["reason"] = "phase bundle source/invocation/phase or manifest differs"
+            issues.append(fault("phase_bundle_binding_fault", "phase bundle was not indexed", phase=phase.get("name"), severe=True))
+            continue
+        record.update(artifact_status=payload.get("export_status", "UNKNOWN"),
+            bundle=mapping.text(public), manifest_sha256=hashlib.sha256(manifest_raw).hexdigest(),
+            test_status=payload.get("test_status"), coverage_status=payload.get("coverage_status"),
+            failure_detail_status=payload.get("failure_detail_status"), profile_copy_status=payload.get("profile_copy_status"))
+    evidence = dict(issues=issues, processes=[], redacted_absolute_paths=0)
+    extra = dict(artifact_scope="job_command_and_loop_verdict; native evidence remains in separate source-bound phase bundles",
+        check_status=receipt.get("status", "UNKNOWN") if receipt is not None else "UNKNOWN",
+        assertion_counts=None, count_scope="not_aggregated; see per-phase native assertion counts",
+        failure_detail_status="NOT_AGGREGATED; see per-phase original failure details",
+        phase_bundles=bundles, child_inventory_status="UNPROVED", test_inventory_complete=False,
+        receipt_timing_boundary="final supervisor receipt includes per-phase diagnostic finalization; job exporter is separately timed")
+    return publish_bundle(evidence, (), invocation=invocation, expected_source_digest=expected_source_digest,
+        mapping=mapping, output=output, receipt=receipt, extra_report=extra)
+
+
+def assemble_preparation(*, stage, invocation, expected_source_digest, source_roots,
+                         output, reason="No final supervisor receipt; setup or work incomplete"):
+    """Publish bounded setup snapshots while explicitly leaving tests unverified."""
+    require_binding(invocation, expected_source_digest)
+    mapping = SourceMap(source_roots)
+    stage = Path(stage)
+    if not mapping.owns(stage):
+        raise ValueError("preparation snapshots require an owned matrix stage")
+    issues = [fault("preparation_only", "no final test supervisor receipt; native results remain unverified")]
+    known = [stage / "prepared.json", stage / "environment/Project.toml",
+             stage / "environment/LocalPreferences.toml", stage / "environment/Manifest.toml"]
+    logs = sorted((stage / "logs").glob("*.log")) if (stage / "logs").is_dir() else []
+    snapshots, records, total = [], [], 0
+    for ordinal, source in enumerate(known + logs, 1):
+        if not source.exists() and not source.is_symlink():
+            continue
+        if len(snapshots) >= MAX_SETUP_FILES or total >= MAX_SETUP_BYTES:
+            issues.append(fault("setup_snapshot_limit", "remaining setup files exceeded the finite export bound"))
+            break
+        local_issues = []
+        raw = input_bytes(source, mapping, local_issues,
+            limit=min(MAX_SETUP_FILE_BYTES, MAX_SETUP_BYTES-total))
+        issues.extend(local_issues)
+        if any(item["severe"] for item in local_issues):
+            continue
+        total += len(raw)
+        suffix = source.suffix if source.suffix in (".json", ".toml") else ".txt"
+        filename = f"setup-{len(snapshots)+1:04d}{suffix}"
+        if suffix == ".json":
+            try:
+                value = parse_json(raw)
+            except (ValueError, UnicodeError, RecursionError):
+                filename, safe = filename + ".txt", mapping.text(raw.decode("utf-8", errors="replace"))
+            else:
+                safe = json.dumps(mapping.value(value), indent=2, sort_keys=True) + "\n"
+        else:
+            safe = mapping.text(raw.decode("utf-8", errors="replace"))
+        snapshots.append(dict(file=filename, text=safe))
+        records.append(dict(file=filename, source=mapping.text(source), input_sha256=hashlib.sha256(raw).hexdigest(),
+            original_bytes=len(raw), truncated=any(item["kind"] == "input_truncated" for item in local_issues),
+            binding_scope="PREPARATION_ONLY_UNVERIFIED_CURRENT_STAGE_SNAPSHOT"))
+    extra = dict(artifact_scope="PREPARATION_ONLY_UNVERIFIED", check_status="UNVERIFIED",
+        assertion_counts=None, count_scope="no test counts; setup snapshots do not prove test execution",
+        failure_detail_status="NO_NATIVE_TEST_EVIDENCE", setup_reason=mapping.text(reason),
+        setup_snapshots=records, snapshot_input_bytes=total, test_inventory_complete=False,
+        child_inventory_status="UNPROVED",
+        source_binding_scope="current exporter checkout; setup snapshots have no native invocation/source proof")
+    evidence = dict(issues=issues, processes=[], redacted_absolute_paths=0)
+    return publish_bundle(evidence, (), invocation=invocation, expected_source_digest=expected_source_digest,
+        mapping=mapping, output=output, extra_report=extra, snapshots=snapshots)
 
 
 def self_test():
@@ -862,6 +1279,7 @@ def self_test():
         supervisor = dict(schema_version=4, invocation="current", source_digest=digest, status="PASS", coverage_complete=True,
                           test_inventory_complete=True, required_phases=["tests"],
                           phases=[dict(name="tests", status="PASS", started=True, direct_child_reaped=True, coverage_complete=True,
+                                       semantic_status="PASS", exit_code=0, cleanup_status="REAPED",
                                        diagnostics_status="PASS", test_process_birth_ids=["birth-one"],
                                        expected_test_file_inventory=dict(source_digest=digest,
                                                                         files=[dict(path="test/runtests.jl", sha256="b"*64)]))],
@@ -936,6 +1354,7 @@ def self_test():
         write(errored)
         failed_receipt = json.loads(json.dumps(supervisor))
         failed_receipt["status"] = failed_receipt["phases"][0]["status"] = "FAIL"
+        failed_receipt["phases"][0].update(semantic_status="FAIL", exit_code=1)
         receipt.write_text(json.dumps(failed_receipt))
         result = run("completed-native-error")
         assert result["test_status"] == "FAIL" and result["coverage_status"] == "COMPLETE"
@@ -996,6 +1415,34 @@ def self_test():
         assert retained["data"] == payload["data"] and retained["lookup"]["0"] == [None]
         assert retained["decoder_status"] == "RAW_PRESERVED_NATIVE_DECODER_UNVERIFIED"
         assert retained["lookup"]["123"][0]["file"] == "prefixredacted-path"
+        partial_payload = payload | dict(symbolization_status="partial", unresolved_addresses=1, buffer_full=False,
+            truncated=False, lookup={"0": [None], "123": None})
+        complete_payload = payload | dict(checkpoint_seq=2, symbolization_status="complete", unresolved_addresses=0,
+                                         buffer_full=False, truncated=False)
+        checkpoints = []
+        for value, filename in ((partial_payload, "profile-partial.json"), (complete_payload, "profile-complete.json")):
+            checkpoint_path = root / filename
+            checkpoint_path.write_text(json.dumps(value) + "\n")
+            checkpoints.append(event("profile_checkpoint", 1, checkpoint_seq=value["checkpoint_seq"], mode="cpu",
+                status="captured", file=filename, input_sha256=hashlib.sha256(checkpoint_path.read_bytes()).hexdigest(),
+                data_words=3, capture_seconds=.01, symbolization_status=value["symbolization_status"],
+                unresolved_addresses=value["unresolved_addresses"], buffer_full=False, truncated=False))
+        lifecycle = [event("profile_start", 1, mode="cpu"),
+                     event("profile_unavailable", 1, mode="cpu", reason="symbolization_work_limit")]
+        write(events[:-1] + lifecycle + checkpoints + [event("profile_stop", 1, mode="cpu", checkpoint_count=2)] + events[-1:])
+        result = run("lifecycle-and-partial-symbols")
+        assert result["profile_copy_status"] == "RAW_PRESERVED", "lifecycle/warnings were counted as failed checkpoint copies"
+        assert result["profile_checkpoint_counts"] == dict(attempted=2, copied=2)
+        assert result["profile_symbolization_status"] == "PARTIAL" and result["profile_sample_coverage_status"] == "UNPROVED"
+        assert len(result["profile_records"]) == 2 and len(result["profile_metadata"]) == 3
+        assert result["profile_records"][0]["unresolved_addresses"] == 1 and result["profile_records"][1]["symbolization_status"] == "COMPLETE"
+        assert result["profile_records"][0]["buffer_full"] is False and result["profile_records"][0]["truncated"] is False
+        summary = (root / "lifecycle-and-partial-symbols/summary.txt").read_text()
+        assert "Checkpoint copy: RAW_PRESERVED (2/2). Symbolization: PARTIAL" in summary and "symbolization_work_limit" in summary
+        write(events[:-1] + [event("profile_unavailable", 1, mode="wall", reason="requires_julia_1_13")] + events[-1:])
+        result = run("unsupported-mode-without-checkpoints")
+        assert result["profile_copy_status"] == "UNAVAILABLE" and result["profile_symbolization_status"] == "UNAVAILABLE"
+        assert result["profile_checkpoint_counts"] == dict(attempted=0, copied=0) and result["profile_metadata"]
         for key, stale_value in (("source_digest", "b"*64), ("invocation", "older"), ("process_birth_id", "other-birth")):
             write(profile_events(payload | {key: stale_value}))
             result = run("stale-profile-" + key)
@@ -1015,6 +1462,131 @@ def self_test():
             legacy[-2].pop(key)
         write(legacy)
         assert run("legacy-profile")["profile_copy_status"] == "UNAVAILABLE"
+        write(events)
+        phase_events = json.loads(json.dumps(events))
+        for item in phase_events:
+            item["process_birth_id"] = "direct-123"
+        phase_path = root / "phase.json"
+        phase_receipt = dict(name="tests", invocation="current", source_digest=digest,
+            process_token="direct", pid=123, started=True, status="PASS", semantic_status="PASS", exit_code=0,
+            direct_child_reaped=True, cleanup_status="REAPED", seconds=.2, log=str(log),
+            log_sha256=hashlib.sha256(log.read_bytes()).hexdigest(),
+            expected_test_file_inventory=dict(source_digest=digest, files=[dict(path="test/runtests.jl", sha256="b"*64)]),
+            timings=dict(process_launch_seconds=.01, exit_observed_seconds=.18, reaped_seconds=.19,
+                         first_output_byte=dict(status="UNAVAILABLE")))
+        def phase_run(name, *, receipt_override=None, items=None, **kwargs):
+            write(phase_events if items is None else items)
+            phase_path.write_text(json.dumps(phase_receipt if receipt_override is None else receipt_override))
+            return assemble_phase([source], invocation="current", expected_source_digest=digest,
+                source_roots=[(root, "owned")], output=root / name, phase_path=phase_path,
+                expected_phase="tests", **kwargs)
+        result = phase_run("bound-phase", expected_direct_birth="direct-123")
+        assert result["observed_file_coverage_complete"] and result["expected_file_inventory_matches"]
+        assert result["coverage_status"] == "PARTIAL" and result["test_status"] == "UNKNOWN"
+        assert result["child_inventory_status"] == "UNPROVED" and result["observed_process_birth_ids"] == ["direct-123"]
+        assert (root / "bound-phase" / "original-log-0001.txt").read_text() == "source:owned/test.jl\n"
+        timings = (root / "bound-phase" / "timings.csv").read_text()
+        assert "reaping" in timings and "first_output_byte" in timings and "UNAVAILABLE" in timings
+        phase_failed = phase_receipt | dict(status="FAIL", semantic_status="FAIL", exit_code=1)
+        failed_direct = json.loads(json.dumps(failed))
+        for item in failed_direct:
+            item["process_birth_id"] = "direct-123"
+        result = phase_run("bound-phase-failure", receipt_override=phase_failed, items=failed_direct)
+        assert result["test_status"] == "FAIL" and result["failure_detail_status"] == "AVAILABLE"
+        assert "Expression: 1 == 2" in (root / "bound-phase-failure" / "junit.xml").read_text()
+        result = phase_run("phase-soft-overrun", receipt_override=phase_receipt | dict(status="FAIL", soft_limit_exceeded=True))
+        assert result["test_status"] == "FAIL" and 'type="SoftLimit"' in (root / "phase-soft-overrun" / "junit.xml").read_text()
+        result = phase_run("phase-hard-cancellation", receipt_override=phase_receipt | dict(status="TIMEOUT", semantic_status="TIMEOUT", exit_code=-2), items=phase_events[:5])
+        assert result["test_status"] == "FAIL" and result["coverage_status"] == "PARTIAL" and not result["observed_file_coverage_complete"]
+        assert not result["processes"][0]["test_bodies_complete"]
+        assert phase_run("stale-phase-receipt", receipt_override=phase_receipt | dict(invocation="older"))["export_status"] == "FAIL"
+        assert phase_run("wrong-direct-birth", expected_direct_birth="other-123")["export_status"] == "FAIL"
+        assert phase_run("wrong-direct-pid", receipt_override=phase_receipt | dict(pid=124), expected_direct_birth="direct-123")["export_status"] == "FAIL"
+        wrong_phase = json.loads(json.dumps(phase_events))
+        wrong_phase[0]["phase"] = "other-phase"
+        assert phase_run("wrong-process-phase", items=wrong_phase)["export_status"] == "FAIL"
+        late_wrong_phase = json.loads(json.dumps(phase_events))
+        late_wrong_phase[4]["phase"] = "other-phase"
+        assert phase_run("late-process-phase-conflict", items=late_wrong_phase)["export_status"] == "FAIL"
+        wrong_inventory = phase_receipt | dict(expected_test_file_inventory=dict(source_digest=digest, files=[dict(path="test/not-run.jl", sha256="b"*64)]))
+        assert phase_run("wrong-direct-files", receipt_override=wrong_inventory)["export_status"] == "FAIL"
+        stale_log = phase_run("stale-phase-log", receipt_override=phase_receipt | dict(log_sha256="b"*64))
+        assert stale_log["export_status"] == "FAIL" and not stale_log["original_logs"]
+        for name, changes in (("nonzero-exit", dict(exit_code=7)), ("semantic-timeout", dict(semantic_status="TIMEOUT", exit_code=-2)),
+                              ("unreaped", dict(direct_child_reaped=False, cleanup_status="UNRETIRED")),
+                              ("unlatched-soft", dict(soft_limit_exceeded=True)), ("lost-diagnostics", dict(diagnostics_status="FAIL"))):
+            result = phase_run("contradictory-pass-" + name, receipt_override=phase_receipt | dict(expected_test_file_inventory=None) | changes, items=[])
+            assert result["export_status"] == "FAIL" and result["test_status"] == "FAIL"
+            assert ET.fromstring((root / ("contradictory-pass-" + name) / "junit.xml").read_text()).find(".//failure") is not None
+        result = phase_run("process-only-phase", receipt_override=phase_receipt | dict(expected_test_file_inventory=None), items=[])
+        assert result["test_status"] == "UNKNOWN" and result["coverage_status"] == "PARTIAL"
+        assert result["supervisor"]["phases"][0]["status"] == "PASS" and result["original_logs"]
+        receipt.write_text(json.dumps(supervisor | dict(status="FAIL", loops=dict(mid=dict(status="FAIL", complete=True, seconds=11, budget_seconds=10)))))
+        write(events)
+        result = run("aggregate-soft-failure")
+        assert result["test_status"] == "FAIL" and 'type="SoftLimit"' in (root / "aggregate-soft-failure" / "junit.xml").read_text()
+        write(phase_events)
+        phase_path.write_text(json.dumps(phase_receipt))
+        linked = root / "linked-phase"
+        assemble_phase([source], invocation="current", expected_source_digest=digest,
+            source_roots=[(root, "owned")], output=linked / "public", phase_path=phase_path,
+            expected_phase="tests", expected_direct_birth="direct-123")
+        job_receipt = supervisor | dict(status="FAIL", phases=[phase_receipt | dict(diagnostics_directory=str(linked))],
+            loops=dict(outer=dict(status="FAIL", complete=True, seconds=61, budget_seconds=60)))
+        def job_run(name, current=None):
+            receipt.write_text(json.dumps(job_receipt if current is None else current))
+            return assemble_job(invocation="current", expected_source_digest=digest, source_roots=[(root, "owned")],
+                output=root / name, supervisor_path=receipt)
+        job = job_run("job-soft-failure")
+        assert job["export_status"] == "PASS" and job["check_status"] == "FAIL" and job["test_status"] == "FAIL"
+        assert job["assertion_counts"] is None and len(job["phase_bundles"]) == 1
+        assert job["phase_bundles"][0]["artifact_status"] == "PASS"
+        assert "not_aggregated" in (root / "job-soft-failure/summary.txt").read_text()
+        assert 'type="SoftLimit"' in (root / "job-soft-failure/junit.xml").read_text()
+        final_soft = job_receipt | dict(phases=[phase_receipt | dict(diagnostics_directory=str(linked), status="FAIL", soft_limit_exceeded=True)])
+        assert job_run("job-final-phase-overrun", final_soft)["phase_bundles"][0]["command_status"] == "FAIL"
+        contradictory_job = job_receipt | dict(phases=[phase_receipt | dict(diagnostics_directory=str(linked), exit_code=7)])
+        job = job_run("job-contradictory-phase", contradictory_job)
+        assert job["export_status"] == "FAIL" and job["phase_bundles"][0]["command_status"] == "FAIL"
+        missing_command = job_receipt | dict(status="PASS", loops={}, required_phases=["missing"], phases=[])
+        job = job_run("job-missing-required-command", missing_command)
+        assert job["export_status"] == "FAIL" and job["check_status"] == "FAIL"
+        wrong_birth_job = job_receipt | dict(phases=[phase_receipt | dict(diagnostics_directory=str(linked), process_token="other")])
+        job = job_run("job-wrong-direct-birth", wrong_birth_job)
+        assert job["export_status"] == "FAIL" and job["phase_bundles"][0]["artifact_status"] == "UNAVAILABLE"
+        for invalid_invocation, invalid_digest in (("/private/synthetic-person", digest), ("current", "/private/synthetic-source")):
+            try:
+                assemble_job(invocation=invalid_invocation, expected_source_digest=invalid_digest,
+                    source_roots=[(root, "owned")], output=root / "invalid-job-identity", supervisor_path=receipt)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("job accepted an unsafe identity")
+            assert not (root / "invalid-job-identity").exists()
+        setup_stage = root / "setup-stage"
+        (setup_stage / "logs").mkdir(parents=True)
+        (setup_stage / "prepared.json").write_text(json.dumps(dict(path=str(root / "source"))))
+        (setup_stage / "logs/prepare.log").write_text("Setup failed at /private/synthetic-person/build\n")
+        setup = assemble_preparation(stage=setup_stage, invocation="setup-control", expected_source_digest=digest,
+            source_roots=[(root, "owned")], output=root / "preparation-only")
+        assert setup["export_status"] == "PASS" and setup["test_status"] == "UNKNOWN"
+        assert setup["check_status"] == "UNVERIFIED" and setup["assertion_counts"] is None and len(setup["setup_snapshots"]) == 2
+        assert setup["artifact_scope"] == "PREPARATION_ONLY_UNVERIFIED"
+        assert all(not unsafe_export(artifact) for artifact in (root / "preparation-only").iterdir())
+        original_copy_profiles = globals()["copy_profiles"]
+        def interrupted_copy(*args, **kwargs):
+            raise KeyboardInterrupt("intentional export cancellation")
+        globals()["copy_profiles"] = interrupted_copy
+        try:
+            try:
+                phase_run("interrupted-publication")
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("intentional export cancellation was swallowed")
+            assert not (root / "interrupted-publication").exists()
+        finally:
+            globals()["copy_profiles"] = original_copy_profiles
         for artifact in (root / "bound-log").iterdir():
             assert not unsafe_export(artifact)
         rejected = root / "unsafe.xml"
@@ -1022,7 +1594,7 @@ def self_test():
         assert unsafe_export(rejected), "independent reject scan missed an embedded private root"
         rejected.write_text('<testsuites><testcase name="relative/test.jl" /></testsuites>')
         assert not unsafe_export(rejected), "XML closing syntax was treated as a path"
-    print("PASS artifact privacy, source binding, counts, file coverage, nested names and raw profile serializer controls; native sampling/decoding unverified")
+    print("PASS artifact privacy, native counts, phase/direct/log binding, partial/failed verdicts, atomic publication and raw profile controls; native sampling/decoding unverified")
 
 
 def main(argv=None):
@@ -1033,6 +1605,10 @@ def main(argv=None):
     parser.add_argument("--source-map", action="append", default=[], metavar="ROOT=LABEL")
     parser.add_argument("--events", action="append", default=[])
     parser.add_argument("--supervisor")
+    parser.add_argument("--phase-receipt", help="flat owned phase receipt; export one phase without combining repeated runs")
+    parser.add_argument("--job", action="store_true", help="index supervisor command/loop verdict without aggregating native assertion counts")
+    parser.add_argument("--phase")
+    parser.add_argument("--direct-birth")
     parser.add_argument("--log-bindings", help="owned JSON array of path/invocation/source_digest/phase/input_sha256 records")
     parser.add_argument("--output")
     args = parser.parse_args(argv)
@@ -1054,8 +1630,20 @@ def main(argv=None):
             logs = parse_json(raw)
             if not isinstance(logs, list):
                 raise ValueError("log bindings must be an array")
-        report = assemble(args.events, invocation=args.invocation, expected_source_digest=args.source_digest,
-                          source_roots=roots, output=args.output, supervisor_path=args.supervisor, logs=logs)
+        if args.job:
+            if not args.supervisor or args.phase_receipt or args.events or args.log_bindings:
+                raise ValueError("job export needs --supervisor and uses separate phase evidence")
+            report = assemble_job(invocation=args.invocation, expected_source_digest=args.source_digest,
+                source_roots=roots, output=args.output, supervisor_path=args.supervisor)
+        elif args.phase_receipt:
+            if not args.phase or args.supervisor or args.log_bindings:
+                raise ValueError("phase export needs --phase and derives its own log binding")
+            report = assemble_phase(args.events, invocation=args.invocation,
+                expected_source_digest=args.source_digest, source_roots=roots, output=args.output,
+                phase_path=args.phase_receipt, expected_phase=args.phase, expected_direct_birth=args.direct_birth)
+        else:
+            report = assemble(args.events, invocation=args.invocation, expected_source_digest=args.source_digest,
+                              source_roots=roots, output=args.output, supervisor_path=args.supervisor, logs=logs)
     except (OSError, ValueError) as error:
         print(f"FAIL artifact export: {type(error).__name__}", file=sys.stderr)
         return 1
