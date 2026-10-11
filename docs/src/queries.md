@@ -8,7 +8,7 @@ source's order and multiplicity.
 [`PaneWhere`](@ref), [`WindowWhere`](@ref), [`SessionWhere`](@ref),
 [`WindowLinkWhere`](@ref) and [`ClientWhere`](@ref) are callable criteria.
 Use them with Base `filter`, `count`, `any`, `all`, `findall` and
-`Iterators.filter`. Ordinary closures and downstream callable values work
+[`Iterators.filter`](https://docs.julialang.org/en/v1/base/iterators/#Base.Iterators.filter). Ordinary closures and downstream callable values work
 where Base accepts them. `findall` returns collection positions; those are
 one-based Julia indices, independent of tmux's configured indices.
 
