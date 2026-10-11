@@ -140,6 +140,31 @@ function check_controls(directory)
         process_birth_id="helper-process",
         phase="helper-controls",
     )
+
+    observer = D.OBSERVER[]
+    original_root = observer.root
+    try
+        observer.root = joinpath(homedir(), ".synthetic-owned-root")
+        alias = Base.contractuser(observer.root)
+        @assert startswith(alias, "~/")
+        for prefix in (observer.root, alias)
+            @assert D.sanitize(prefix * "/fixture.jl:9") == "fixture.jl:9"
+            @assert D.sanitize(prefix * "/a:b/../../private.jl:9") == "[external_path]"
+        end
+        for path in (
+            "/private/unowned/private.jl:9",
+            "~/not-owned/private.jl:9",
+            raw"prefixC:\private\private.jl:9",
+            raw"\\private\server\private.jl:9",
+            alias * "-other/private.jl:9",
+            alias * "/../private.jl:9",
+        )
+            @assert !occursin("private.jl", D.sanitize(path))
+        end
+    finally
+        observer.root = original_root
+    end
+    @assert observer.root == original_root
     D.declare_files([path])
     for mode in ("pass", "failure", "interrupt", "error")
         @assert outcome(observed, :fixture, mode) == expected[mode]

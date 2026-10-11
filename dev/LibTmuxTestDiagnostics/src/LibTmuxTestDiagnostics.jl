@@ -62,9 +62,20 @@ function sanitize(text::AbstractString)
     answer = String(text)
     observer = OBSERVER[]
     if observer !== nothing
-        answer = replace(answer, observer.root * "/"=>"")
+        for prefix in unique((observer.root, Base.contractuser(observer.root)))
+            pattern = Regex("(?<![A-Za-z0-9_~])\\Q" * prefix * "\\E/[^\\s\"'<>),;]+")
+            answer = replace(
+                answer,
+                pattern=>token->begin
+                    relative = replace(token, prefix * "/"=>""; count=1)
+                    occursin(r"(?:^|[/\\])\.\.(?:[/\\]|$)", relative) ?
+                    "[external_path]" : relative
+                end,
+            )
+        end
     end
-    answer = replace(answer, r"\b[A-Za-z]:[\\/][^\s\"'<>),;]*"=>"[external_path]")
+    answer = replace(answer, r"[A-Za-z]:[\\/][^\s\"'<>),;]*"=>"[external_path]")
+    answer = replace(answer, r"\\\\[^\s\"'<>),;]+"=>"[external_path]")
     answer = replace(answer, r"(?<![A-Za-z0-9_])(?:~?/)[^\s\"'<>),;]+"=>"[external_path]")
     answer
 end

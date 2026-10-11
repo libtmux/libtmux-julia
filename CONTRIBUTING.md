@@ -588,12 +588,21 @@ separate two-minute ceiling. Exporter retirement has its own sanitized receipt.
 Failed setup produces explicitly unverified setup snapshots. CI uploads public
 bundles after their privacy checks, with missing artifacts reported as errors.
 
-The private observer supports CPU sampling on Julia 1.10 and 1.13, and separate
-wall-time sampling on Julia 1.13. Set `LIBTMUX_CI_PROFILE=cpu` or `wall` to opt in;
-sampling stays off by default. Checkpoints retain raw samples, process/source
-identity, unresolved symbols and export overhead. Cumulative checkpoints and
-inclusive frames overlap. Copying every checkpoint does not establish complete
-sampling coverage or symbol lookup.
+The CI offline step requests CPU sampling with deferred symbol lookup for
+complete native suites and supported consumer phases. Unit and quality phases
+keep sampling off. Local sampling defaults off; set `LIBTMUX_CI_PROFILE=cpu`
+or `wall` to request it. The private observer supports CPU sampling on Julia
+1.10 and 1.13, and separate wall-time sampling on Julia 1.13. CI wall-time
+scheduling remains open.
+
+Each admitted phase records its sampler request. A required native sampler
+must retain one matching start and at least one bound raw checkpoint. Missing,
+unsupported or contradictory sampling evidence fails diagnostics without
+changing original assertion counts or process exits. An empty checkpoint
+remains partial evidence. Checkpoints retain process/source identity,
+unresolved symbols and export overhead. Cumulative checkpoints and inclusive
+frames overlap. Copying every checkpoint does not establish complete sampling
+coverage or symbol lookup.
 
 Saved profiles require the matching Julia version for native decoding. The CI
 exporter preserves raw checkpoints and labels native decoding unverified.
@@ -611,7 +620,8 @@ unavailable for consumer children with inherited stdio; their application
 readiness remains unproved. Embedded examples and installed launcher
 descendants need their own independent admission and profiling evidence.
 
-Automatic CI sampling, bounded native decoding, first-byte readiness and
+Consumer sampling requests retain an unverified capture contract until child
+admission is complete. Bounded native decoding, first-byte readiness and
 complete child admission remain verification work.
 The private sampling controls belong to the outer loop. Use `profiles wall`
 instead of `profiles` to check wall-time sampling separately on Julia 1.13:
