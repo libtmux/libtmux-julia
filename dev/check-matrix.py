@@ -51,7 +51,8 @@ TEST_RUNNERS = frozenset(("test/runtests.jl", "packages/LibTmuxWorkspace/test/ru
                           "packages/LibTmuxMCP/test/runtests.jl"))
 DIAGNOSTIC_BINDINGS = ("LIBTMUX_CI_DIAGNOSTICS_DIR", "LIBTMUX_CI_DIAGNOSTICS_ROOT",
                        "LIBTMUX_CI_INVOCATION", "LIBTMUX_CI_SOURCE_DIGEST", "LIBTMUX_CI_PHASE",
-                       "LIBTMUX_CI_PROCESS_TOKEN", "LIBTMUX_CI_TEST_FILE_INVENTORY", "LIBTMUX_CI_STAGE")
+                       "LIBTMUX_CI_PROCESS_TOKEN", "LIBTMUX_CI_TEST_FILE_INVENTORY", "LIBTMUX_CI_STAGE",
+                       "LIBTMUX_CI_SOURCE_ROOT", "LIBTMUX_CI_CHILD_TOKEN", "LIBTMUX_CI_PARENT_PROCESS_BIRTH_ID")
 
 
 def remaining(deadline):
@@ -373,8 +374,10 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
             raise ValueError("diagnostics directory escaped its owned matrix stage")
         directory.mkdir(parents=True, exist_ok=False)
         token = uuid.uuid4().hex
+        for binding in ("LIBTMUX_CI_CHILD_TOKEN", "LIBTMUX_CI_PARENT_PROCESS_BIRTH_ID"):
+            child_env.pop(binding, None)
         child_env.update(LIBTMUX_CI_DIAGNOSTICS_DIR=str(directory), LIBTMUX_CI_PHASE=name,
-                         LIBTMUX_CI_PROCESS_TOKEN=token)
+                         LIBTMUX_CI_PROCESS_TOKEN=token, LIBTMUX_CI_SOURCE_ROOT=str(ROOT))
         inventory = json.loads(child_env.get("LIBTMUX_CI_TEST_FILE_INVENTORY", "{}"))
         selected = inventory.get(name)
         answer.update(invocation=invocation, source_digest=digest,
