@@ -27,6 +27,7 @@ mutable struct ProfileSession
     observer::Observer
     directory::String
     mode::String
+    symbolization::String
     lookup::Profile.LineInfoDict
     frames::Dict{String,Any}
     lock::ReentrantLock
@@ -64,6 +65,7 @@ function start_profiles(
     mode;
     interval=PROFILE_CHECKPOINT_SECONDS,
     import_seconds=0.0,
+    symbolization="native",
 )
     started = time_ns()
     if mode == "wall" && VERSION < v"1.13"
@@ -72,18 +74,25 @@ function start_profiles(
     end
     isfinite(interval) && interval > 0 ||
         throw(ArgumentError("profile checkpoint interval must be finite and positive"))
+    symbolization in ("native", "deferred") ||
+        throw(ArgumentError("profile symbolization must be native or deferred"))
     PROFILE_SESSION[] === nothing || error("a diagnostic sampler already owns this process")
     Profile.is_running() && error("another sampler owns this process")
     # These controls implement the native macros on floor and current Julia.
     Profile.init(; n=PROFILE_SAMPLE_WORDS, delay=0.01, limitwarn=false)
     Profile.clear()
     lookup = Profile.LineInfoDict()
-    Profile.getdict!(lookup, UInt[0])
+    if symbolization == "deferred"
+        lookup[UInt(0)] = [Base.StackTraces.UNKNOWN]
+    else
+        Profile.getdict!(lookup, UInt[0])
+    end
     timer = Timer(interval; interval)
     session = ProfileSession(
         observer,
         directory,
         mode,
+        symbolization,
         lookup,
         Dict{String,Any}("0"=>portable_frames(lookup[UInt(0)])),
         ReentrantLock(),
@@ -128,6 +137,8 @@ function start_profiles(
             checkpoint_work_seconds=PROFILE_EXPORT_SECONDS,
             checkpoint_scheduling="cooperative_requires_yield",
             measurement_scope="cumulative_buffer; checkpoints overlap",
+            symbolization_policy=symbolization,
+            symbolization_order="latest_samples_first; raw_sample_order_preserved",
             sampling_overhead_status="unavailable_requires_paired_whole_commands",
             import_seconds,
             setup_seconds=(time_ns()-started)/1e9,
@@ -143,7 +154,8 @@ function start_profiles(
 end
 
 function resolve_profile_frames(session, data, deadline)
-    addresses = unique(Profile.has_meta(data) ? Profile.strip_meta(data) : data)
+    session.symbolization == "deferred" && return "symbolization_deferred"
+    addresses = unique(reverse(Profile.has_meta(data) ? Profile.strip_meta(data) : data))
     missing = filter(address->!haskey(session.lookup, address), addresses)
     length(session.lookup)+length(missing) <= PROFILE_MAX_ADDRESSES ||
         return "address_limit"
@@ -220,6 +232,7 @@ function checkpoint_profile(; label="requested", final=false)
             "data"=>data,
             "lookup"=>frames,
             "symbolization_status"=>unresolved == 0 ? "complete" : "partial",
+            "symbolization_policy"=>session.symbolization,
             "unresolved_addresses"=>unresolved,
             "measurement_scope"=>"cumulative_buffer; checkpoints overlap",
             "buffer_full"=>Profile.is_buffer_full(),
@@ -253,6 +266,7 @@ function checkpoint_profile(; label="requested", final=false)
             buffer_full=payload["buffer_full"],
             truncated,
             symbolization_status=payload["symbolization_status"],
+            symbolization_policy=session.symbolization,
             unresolved_addresses=unresolved,
             capture_seconds=(time_ns()-started)/1e9,
             symbolization_cache_addresses=length(session.lookup),

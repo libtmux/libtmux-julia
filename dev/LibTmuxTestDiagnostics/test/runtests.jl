@@ -191,4 +191,6 @@ println(
 # Outer: real sampling and portable native decoding need CPU work and checkpoint I/O.
 if !isempty(ARGS) && ARGS[1] == "profiles"
     include(joinpath(@__DIR__, "profiles.jl"))
+elseif !isempty(ARGS) && ARGS[1] == "bootstrap"
+    include(joinpath(@__DIR__, "bootstrap.jl"))
 end
