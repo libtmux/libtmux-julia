@@ -9,6 +9,7 @@ const CI_TEST_DIAGNOSTICS = if haskey(ENV, "LIBTMUX_CI_DIAGNOSTICS_DIR")
         process_birth_id=haskey(ENV, "LIBTMUX_CI_PROCESS_TOKEN") ?
                          ENV["LIBTMUX_CI_PROCESS_TOKEN"] * "-" * string(getpid()) :
                          string(UUIDs.uuid4()),
+        console=get(ENV, "LIBTMUX_CI_TEST_CONSOLE", "0") == "1",
     )
     atexit() do code
         LibTmuxTestDiagnostics.close_observer(; outcome="exit_status_$(code)")

@@ -728,6 +728,12 @@ def timing_rows(processes, receipt):
             timings = phase.get("timings", {})
             if isinstance(timings, dict):
                 for metric, value in timings.items():
+                    if metric == "first_output_byte" and isinstance(value, dict):
+                        observed = value.get("status") == "OBSERVED" and finite_number(value.get("seconds")) and value["seconds"] >= 0
+                        rows.append(dict(kind="command_landmark", name=f"{name}: {metric}", process_id="supervisor",
+                            seconds=value["seconds"] if observed else None, outcome="OBSERVED" if observed else "UNAVAILABLE",
+                            metric_scope="parent_read_observation; combined_stdout_stderr_including_telemetry; readiness=UNPROVED; elapsed_from_command_start; overlaps whole_command"))
+                        continue
                     component = metric in ("popen_seconds", "diagnostic_finalization_seconds")
                     rows.append(dict(kind="command_component" if component else "command_landmark",
                         name=f"{name}: {metric}", process_id="supervisor",
@@ -739,6 +745,13 @@ def timing_rows(processes, receipt):
                 if finite_number(observed) and finite_number(reaped) and reaped >= observed:
                     rows.append(dict(kind="reaping", name=name, process_id="supervisor", seconds=reaped-observed,
                         outcome=phase.get("cleanup_status", "unknown"), metric_scope="exit_observation_to_reaping; overlaps whole_command"))
+            observer = phase.get("output_observer")
+            if isinstance(observer, dict):
+                for metric, field, scope in (("work", "work_seconds", "reader_wall_work"), ("cpu", "cpu_seconds", "reader_thread_cpu")):
+                    measured = finite_number(observer.get(field)) and observer[field] >= 0
+                    rows.append(dict(kind="diagnostic_overhead", name=f"{name}: output_observer_{metric}", process_id="supervisor",
+                        seconds=observer[field] if measured else None, outcome=observer.get("status", "UNAVAILABLE") if measured else "UNAVAILABLE",
+                        metric_scope=scope + "; inclusive_read_write_decode_forward; overlaps whole_command and other observer metrics"))
     for row in rows:
         if not finite_number(row.get("seconds")) or row["seconds"] < 0:
             row["seconds"] = None
@@ -962,8 +975,15 @@ def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, m
         summary.append(f"{phase.get('name')}: status={phase.get('status')}; semantic_status={phase.get('semantic_status', 'unavailable')}; exit_code={phase.get('exit_code', 'unavailable')}; soft_limit_exceeded={phase.get('soft_limit_exceeded', False)}; cleanup={phase.get('cleanup_status', 'unavailable')}; direct_child_reaped={phase.get('direct_child_reaped', False)}.")
         if phase.get("cleanup"):
             summary.append(str(phase["cleanup"]))
+        observer = phase.get("output_observer")
+        if isinstance(observer, dict):
+            summary.append(f"{phase.get('name')} output observer: status={observer.get('status', 'UNAVAILABLE')}; reader_retired={observer.get('reader_retired', False)}; eof_observed={observer.get('eof_observed', False)}; bytes={observer.get('bytes', 'unavailable')}; forwarded_progress_records={observer.get('forwarded_records', 'unavailable')}; rejected_progress_records={observer.get('rejected_records', 'unavailable')}. Progress records are transport counts, not assertion totals; first output does not prove application readiness.")
     if report.get("receipt_timing_boundary"):
         summary.extend(["", "Receipt timing boundary: " + report["receipt_timing_boundary"] + "."])
+    if report.get("snapshot_kind") == "LIVE_PREFIX":
+        binding = report["snapshot_binding"]
+        summary.extend(["", f"LIVE_PREFIX: snapshot {binding['snapshot_ordinal']}, phase {binding['phase']}, process {binding['process_birth_id']}, through record {binding['through_sequence']}.",
+                        "Admission and the retained prefix are bound; command completion and complete coverage remain unproved."])
     if report.get("setup_reason"):
         summary.extend(["", "Setup evidence: " + report["setup_reason"] + ".", "Setup snapshots do not prove test execution."])
     if report.get("phase_bundles"):
@@ -989,7 +1009,7 @@ def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, m
 
 
 def publish_bundle(evidence, event_paths, *, invocation, expected_source_digest,
-                   mapping, output, receipt=None, logs=(), extra_report=None, snapshots=()):
+                   mapping, output, receipt=None, logs=(), extra_report=None, snapshots=(), validate_report=None):
     """Expose only a complete sanitized bundle, including its hash manifest.
 
 A killed exporter can leave its private build, but the workflow never uploads
@@ -1005,6 +1025,8 @@ that build. Evidence coverage may remain partial even when publication succeeds.
         report = write_bundle(evidence, event_paths, invocation=invocation,
                               expected_source_digest=expected_source_digest, mapping=mapping,
                               output=build, receipt=receipt, logs=logs, extra_report=extra_report, snapshots=snapshots)
+        if validate_report is not None:
+            validate_report(report)
         build.replace(output)
     return report
 
@@ -1022,6 +1044,96 @@ def assemble(event_paths, *, invocation, expected_source_digest, source_roots, o
     return publish_bundle(evidence, event_paths, invocation=invocation,
         expected_source_digest=expected_source_digest, mapping=mapping, output=output,
         receipt=receipt, logs=logs)
+
+
+def assemble_checkpoint(event_paths, *, invocation, expected_source_digest, source_roots,
+                        output, admission_path, expected_phase, expected_direct_birth,
+                        snapshot_ordinal, through_sequence):
+    """Publish an admitted, flushed native prefix without a completion verdict.
+
+Read only through the notified start/checkpoint/assertion sequence. Later producer
+writes are outside this snapshot. The caller owns finite export/cleanup limits
+and gives every generation a fresh output directory.
+"""
+    require_binding(invocation, expected_source_digest)
+    event_paths = tuple(event_paths)
+    if (len(event_paths) != 1 or type(snapshot_ordinal) is not int or snapshot_ordinal <= 0
+            or type(through_sequence) is not int or through_sequence <= 0
+            or not isinstance(expected_phase, str) or not IDENTIFIER.fullmatch(expected_phase)
+            or not isinstance(expected_direct_birth, str) or not IDENTIFIER.fullmatch(expected_direct_birth)):
+        raise ValueError("checkpoint requires one stream, portable identities and positive ordinal/sequence")
+    mapping = SourceMap(source_roots)
+    event_path, admission_path = Path(event_paths[0]), Path(admission_path)
+    if (not mapping.owns(event_path) or not mapping.owns(admission_path)
+            or event_path.parent.resolve() != admission_path.parent.resolve()):
+        raise ValueError("checkpoint stream and admission must share an owned phase directory")
+    issues = []
+    admission_raw = input_bytes(admission_path, mapping, issues, limit=MAX_RECORD_BYTES)
+    try:
+        admission = parse_json(admission_raw)
+    except (ValueError, UnicodeError, RecursionError):
+        admission = None
+    if (issues or not isinstance(admission, dict) or not bounded_structure(admission)
+            or admission.get("invocation") != invocation or admission.get("source_digest") != expected_source_digest
+            or admission.get("name") != expected_phase or admission.get("started") is not True
+            or type(admission.get("pid")) is not int or admission["pid"] <= 0
+            or not isinstance(admission.get("process_token"), str) or not IDENTIFIER.fullmatch(admission["process_token"])
+            or f"{admission['process_token']}-{admission['pid']}" != expected_direct_birth):
+        raise ValueError("checkpoint admission identity is missing or stale")
+    # A growing trailing record must not invalidate an earlier flushed marker.
+    prefix = bytearray()
+    try:
+        with event_path.open("rb") as stream:
+            for _ in range(through_sequence):
+                line = stream.readline(MAX_RECORD_BYTES + 1)
+                if (not line.endswith(b"\n") or len(line) > MAX_RECORD_BYTES
+                        or len(prefix) + len(line) > MAX_INPUT_BYTES):
+                    raise ValueError("checkpoint prefix is missing, truncated or exceeds its bound")
+                prefix.extend(line)
+    except OSError as error:
+        raise ValueError("checkpoint prefix could not be read") from error
+    with tempfile.TemporaryDirectory(prefix=".checkpoint-input-", dir=event_path.parent) as temporary:
+        copied = Path(temporary) / "prefix.jsonl"
+        copied.write_bytes(prefix)
+        evidence = collect_process_evidence([copied], invocation=invocation,
+            expected_source_digest=expected_source_digest, source_roots=source_roots,
+            expected_phase=expected_phase)
+    process = evidence["processes"][0]
+    if (evidence["issues"] or any(item["severe"] for item in process["issues"])
+            or not process["source_bound"] or process["process_id"] != expected_direct_birth
+            or process["pid"] != admission["pid"] or process["phase"] != expected_phase
+            or len(process["events"]) != through_sequence):
+        raise ValueError("checkpoint prefix identity or structure differs from admission")
+    marker = process["events"][-1]
+    if marker["event"] not in ("process_start", "profile_checkpoint", "assertion_problem") or marker["seq"] != through_sequence:
+        raise ValueError("checkpoint prefix does not end at a supported flushed marker")
+    process["input_name"] = mapping.text(event_path.name)
+    binding = dict(phase=expected_phase, process_birth_id=expected_direct_birth, pid=admission["pid"],
+        snapshot_ordinal=snapshot_ordinal, through_sequence=through_sequence,
+        event_prefix_bytes=len(prefix), event_prefix_sha256=hashlib.sha256(prefix).hexdigest(),
+        admission_sha256=hashlib.sha256(admission_raw).hexdigest(), marker=marker["event"])
+    if marker["event"] == "profile_checkpoint":
+        binding.update(checkpoint_seq=marker.get("checkpoint_seq"), profile_input_sha256=marker.get("input_sha256"),
+                       profile_mode=marker.get("mode"))
+    native_failed = (process["assertion_counts"]["failed"] + process["assertion_counts"]["errored"] > 0
+                     or bool(process["assertion_problems"]))
+    extra = dict(snapshot_kind="LIVE_PREFIX", snapshot_binding=binding,
+        check_status="FAIL" if native_failed else "UNKNOWN", test_inventory_complete=False,
+        child_inventory_status="UNPROVED", observed_file_coverage_complete=False,
+        receipt_timing_boundary="live admitted prefix; no completion, exit, reaping or whole-command timing proof")
+    def validate(report):
+        if report["export_status"] != "PASS":
+            raise ValueError("checkpoint publication rejected invalid evidence")
+        if marker["event"] == "profile_checkpoint":
+            selected = [item for item in report["profile_records"] if item["process_id"] == expected_direct_birth
+                        and item["checkpoint_seq"] == marker.get("checkpoint_seq")
+                        and item.get("input_sha256") == marker.get("input_sha256")]
+            if (len(selected) != 1 or selected[0]["status"] != "RAW_PRESERVED"
+                    or report["profile_copy_status"] != "RAW_PRESERVED"):
+                raise ValueError("checkpoint publication has no retained bound payload")
+    return publish_bundle(evidence, event_paths, invocation=invocation,
+        expected_source_digest=expected_source_digest, mapping=mapping, output=output,
+        extra_report=extra, validate_report=validate)
 
 
 def assemble_phase(event_paths, *, invocation, expected_source_digest, source_roots,
@@ -1474,6 +1586,97 @@ def self_test():
             expected_test_file_inventory=dict(source_digest=digest, files=[dict(path="test/runtests.jl", sha256="b"*64)]),
             timings=dict(process_launch_seconds=.01, exit_observed_seconds=.18, reaped_seconds=.19,
                          first_output_byte=dict(status="UNAVAILABLE")))
+        # Live publication proves an admitted prefix, never command completion.
+        live_admission = phase_receipt | dict(status="NOT RUN", semantic_status="NOT RUN",
+            exit_code=None, direct_child_reaped=False, cleanup_status="NOT NEEDED")
+        checkpoint_payload = partial_payload | dict(process_birth_id="direct-123")
+        profile.write_text(json.dumps(checkpoint_payload) + "\n")
+        checkpoint_marker = event("profile_checkpoint", 1, checkpoint_seq=1, mode="cpu", status="captured",
+            file="profile.json", input_sha256=hashlib.sha256(profile.read_bytes()).hexdigest(), data_words=3,
+            capture_seconds=.01, symbolization_status="partial", unresolved_addresses=1,
+            buffer_full=False, truncated=False)
+        def checkpoint_run(name, *, items=None, admission=None, tail=b"", input_path=None, **changes):
+            current = phase_events[:-1] + [checkpoint_marker] if items is None else items
+            current = [item | dict(process_birth_id="direct-123") for item in current]
+            write(current, tail)
+            phase_path.write_text(json.dumps(live_admission if admission is None else admission))
+            arguments = dict(invocation="current", expected_source_digest=digest,
+                source_roots=[(root, "owned")], output=root / name, admission_path=phase_path,
+                expected_phase="tests", expected_direct_birth="direct-123", snapshot_ordinal=1,
+                through_sequence=len(current))
+            arguments.update(changes)
+            return assemble_checkpoint([source if input_path is None else input_path], **arguments)
+        result = checkpoint_run("live-checkpoint", tail=b'{"concurrent_tail":')
+        assert result["test_status"] == result["check_status"] == "UNKNOWN"
+        assert result["snapshot_kind"] == "LIVE_PREFIX" and result["coverage_status"] == "PARTIAL"
+        assert not result["test_inventory_complete"] and not result["diagnostics_complete"]
+        assert result["profile_copy_status"] == "RAW_PRESERVED" and result["profile_symbolization_status"] == "PARTIAL"
+        binding = result["snapshot_binding"]
+        prefix = b"".join(source.read_bytes().splitlines(keepends=True)[:binding["through_sequence"]])
+        assert binding["event_prefix_sha256"] == hashlib.sha256(prefix).hexdigest()
+        assert binding["admission_sha256"] == hashlib.sha256(phase_path.read_bytes()).hexdigest()
+        assert binding["snapshot_ordinal"] == 1 and binding["event_prefix_bytes"] == len(prefix)
+        assert result["assertion_counts"]["passed"] == 2 and result["count_scope"] == "observed_lower_bound"
+        assert len((root / "live-checkpoint/partial-progress.jsonl").read_text().splitlines()) == binding["through_sequence"]
+        assert "LIVE_PREFIX" in (root / "live-checkpoint/summary.txt").read_text()
+        assert all(not unsafe_export(path) for path in (root / "live-checkpoint").iterdir())
+        result = checkpoint_run("live-start", items=phase_events[:1])
+        assert result["test_status"] == "UNKNOWN" and result["profile_copy_status"] == "UNAVAILABLE"
+        result = checkpoint_run("live-native-failure", items=failed + [checkpoint_marker])
+        assert result["test_status"] == result["check_status"] == "FAIL"
+        assert result["assertion_counts"]["failed"] == 1 and result["failure_detail_status"] == "AVAILABLE"
+        assert "Expression: 1 == 2" in (root / "live-native-failure/junit.xml").read_text()
+        result = checkpoint_run("live-native-assertion-marker", items=failed)
+        assert result["snapshot_binding"]["marker"] == "assertion_problem"
+        assert result["test_status"] == result["check_status"] == "FAIL" and result["coverage_status"] == "PARTIAL"
+        assert result["assertion_counts"]["failed"] == 1 and result["profile_copy_status"] == "UNAVAILABLE"
+        assert result["failure_detail_status"] == "AVAILABLE" and not result["diagnostics_complete"]
+        assert "Expression: 1 == 2" in (root / "live-native-assertion-marker/junit.xml").read_text()
+        def reject_checkpoint(name, **changes):
+            try:
+                checkpoint_run(name, **changes)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("unsafe or stale live checkpoint was published: " + name)
+            assert not (root / name).exists()
+        for name, admission in (("invocation", live_admission | dict(invocation="older")),
+                                ("source", live_admission | dict(source_digest="b" * 64)),
+                                ("pid", live_admission | dict(pid=124)),
+                                ("phase", live_admission | dict(name="other")),
+                                ("unadmitted", live_admission | dict(started=False))):
+            reject_checkpoint("live-reject-" + name, admission=admission)
+        reject_checkpoint("live-reject-ordinal", snapshot_ordinal=True)
+        reject_checkpoint("live-reject-sequence", through_sequence=100)
+        reject_checkpoint("live-reject-nonmarker", items=phase_events[:5])
+        reject_checkpoint("live-reject-truncated-marker", items=phase_events[:1],
+            tail=json.dumps(checkpoint_marker).encode()[:-5], through_sequence=2)
+        reject_checkpoint("live-reject-gap", items=phase_events[:1],
+            tail=(json.dumps(checkpoint_marker | dict(seq=99)) + "\n").encode(), through_sequence=2)
+        stale_stream = phase_events[:1] + [checkpoint_marker | dict(invocation="older")]
+        reject_checkpoint("live-reject-stale-stream", items=stale_stream)
+        admission_link = root / "admission-link.json"
+        admission_link.symlink_to(phase_path)
+        reject_checkpoint("live-reject-admission-symlink", admission_path=admission_link)
+        input_link = root / "input-link.jsonl"
+        input_link.symlink_to(source)
+        reject_checkpoint("live-reject-input-symlink", input_path=input_link)
+        reject_checkpoint("live-reject-profile-hash", items=phase_events[:1] + [checkpoint_marker | dict(input_sha256="b" * 64)])
+        profile.write_text(json.dumps(checkpoint_payload | dict(pid=124)) + "\n")
+        reject_checkpoint("live-reject-profile-shape", items=phase_events[:1] + [checkpoint_marker | dict(input_sha256=hashlib.sha256(profile.read_bytes()).hexdigest())])
+        profile.unlink()
+        profile.symlink_to(root / "profile-partial.json")
+        reject_checkpoint("live-reject-profile-symlink")
+        profile.unlink()
+        profile.write_text(json.dumps(checkpoint_payload) + "\n")
+        saved_manifest = (root / "live-checkpoint/manifest.json").read_bytes()
+        try:
+            checkpoint_run("live-checkpoint")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("immutable checkpoint generation was overwritten")
+        assert (root / "live-checkpoint/manifest.json").read_bytes() == saved_manifest
         def phase_run(name, *, receipt_override=None, items=None, **kwargs):
             write(phase_events if items is None else items)
             phase_path.write_text(json.dumps(phase_receipt if receipt_override is None else receipt_override))
@@ -1487,6 +1690,17 @@ def self_test():
         assert (root / "bound-phase" / "original-log-0001.txt").read_text() == "source:owned/test.jl\n"
         timings = (root / "bound-phase" / "timings.csv").read_text()
         assert "reaping" in timings and "first_output_byte" in timings and "UNAVAILABLE" in timings
+        observed_output = phase_receipt | dict(timings=dict(first_output_byte=dict(status="OBSERVED", seconds=.015,
+            scope="combined_stdout_stderr_including_telemetry", measurement="parent_read_observation",
+            application_readiness="UNPROVED")), output_observer=dict(status="PASS", reader_retired=True,
+            eof_observed=True, bytes=100, forwarded_records=1, rejected_records=0,
+            work_seconds=.004, cpu_seconds=.002, work_scope="inclusive_read_write_decode_forward_overlapping_command"))
+        observed_rows = timing_rows([], dict(phases=[observed_output]))
+        first = next(row for row in observed_rows if row["name"] == "tests: first_output_byte")
+        assert first["seconds"] == .015 and first["outcome"] == "OBSERVED" and "readiness=UNPROVED" in first["metric_scope"]
+        overhead = {row["name"]: row for row in observed_rows if row["kind"] == "diagnostic_overhead"}
+        assert overhead["tests: output_observer_work"]["seconds"] == .004
+        assert overhead["tests: output_observer_cpu"]["seconds"] == .002
         phase_failed = phase_receipt | dict(status="FAIL", semantic_status="FAIL", exit_code=1)
         failed_direct = json.loads(json.dumps(failed))
         for item in failed_direct:
@@ -1585,6 +1799,14 @@ def self_test():
             else:
                 raise AssertionError("intentional export cancellation was swallowed")
             assert not (root / "interrupted-publication").exists()
+            try:
+                checkpoint_run("interrupted-live-publication")
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("live checkpoint export cancellation was swallowed")
+            assert not (root / "interrupted-live-publication").exists()
+            assert (root / "live-checkpoint/manifest.json").read_bytes() == saved_manifest
         finally:
             globals()["copy_profiles"] = original_copy_profiles
         for artifact in (root / "bound-log").iterdir():
@@ -1594,7 +1816,7 @@ def self_test():
         assert unsafe_export(rejected), "independent reject scan missed an embedded private root"
         rejected.write_text('<testsuites><testcase name="relative/test.jl" /></testsuites>')
         assert not unsafe_export(rejected), "XML closing syntax was treated as a path"
-    print("PASS artifact privacy, native counts, phase/direct/log binding, partial/failed verdicts, atomic publication and raw profile controls; native sampling/decoding unverified")
+    print("PASS artifact privacy, native counts, phase/direct/log binding, live prefix checkpoints, partial/failed verdicts, atomic publication and raw profile controls; native sampling/decoding unverified")
 
 
 def main(argv=None):

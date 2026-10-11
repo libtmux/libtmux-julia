@@ -478,12 +478,39 @@ coverage remains partial even when every observed file and testset finishes.
 Commands outside those three runners retain process receipts without native
 test inventories.
 
+The matrix enables flushed `LIBTMUX_TEST_PROGRESS` JSON records for admitted
+native runners. Records identify the invocation, process, file and nested
+testset, with outcomes and assertion/error details. The observer's console
+output defaults off; the matrix explicitly enables it for native suites.
+Consumer observers and the private child bootstrap keep console markers off
+to preserve installed stdout and stderr.
+
+The phase output observer saves combined stdout/stderr bytes in the owned log
+and forwards validated, sanitized progress records through a bounded
+asynchronous console queue. Queue admission does not prove delivery. Dropped
+records, write faults and incomplete delivery fail diagnostic receipts; the
+native journal and checkpoint notifications remain available when console
+output stalls. A blocked console writer retains its descriptor until it
+retires, with an explicit `UNRETIRED` receipt if bounded finalization expires.
+
 Each admitted phase publishes a sanitized summary, ranked timing CSV, JUnit,
 partial progress, original log snapshot and hash manifest. Native suites retain
 their own assertion counts; the job index links phase bundles without adding
 unit and complete-suite counts together. The final job report retains aggregate
 timing failures even when every test command passes. Missing completion records
 remain partial evidence.
+
+Admitted native phases also publish immutable `LIVE_PREFIX` bundles while
+work runs. Process-start, assertion-problem and enabled profile-checkpoint
+notifications select a flushed prefix from the independently admitted direct
+process. Each snapshot binds its invocation, source, process birth, sequence
+and retained bytes. The publisher coalesces notifications within the worker's
+hard deadline.
+Snapshot coverage stays `PARTIAL`. Test/check status stays `UNKNOWN` until
+observed assertion failures or errors establish `FAIL`, with their original
+details retained. A published prefix establishes neither command completion
+nor a passing check. The CI upload step includes these sanitized snapshots
+with final bundles after work stops.
 
 Phase bundles capture the command before their own artifact finalizer. The
 final supervisor receipt includes that finalization time. A separate CI step
@@ -511,9 +538,10 @@ descendant retirement.
 
 Consumer profiles default to deferred symbol lookup to preserve application
 stderr. Raw samples retain unresolved addresses; decoding after exit cannot
-recover every process-local JIT label. First-byte readiness remains unavailable
-with inherited stdio. Embedded examples and installed launcher descendants need
-their own independent admission and profiling evidence.
+recover every process-local JIT label. First-output-byte timing remains
+unavailable for consumer children with inherited stdio; their application
+readiness remains unproved. Embedded examples and installed launcher
+descendants need their own independent admission and profiling evidence.
 
 Automatic CI sampling, bounded native decoding, first-byte readiness and
 complete child admission remain verification work.
@@ -539,22 +567,28 @@ $ python3 \
 ```
 
 The runner records process launch, positive exit observation and reap times.
-First-output-byte timing is unavailable with direct log-file output. Native
-event decoding and phase publication run in a separate owned process with
-a diagnostic limit of two seconds and another two seconds for cleanup.
+The phase output observer timestamps its first read of combined stdout,
+stderr and diagnostic records. `OBSERVED` means a parent read occurred;
+it identifies neither the first application byte nor application readiness.
+When no byte is observed, the receipt records `UNAVAILABLE` and distinguishes
+empty output from incomplete observation.
+
+Native event decoding and phase publication run in a separate owned process
+with a diagnostic limit of two seconds and another two seconds for cleanup.
 Finalization time counts in the aggregate loops and is recorded separately.
 Decoder failure preserves the original test result. The supervisor reserves
-up to six seconds
-for worker retirement across test cleanup and diagnostic finalization, including
-on interruption. These reserves admit no additional tests after the work
-deadline.
+up to six seconds for worker retirement across test cleanup and diagnostic
+finalization, including on interruption. These reserves admit no additional
+tests after the work deadline.
 
 Test-phase exit observation and timer joins share a separate two-second
-allowance. The runner records direct-child reap and retained identities when observation
-cannot finish. File writes, ownership locks and worker-pool shutdown are not
-covered by that wait bound. Escaped descendants and tmux fixtures still need
-their own cleanup evidence. The supervisor and CI job remain the external
-stop guards; CI preserves logs and receipts after a failed check.
+allowance. Output observers, checkpoint publishers and console finalization
+record bounded retirement separately. The runner records direct-child reap
+and retained identities when observation cannot finish. File writes,
+ownership locks and worker-pool shutdown are not covered by that wait bound.
+Escaped descendants and tmux fixtures still need their own cleanup evidence.
+The supervisor and CI job remain the external stop guards; CI preserves logs
+and receipts after a failed check.
 
 Complete timing gates remain open while the existing normal suites and
 installed launcher checks exceed these limits. Passing correctness checks
