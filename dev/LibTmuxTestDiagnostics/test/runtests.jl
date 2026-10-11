@@ -187,3 +187,8 @@ println(
     "; events=",
     result.lines,
 )
+
+# Outer: real sampling and portable native decoding need CPU work and checkpoint I/O.
+if !isempty(ARGS) && ARGS[1] == "profiles"
+    include(joinpath(@__DIR__, "profiles.jl"))
+end

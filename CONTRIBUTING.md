@@ -493,10 +493,27 @@ separate two-minute ceiling. Exporter retirement has its own sanitized receipt.
 Failed setup produces explicitly unverified setup snapshots. CI uploads public
 bundles after their privacy checks, with missing artifacts reported as errors.
 
-Parent and installed-child profiling, native profile decoding, first-byte
-readiness and complete child admission remain separate verification work. Bound
-raw profile checkpoints can be retained without establishing native decoding or
-complete process coverage.
+The private observer supports CPU sampling on Julia 1.10 and 1.13, and separate
+wall-time sampling on Julia 1.13. Set `LIBTMUX_CI_PROFILE=cpu` or `wall` to opt in;
+sampling stays off by default. Checkpoints retain raw samples, process/source
+identity, unresolved symbols and export overhead. Cumulative checkpoints and
+inclusive frames overlap. Copying every checkpoint does not establish complete
+sampling coverage or symbol lookup.
+
+Saved profiles require the matching Julia version for native decoding. The CI
+exporter preserves raw checkpoints and labels native decoding unverified.
+Automatic CI parent/installed-child profiling, bounded native decoding,
+first-byte readiness and complete child admission remain verification work.
+The private sampling controls belong to the outer loop. Use `profiles wall`
+instead of `profiles` to check wall-time sampling separately on Julia 1.13:
+
+```console
+$ julia \
+    --startup-file=no \
+    --project=dev/LibTmuxTestDiagnostics \
+    --threads=4 \
+    dev/LibTmuxTestDiagnostics/test/runtests.jl profiles
+```
 
 The runner records process launch, positive exit observation and reap times.
 First-output-byte timing is unavailable with direct log-file output. Native
