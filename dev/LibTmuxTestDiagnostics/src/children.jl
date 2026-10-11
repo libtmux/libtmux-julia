@@ -16,25 +16,25 @@ function observer()
     token = Diagnostics.identity(required("LIBTMUX_CI_PROCESS_TOKEN"), "process token")
     owner = Diagnostics.start_observer(
         required("LIBTMUX_CI_DIAGNOSTICS_DIR");
-        root = required("LIBTMUX_CI_SOURCE_ROOT"),
-        invocation = required("LIBTMUX_CI_INVOCATION"),
-        source_digest = required("LIBTMUX_CI_SOURCE_DIGEST"),
-        process_birth_id = token*"-"*string(getpid()),
-        phase = required("LIBTMUX_CI_PHASE"),
-        profile_mode = required("LIBTMUX_CI_PROFILE"),
-        profile_symbolization = "deferred",
+        root=required("LIBTMUX_CI_SOURCE_ROOT"),
+        invocation=required("LIBTMUX_CI_INVOCATION"),
+        source_digest=required("LIBTMUX_CI_SOURCE_DIGEST"),
+        process_birth_id=token*"-"*string(getpid()),
+        phase=required("LIBTMUX_CI_PHASE"),
+        profile_mode=required("LIBTMUX_CI_PROFILE"),
+        profile_symbolization="deferred",
     )
     owner.coverage_complete = false
     Diagnostics.emit(
         "coverage_incomplete";
-        reason = "consumer_driver_has_no_native_test_inventory; nested_child_admission_unproved",
-        file = Diagnostics.source_file(@__FILE__),
-        line = 0,
+        reason="consumer_driver_has_no_native_test_inventory; nested_child_admission_unproved",
+        file=Diagnostics.source_file(@__FILE__),
+        line=0,
     )
     atexit() do code::Int32
         Base.invokelatest(
             Diagnostics.close_observer;
-            outcome = code == 0 ? "exit_zero" : "exit_nonzero",
+            outcome=code == 0 ? "exit_zero" : "exit_nonzero",
         )
     end
     owner
@@ -86,10 +86,8 @@ end
 function admitted_spawn(command::Cmd)
     Base.iolock_begin()
     try
-        process = run(
-            pipeline(command; stdin = stdin, stdout = stdout, stderr = stderr);
-            wait = false,
-        )
+        process =
+            run(pipeline(command; stdin=stdin, stdout=stdout, stderr=stderr); wait=false)
         process, Int(getpid(process))
     finally
         Base.iolock_end()
@@ -107,23 +105,23 @@ function run_child(phase::AbstractString, original::Cmd)
     birth = token*"-"*string(pid)
     Diagnostics.emit(
         "child_admitted";
-        child_pid = pid,
-        child_token = token,
-        child_process_birth_id = birth,
-        label = Diagnostics.sanitize(phase),
-        profile_injected = injected,
-        pid_status = "captured_from_live_libuv_handle",
-        startup_seconds = (admitted-started)/1e9,
-        startup_scope = "spawn_and_pid_capture; excludes_child_bootstrap_and_application_readiness",
-        first_byte_seconds = nothing,
-        first_byte_status = "unavailable_inherited_stdio",
+        child_pid=pid,
+        child_token=token,
+        child_process_birth_id=birth,
+        label=Diagnostics.sanitize(phase),
+        profile_injected=injected,
+        pid_status="captured_from_live_libuv_handle",
+        startup_seconds=(admitted-started)/1e9,
+        startup_scope="spawn_and_pid_capture; excludes_child_bootstrap_and_application_readiness",
+        first_byte_seconds=nothing,
+        first_byte_status="unavailable_inherited_stdio",
     )
     Diagnostics.emit(
         "span_finish";
-        kind = "child_startup",
-        label = Diagnostics.sanitize(phase),
-        seconds = (admitted-started)/1e9,
-        outcome = "admitted",
+        kind="child_startup",
+        label=Diagnostics.sanitize(phase),
+        seconds=(admitted-started)/1e9,
+        outcome="admitted",
     )
     wait_started = time_ns()
     returned = false
@@ -134,25 +132,25 @@ function run_child(phase::AbstractString, original::Cmd)
         exited = process_exited(process)
         Diagnostics.emit(
             "child_exit_observed";
-            child_pid = pid,
-            child_process_birth_id = birth,
-            label = Diagnostics.sanitize(phase),
-            wait_returned = returned,
-            exit_observed = exited,
-            exit_code = exited ? Int(process.exitcode) : nothing,
-            signal = exited ? Int(process.termsignal) : nothing,
-            observation_seconds = (time_ns()-started)/1e9,
-            kernel_reap_time_status = "unavailable_libuv_owned",
-            cleanup_status = returned ? "libuv_exit_wait_returned" : "unproved",
-            descendants_retired = "unproved",
+            child_pid=pid,
+            child_process_birth_id=birth,
+            label=Diagnostics.sanitize(phase),
+            wait_returned=returned,
+            exit_observed=exited,
+            exit_code=exited ? Int(process.exitcode) : nothing,
+            signal=exited ? Int(process.termsignal) : nothing,
+            observation_seconds=(time_ns()-started)/1e9,
+            kernel_reap_time_status="unavailable_libuv_owned",
+            cleanup_status=returned ? "libuv_exit_wait_returned" : "unproved",
+            descendants_retired="unproved",
         )
         Diagnostics.emit(
             "span_finish";
-            kind = "child_exit_wait",
-            label = Diagnostics.sanitize(phase),
-            seconds = (time_ns()-wait_started)/1e9,
-            outcome = returned ? "wait_returned" : "interrupted_or_error",
-            metric_scope = "wait_call; overlaps_child_runtime; kernel_reap_time_unavailable",
+            kind="child_exit_wait",
+            label=Diagnostics.sanitize(phase),
+            seconds=(time_ns()-wait_started)/1e9,
+            outcome=returned ? "wait_returned" : "interrupted_or_error",
+            metric_scope="wait_call; overlaps_child_runtime; kernel_reap_time_unavailable",
         )
     end
     success(process) || Base.pipeline_error(process)
