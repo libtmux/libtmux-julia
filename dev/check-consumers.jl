@@ -2,6 +2,7 @@ using SHA
 using TOML
 
 const SOURCE_ROOT = dirname(@__DIR__)
+const CONSUMER_DIAGNOSTICS = Ref{Any}(nothing)
 const PACKAGE_SOURCES = (
     ("LibTmux", ".", "1a5dcb9e-7968-44df-ad70-bf0a17628f09"),
     ("LibTmuxMCP", "packages/LibTmuxMCP", "6ec2004f-18ba-4da6-9e55-6cdc607d109e"),
@@ -44,7 +45,22 @@ end
 function run_consumer_child(phase::AbstractString, command)
     result, failure = nothing, nothing
     try
-        result = run(command)
+        if get(ENV, "LIBTMUX_CI_PROFILE", "off") == "off"
+            result = run(command)
+        else
+            if CONSUMER_DIAGNOSTICS[] === nothing
+                namespace = Module(:ConsumerDiagnosticOwner)
+                Base.include(
+                    namespace,
+                    joinpath(@__DIR__, "LibTmuxTestDiagnostics", "src", "children.jl"),
+                )
+                CONSUMER_DIAGNOSTICS[] =
+                    Base.invokelatest(getproperty, namespace, :LibTmuxConsumerDiagnostics)
+            end
+            result = Base.invokelatest() do
+                CONSUMER_DIAGNOSTICS[].run_child(phase, command)
+            end
+        end
     catch error
         failure = error
     end

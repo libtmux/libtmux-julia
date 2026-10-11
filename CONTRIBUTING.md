@@ -570,8 +570,21 @@ sampling coverage or symbol lookup.
 
 Saved profiles require the matching Julia version for native decoding. The CI
 exporter preserves raw checkpoints and labels native decoding unverified.
-Automatic CI parent/installed-child profiling, bounded native decoding,
-first-byte readiness and complete child admission remain verification work.
+With matrix diagnostic bindings, the consumer checker can profile its direct
+Julia children through a private source bootstrap. It records their actual
+process IDs before waiting, distinct birth tokens, observed exits and wait
+returns. It preserves command flags, inherited stdio and consumer projects.
+A returned Julia wait does not measure the kernel's earlier reap time or prove
+descendant retirement.
+
+Consumer profiles default to deferred symbol lookup to preserve application
+stderr. Raw samples retain unresolved addresses; decoding after exit cannot
+recover every process-local JIT label. First-byte readiness remains unavailable
+with inherited stdio. Embedded examples and installed launcher descendants need
+their own independent admission and profiling evidence.
+
+Automatic CI sampling, bounded native decoding, first-byte readiness and
+complete child admission remain verification work.
 The private sampling controls belong to the outer loop. Use `profiles wall`
 instead of `profiles` to check wall-time sampling separately on Julia 1.13:
 
@@ -581,6 +594,16 @@ $ julia \
     --project=dev/LibTmuxTestDiagnostics \
     --threads=4 \
     dev/LibTmuxTestDiagnostics/test/runtests.jl profiles
+```
+
+Check direct-child identity, CPU checkpoints, binary stdout, stderr, randomness
+and nonzero/ignored exits with the separate outer control:
+
+```console
+$ python3 \
+    dev/LibTmuxTestDiagnostics/test/children.py \
+    julia \
+    --threads 4
 ```
 
 The runner records process launch, positive exit observation and reap times.
