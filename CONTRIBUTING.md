@@ -163,6 +163,12 @@ $ julia \
 These checks verify extraction. They do not execute the documented programs
 or establish website rendering or publication.
 
+The Linux Julia 1.13 matrix job runs both commands with its prepared tool
+environment, offline, and saves the `julia-docs-api` CI artifact. It reuses
+the existing dependency preparation. Website previews and publication use
+the shared documentation workflow and record their own source and tooling
+provenance.
+
 ## Manual and examples
 
 Prepare the manual environment outside timed checks:
