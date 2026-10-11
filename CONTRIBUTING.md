@@ -478,20 +478,36 @@ coverage remains partial even when every observed file and testset finishes.
 Commands outside those three runners retain process receipts without native
 test inventories.
 
-The diagnostic checkpoint does not yet produce CPU or wall-time profiles.
-The standalone artifact assembler supports summaries, timing CSV and JUnit
-results, but the runner and CI upload do not yet include them. It accepts
-bound profile checkpoints; native decoding remains unverified. CI uploads
-the existing receipts and logs.
+Each admitted phase publishes a sanitized summary, ranked timing CSV, JUnit,
+partial progress, original log snapshot and hash manifest. Native suites retain
+their own assertion counts; the job index links phase bundles without adding
+unit and complete-suite counts together. The final job report retains aggregate
+timing failures even when every test command passes. Missing completion records
+remain partial evidence.
+
+Phase bundles capture the command before their own artifact finalizer. The
+final supervisor receipt includes that finalization time. A separate CI step
+publishes the job index after work stops, using a two-second owned exporter and
+separate cleanup allowance. Its workflow ceiling is one minute; upload has a
+separate two-minute ceiling. Exporter retirement has its own sanitized receipt.
+Failed setup produces explicitly unverified setup snapshots. CI uploads public
+bundles after their privacy checks, with missing artifacts reported as errors.
+
+Parent and installed-child profiling, native profile decoding, first-byte
+readiness and complete child admission remain separate verification work. Bound
+raw profile checkpoints can be retained without establishing native decoding or
+complete process coverage.
 
 The runner records process launch, positive exit observation and reap times.
 First-output-byte timing is unavailable with direct log-file output. Native
-event decoding runs in a separate owned process with a two-second diagnostic
-limit and its own two-second cleanup allowance. Finalization time counts in
-the aggregate loops and is recorded separately; decoder failure preserves the
-original test result. The supervisor reserves up to six seconds for worker
-retirement across test cleanup and diagnostic finalization, including on
-interruption. These reserves admit no additional tests after the work deadline.
+event decoding and phase publication run in a separate owned process with
+a diagnostic limit of two seconds and another two seconds for cleanup.
+Finalization time counts in the aggregate loops and is recorded separately.
+Decoder failure preserves the original test result. The supervisor reserves
+up to six seconds
+for worker retirement across test cleanup and diagnostic finalization, including
+on interruption. These reserves admit no additional tests after the work
+deadline.
 
 Test-phase exit observation and timer joins share a separate two-second
 allowance. The runner records direct-child reap and retained identities when observation

@@ -510,12 +510,20 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
                 unretired("owned escalation timer did not retire before cleanup expired")
         answer["seconds"] = time.monotonic() - start
         answer["log"] = str(log)
+        if soft_budget is not None and answer["seconds"] >= soft_budget:
+            answer["soft_limit_exceeded"] = True
+            if answer["status"] == "PASS":
+                answer["status"] = "FAIL"
         save_progress()
         try:
-            if diagnostic_receipt is not None and answer["direct_child_reaped"] and answer.get("expected_test_file_inventory"):
+            if diagnostic_receipt is not None and answer.get("diagnostics_directory"):
                 finalize_diagnostics(answer, env=env)
         finally:
             answer["seconds"] = time.monotonic() - start
+            if answer.get("observed_native_failure") is True and answer["status"] == "PASS":
+                answer.update(status="FAIL", reason="native assertions or errors failed")
+            if answer["diagnostics_status"] == "FAIL" and answer["status"] == "PASS":
+                answer.update(status="FAIL", reason="diagnostic evidence could not be published")
             if soft_budget is not None and answer["seconds"] >= soft_budget:
                 answer["soft_limit_exceeded"] = True
                 if answer["status"] == "PASS":
@@ -537,26 +545,28 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
-helper, directory, invocation, digest, phase_name, direct_birth, expected = sys.argv[1:]
+helper, directory, invocation, digest, phase_name, direct_birth, stage = sys.argv[1:]
 directory = Path(directory)
 spec = importlib.util.spec_from_file_location("libtmux_ci_artifacts", helper)
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
-evidence = module.collect_process_evidence(sorted(directory.glob("events-*.jsonl")),
+report = module.assemble_phase(sorted(directory.glob("events-*.jsonl")),
     invocation=invocation, expected_source_digest=digest,
-    source_roots=[(Path(helper).resolve().parent.parent, "repository"), (directory, "diagnostics")],
-    expected_phase=phase_name)
-direct = [process for process in evidence["processes"] if process["process_id"] == direct_birth]
-expected_files = {item["path"] for item in json.loads(expected)["files"]}
-matches = len(direct) == 1 and set(direct[0].get("file_coverage", {}).get("declared", [])) == expected_files
+    source_roots=[(Path(helper).resolve().parent.parent, "repository"),
+                  (Path(stage), "stage"), (directory, "diagnostics")],
+    output=directory / "public", phase_path=directory / "phase.json",
+    expected_phase=phase_name, expected_direct_birth=direct_birth or None)
 proof = dict(schema=1, invocation=invocation, source_digest=digest, phase=phase_name,
-    observed_file_coverage_complete=evidence["observed_file_coverage_complete"],
-    expected_file_inventory_matches=matches,
-    observed_process_birth_ids=evidence["process_birth_ids"],
-    issues=evidence["issues"],
-    process_issues=[dict(process_birth_id=process["process_id"], issues=process["issues"])
-                    for process in evidence["processes"] if process["issues"]],
+    observed_assertion_counts=report["assertion_counts"],
+    observed_native_failure=(report["assertion_counts"]["failed"] + report["assertion_counts"]["errored"] > 0
+        or any(process["assertion_problems"] for process in report["processes"])),
+    observed_file_coverage_complete=report["observed_file_coverage_complete"],
+    expected_file_inventory_matches=report["expected_file_inventory_matches"],
+    observed_process_birth_ids=report["observed_process_birth_ids"],
+    issues=report["issues"], process_issues=report["process_issues"],
+    artifact_export_status=report["export_status"], artifact_directory="public",
+    original_logs=report["original_logs"],
     test_inventory_complete=False, child_inventory_status="UNPROVED")
 temporary = directory / "diagnostics-proof.tmp"
 temporary.write_text(json.dumps(proof, indent=2) + "\n")
@@ -576,7 +586,8 @@ def finalize_diagnostics(answer, *, env):
     try:
         argv = [sys.executable, "-c", DIAGNOSTIC_FINALIZER, str(ROOT / "dev/ci-artifacts.py"),
                 str(directory), answer["invocation"], answer["source_digest"], answer["name"],
-                answer["test_process_birth_ids"][0], json.dumps(answer["expected_test_file_inventory"])]
+                f"{answer['process_token']}-{answer['pid']}" if answer.get("started") else "",
+                env.get("LIBTMUX_CI_STAGE", str(directory))]
         decoder = phase("diagnostic-finalizer", argv, cwd=ROOT, env=child_env,
                         log=directory / "finalization.log", budget=DIAGNOSTIC_FINALIZATION_SECONDS,
                         progress_path=directory / "finalization-phase.json")
@@ -592,7 +603,20 @@ def finalize_diagnostics(answer, *, env):
                 or proof.get("source_digest") != answer["source_digest"] or proof.get("phase") != answer["name"]):
             raise ValueError("diagnostic finalizer proof differs from the admitted phase")
         answer["diagnostics_proof"] = proof
-        answer["diagnostics_status"] = "PASS" if (proof.get("observed_file_coverage_complete") is True
+        answer["observed_native_failure"] = proof.get("observed_native_failure") is True
+        answer["observed_assertion_counts"] = proof.get("observed_assertion_counts")
+        manifest_path = directory / "public" / "manifest.json"
+        if manifest_path.is_symlink() or not manifest_path.is_file() or manifest_path.stat().st_size > 64 * 1024:
+            raise ValueError("sanitized diagnostic bundle manifest is unavailable")
+        manifest = json.loads(manifest_path.read_text())
+        if (manifest.get("invocation") != answer["invocation"]
+                or manifest.get("source_digest") != answer["source_digest"]):
+            raise ValueError("sanitized diagnostic bundle differs from the admitted source")
+        answer["diagnostic_artifact_directory"] = str(directory / "public")
+        if proof.get("original_logs"):
+            answer["log_sha256"] = proof["original_logs"][0]["input_sha256"]
+            answer["log_binding_scope"] = proof["original_logs"][0]["binding_scope"]
+        answer["diagnostics_status"] = "FAIL" if proof.get("artifact_export_status") != "PASS" else "PASS" if (proof.get("observed_file_coverage_complete") is True
             and proof.get("expected_file_inventory_matches") is True and not proof.get("issues")
             and not proof.get("process_issues")) else "PARTIAL"
     except BaseException as error:
@@ -601,6 +625,129 @@ def finalize_diagnostics(answer, *, env):
             raise
     finally:
         answer["timings"]["diagnostic_finalization_seconds"] = time.monotonic() - started
+
+
+JOB_ARTIFACT_FINALIZER = r'''
+import importlib.util
+import json
+from pathlib import Path
+import sys
+helper, stage, receipt, directory, invocation, digest = sys.argv[1:]
+stage, directory = Path(stage), Path(directory)
+spec = importlib.util.spec_from_file_location("libtmux_ci_artifacts", helper)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+options = dict(invocation=invocation, expected_source_digest=digest,
+    source_roots=[(Path(helper).resolve().parent.parent, "repository"), (stage, "stage")],
+    output=directory / "public")
+report = (module.assemble_job(supervisor_path=Path(receipt), **options) if receipt else
+          module.assemble_preparation(stage=stage,
+              reason="No final supervisor receipt; setup or work incomplete", **options))
+proof = dict(schema=1, invocation=invocation, source_digest=digest,
+    artifact_export_status=report["export_status"], check_status=report["check_status"],
+    artifact_directory="public")
+temporary = directory / "job-artifact-proof.tmp"
+temporary.write_text(json.dumps(proof, indent=2) + "\n")
+temporary.replace(directory / "job-artifact-proof.json")
+'''
+
+
+def finalize_artifacts(args):
+    """Publish the final verdict after work stops, under a separate owned guard."""
+    started = time.monotonic()
+    stage = checked_stage(args.stage, create=True)
+    receipt = result_path(stage, args)
+    digest = source_digest()
+    missing = not receipt.exists()
+    if missing:
+        result = dict(invocation=uuid.uuid4().hex, source_digest=digest, status="UNVERIFIED")
+    else:
+        if receipt.is_symlink() or not receipt.is_file() or receipt.stat().st_size > 8 * 1024 * 1024:
+            raise ValueError("job receipt is unavailable or exceeds its bound")
+        result = json.loads(receipt.read_text())
+        if not isinstance(result, dict):
+            raise ValueError("job receipt must be an object")
+    invocation = result.get("invocation")
+    if (not isinstance(invocation, str) or invocation in (".", "..")
+            or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", invocation)
+            or result.get("source_digest") != digest):
+        raise ValueError("job receipt differs from current invocation or source")
+    directory = stage / "diagnostics" / invocation / "job"
+    directory.mkdir(parents=True, exist_ok=False)
+    env = os.environ.copy()
+    for key in DIAGNOSTIC_BINDINGS:
+        env.pop(key, None)
+    env.update(LIBTMUX_CI_INVOCATION=invocation, LIBTMUX_CI_SOURCE_DIGEST=digest)
+    argv = [sys.executable, "-c", JOB_ARTIFACT_FINALIZER, str(ROOT / "dev/ci-artifacts.py"),
+            str(stage), "" if missing else str(receipt), str(directory), invocation, digest]
+    exporter = phase("job-artifact-finalizer", argv, cwd=ROOT, env=env,
+                     log=directory / "finalization.log", budget=DIAGNOSTIC_FINALIZATION_SECONDS,
+                     progress_path=directory / "finalization-phase.json")
+    status = "FAIL"
+    check_status = result.get("status", "UNKNOWN")
+    known_statuses = {"PASS", "FAIL", "NOT RUN", "RUNNING", "STALE", "INTERRUPTED",
+                      "TIMEOUT", "CANCELLED", "UNRETIRED", "UNKNOWN", "UNVERIFIED"}
+    if not isinstance(check_status, str) or check_status not in known_statuses:
+        check_status = "UNKNOWN"
+    proof_path = directory / "job-artifact-proof.json"
+    proof_status = "UNAVAILABLE"
+    if exporter["status"] == "PASS" and exporter["direct_child_reaped"]:
+        try:
+            if proof_path.is_symlink() or not proof_path.is_file() or proof_path.stat().st_size > 64 * 1024:
+                raise ValueError("exporter proof is unavailable or exceeds its bound")
+            proof = json.loads(proof_path.read_text())
+            if (not isinstance(proof, dict) or proof.get("invocation") != invocation
+                    or proof.get("source_digest") != digest):
+                raise ValueError("exporter proof differs from the admitted job")
+            proof_status = "BOUND"
+            if proof.get("artifact_export_status") == "PASS":
+                manifest_path = directory / "public" / "manifest.json"
+                if manifest_path.is_symlink() or not manifest_path.is_file() or manifest_path.stat().st_size > 64 * 1024:
+                    raise ValueError("published job manifest is unavailable")
+                manifest = json.loads(manifest_path.read_text())
+                if (not isinstance(manifest, dict) or manifest.get("invocation") != invocation
+                        or manifest.get("source_digest") != digest or not isinstance(manifest.get("files"), dict)):
+                    raise ValueError("published job manifest differs from the admitted source")
+                for filename in ("diagnostics.json", "summary.txt", "timings.csv", "junit.xml", "partial-progress.jsonl"):
+                    item = directory / "public" / filename
+                    file_digest = manifest["files"].get(filename)
+                    if (item.is_symlink() or not item.is_file() or not isinstance(file_digest, str)
+                            or not re.fullmatch(r"[0-9a-f]{64}", file_digest)):
+                        raise ValueError("published job bundle lacks a declared required file")
+                if isinstance(proof.get("check_status"), str) and proof["check_status"] in known_statuses:
+                    check_status = proof["check_status"]
+                status = "PASS"
+        except (OSError, ValueError, UnicodeError, RecursionError):
+            proof_status = "INVALID"
+    record = dict(schema=1, invocation=invocation, source_digest=digest,
+        artifact_status=status, check_status=check_status,
+        exporter_proof_status=proof_status,
+        exporter=exporter, seconds=time.monotonic() - started,
+        timing_boundary="artifact command entry through exporter retirement; excludes final receipt write and process exit")
+    (directory / "artifact-finalization.json").write_text(json.dumps(record, indent=2) + "\n")
+    retirement = dict(schema=1, invocation=invocation, source_digest=digest,
+        artifact_scope="job_exporter_retirement", artifact_status=status,
+        exporter_proof_status=proof_status,
+        check_status=record["check_status"], exporter_status=exporter["status"],
+        exporter_exit_code=exporter.get("exit_code"), pid=exporter.get("pid"),
+        direct_child_reaped=exporter["direct_child_reaped"], cleanup_status=exporter["cleanup_status"],
+        seconds=record["seconds"], timings=exporter["timings"],
+        python_version=platform.python_version(), timing_boundary=record["timing_boundary"],
+        cleanup_scope="owned direct exporter; escaped descendants remain unproved")
+    destination = directory / "retirement"
+    destination.mkdir()
+    with tempfile.TemporaryDirectory(prefix=".retirement-build-", dir=directory) as temporary:
+        bundle = Path(temporary) / "bundle"
+        bundle.mkdir()
+        payload = json.dumps(retirement, indent=2) + "\n"
+        (bundle / "retirement.json").write_text(payload)
+        (bundle / "manifest.json").write_text(json.dumps(dict(schema=1, invocation=invocation,
+            source_digest=digest, files={"retirement.json": hashlib.sha256(payload.encode()).hexdigest()}),
+            indent=2) + "\n")
+        bundle.replace(destination / "public")
+    print(f"{status} artifact publication; check outcome {record['check_status']}", flush=True)
+    return 0 if status == "PASS" else 1
 
 
 def parallel_mid(commands, *, stage, env, result, save, deadline=None):
@@ -1470,24 +1617,38 @@ println("PASS admitted version arguments construct real Pkg specifications")
                    cwd=base, env=os.environ.copy(), log=base / "literal.log", budget=0.9)
         assert ok["status"] == "PASS" and (base / "literal.log").read_text().strip() == literal
         assert not (base / "must-not-exist").exists()
+        diagnostic_env = os.environ.copy()
+        diagnostic_env.update(LIBTMUX_CI_DIAGNOSTICS_ROOT=str(base / "diagnostics"),
+                              LIBTMUX_CI_STAGE=str(base), LIBTMUX_CI_INVOCATION="control",
+                              LIBTMUX_CI_SOURCE_DIGEST="a" * 64,
+                              LIBTMUX_CI_DIAGNOSTICS_DIR="inherited-unowned-directory")
         failed = phase("failure", [sys.executable, "-c", "raise SystemExit(7)"],
-                       cwd=base, env=os.environ.copy(), log=base / "failure.log", budget=0.9)
+                       cwd=base, env=diagnostic_env, log=base / "failure.log", budget=0.9)
         assert failed["status"] == "FAIL" and failed["exit_code"] == 7
         absent = phase("missing", [str(base / "missing")], cwd=base,
                        env=os.environ.copy(), log=base / "missing.log", budget=0.9)
         assert absent["status"] == "NOT RUN"
         timed = phase("deadline", [sys.executable, "-c", "import threading; threading.Event().wait()"],
-                      cwd=base, env=os.environ.copy(), log=base / "deadline.log", budget=0.05)
+                      cwd=base, env=diagnostic_env, log=base / "deadline.log", budget=0.05)
         assert timed["status"] == "TIMEOUT" and timed["direct_child_reaped"]
         soft = phase("soft-overrun", [sys.executable, "-c",
             "import signal,sys,threading;signal.signal(signal.SIGINT,lambda *_:sys.exit(17));"
             "threading.Event().wait(0.035);print('completed')"], cwd=base,
-            env=os.environ.copy(), log=base / "soft.log", budget=0.4, soft_budget=0.01)
-        assert soft["status"] == "FAIL" and soft["semantic_status"] == "PASS"
+            env=diagnostic_env, log=base / "soft.log", budget=0.4, soft_budget=0.01)
+        assert soft["status"] == "FAIL" and soft["semantic_status"] == "PASS", {
+            key: soft.get(key) for key in ("status", "semantic_status", "exit_code", "seconds", "timings")}
         assert soft["soft_limit_exceeded"] and soft["exit_code"] == 0 and soft["direct_child_reaped"]
         assert "completed" in (base / "soft.log").read_text().splitlines()
         assert any(json.loads(line).get("event") == "soft-limit" for line in
                    (base / "soft.log").read_text().splitlines() if line.startswith("{"))
+        for retained in (failed, timed, soft):
+            public = Path(retained["diagnostic_artifact_directory"])
+            report = json.loads((public / "diagnostics.json").read_text())
+            command = report["supervisor"]["phases"][0]
+            assert report["test_status"] == "FAIL" and report["coverage_status"] == "PARTIAL"
+            assert command["semantic_status"] == retained["semantic_status"]
+            assert command["exit_code"] == retained["exit_code"] and command["direct_child_reaped"]
+            assert (public / "junit.xml").is_file() and (public / "partial-progress.jsonl").is_file()
         version = version_probe("julia-version", [sys.executable, "-c",
             "print('julia version 1.13.0')"], env=os.environ.copy(),
             log=base / "version.log", deadline=time.monotonic() + 0.9)
@@ -1499,11 +1660,6 @@ println("PASS admitted version arguments construct real Pkg specifications")
                             budget=1, deadline=time.monotonic() - 1)
             launch.assert_not_called()
         assert expired["status"] == "NOT RUN" and not expired["started"]
-        diagnostic_env = os.environ.copy()
-        diagnostic_env.update(LIBTMUX_CI_DIAGNOSTICS_ROOT=str(base / "diagnostics"),
-                              LIBTMUX_CI_STAGE=str(base), LIBTMUX_CI_INVOCATION="control",
-                              LIBTMUX_CI_SOURCE_DIGEST="a" * 64,
-                              LIBTMUX_CI_DIAGNOSTICS_DIR="inherited-unowned-directory")
         bound = phase("owned-diagnostics", [sys.executable, "-c",
             "import os;print(os.environ['LIBTMUX_CI_DIAGNOSTICS_DIR']);print(os.environ['LIBTMUX_CI_PHASE'])"],
             cwd=base, env=diagnostic_env, log=base / "bound.log", budget=0.9)
@@ -1513,6 +1669,43 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert bound["timings"]["first_output_byte"]["status"] == "UNAVAILABLE"
         assert bound["timings"]["reaped_seconds"] >= bound["timings"]["exit_observed_seconds"]
         assert not bound["coverage_complete"] and not bound["test_inventory_complete"]
+        public = Path(bound["diagnostics_directory"]) / "public"
+        assert (public / "manifest.json").is_file(), "retired phases must publish sanitized evidence"
+        report = json.loads((public / "diagnostics.json").read_text())
+        assert report["export_status"] == "PASS" and report["coverage_status"] == "PARTIAL"
+        assert report["supervisor"]["phases"][0]["semantic_status"] == "PASS"
+        assert report["original_logs"][0]["input_sha256"] == bound["log_sha256"]
+        assert report["original_logs"][0]["binding_scope"] == "current_owned_log_snapshot"
+        assert str(base) not in (public / report["original_logs"][0]["file"]).read_text()
+        from types import SimpleNamespace
+        (base / ".libtmux-julia-matrix").touch()
+        artifact_args = SimpleNamespace(stage=str(base), threads=1, tier="all", suite="all")
+        receipt = result_path(base, artifact_args)
+        receipt.write_text(json.dumps(dict(schema_version=4, invocation="control", source_digest="a" * 64,
+            status="FAIL", phases=[soft], active_phase=None, required_phases=[soft["name"]],
+            coverage_complete=False, test_inventory_complete=False, test_process_birth_ids=[],
+            loops=dict(outer=dict(status="FAIL", complete=True, seconds=201.0, budget_seconds=200.0)))))
+        with patch(__name__ + ".source_digest", return_value="a" * 64):
+            assert finalize_artifacts(artifact_args) == 0
+        job_directory = base / "diagnostics" / "control" / "job"
+        job_report = json.loads((job_directory / "public" / "diagnostics.json").read_text())
+        assert job_report["check_status"] == job_report["test_status"] == "FAIL"
+        assert job_report["assertion_counts"] is None
+        assert job_report["phase_bundles"][0]["artifact_status"] == "PASS"
+        assert 'type="SoftLimit"' in (job_directory / "public" / "junit.xml").read_text()
+        retirement = json.loads((job_directory / "retirement" / "public" / "retirement.json").read_text())
+        assert retirement["artifact_status"] == "PASS" and retirement["check_status"] == "FAIL"
+        assert retirement["direct_child_reaped"] and retirement["exporter_exit_code"] == 0
+        assert str(base) not in json.dumps(retirement)
+        preparation_stage = base / "preparation-only"
+        with patch(__name__ + ".source_digest", return_value="a" * 64):
+            assert finalize_artifacts(SimpleNamespace(stage=str(preparation_stage), threads=1,
+                                                       tier="all", suite="all")) == 0
+        preparation_reports = list(preparation_stage.glob("diagnostics/*/job/public/diagnostics.json"))
+        assert len(preparation_reports) == 1
+        preparation = json.loads(preparation_reports[0].read_text())
+        assert preparation["check_status"] == "UNVERIFIED" and preparation["test_status"] == "UNKNOWN"
+        assert preparation["assertion_counts"] is None
         with patch.object(subprocess, "Popen") as launch:
             try:
                 phase("../escaped", [], cwd=base, env=diagnostic_env, log=base / "escaped.log", budget=0.9)
@@ -1524,7 +1717,8 @@ println("PASS admitted version arguments construct real Pkg specifications")
         decoder_root = base / "blocked-decoder"
         helper = decoder_root / "dev" / "ci-artifacts.py"
         helper.parent.mkdir(parents=True)
-        helper.write_text("import threading\ndef collect_process_evidence(*args, **kwargs):\n threading.Event().wait()\n")
+        helper.write_text("import threading\ndef assemble_phase(*args, **kwargs):\n threading.Event().wait()\n"
+                          "def assemble_job(*args, **kwargs):\n threading.Event().wait()\n")
         diagnostic_env["LIBTMUX_CI_TEST_FILE_INVENTORY"] = json.dumps({
             "original-failure": dict(source_digest="a" * 64, files=[dict(path="test/fixture.jl", sha256="b" * 64)])})
         with patch(__name__ + ".ROOT", decoder_root), \
@@ -1536,6 +1730,39 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert original["diagnostic_finalizer"]["status"] == "TIMEOUT"
         assert original["diagnostic_finalizer"]["direct_child_reaped"]
         assert original["seconds"] < 0.5
+        blocked_stage = checked_stage(base / "blocked-job-artifact", create=True)
+        blocked_args = SimpleNamespace(stage=str(blocked_stage), threads=1, tier="all", suite="all")
+        blocked_receipt = result_path(blocked_stage, blocked_args)
+        blocked_receipt.write_text(json.dumps(dict(schema_version=4, invocation="blocked", source_digest="a" * 64,
+            status="FAIL", phases=[], active_phase=None, required_phases=[],
+            coverage_complete=False, test_inventory_complete=False, test_process_birth_ids=[])))
+        original_receipt = blocked_receipt.read_bytes()
+        with patch(__name__ + ".ROOT", decoder_root), \
+             patch(__name__ + ".source_digest", return_value="a" * 64), \
+             patch(__name__ + ".DIAGNOSTIC_FINALIZATION_SECONDS", 0.04):
+            assert finalize_artifacts(blocked_args) == 1
+        assert blocked_receipt.read_bytes() == original_receipt
+        retirement = json.loads((blocked_stage / "diagnostics/blocked/job/retirement/public/retirement.json").read_text())
+        assert retirement["artifact_status"] == "FAIL" and retirement["check_status"] == "FAIL"
+        assert retirement["exporter_status"] == "TIMEOUT" and retirement["direct_child_reaped"]
+        assert retirement["seconds"] < 0.5
+        missing_bundle_proof = json.dumps(dict(invocation="blocked", source_digest="a" * 64,
+            artifact_export_status="PASS", check_status="FAIL"))
+        for ordinal, invalid in enumerate(("[]", "{", missing_bundle_proof)):
+            malformed_stage = checked_stage(base / f"malformed-job-proof-{ordinal}", create=True)
+            malformed_args = SimpleNamespace(stage=str(malformed_stage), threads=1, tier="all", suite="all")
+            malformed_receipt = result_path(malformed_stage, malformed_args)
+            malformed_receipt.write_bytes(original_receipt)
+            bad_exporter = ("from pathlib import Path\nimport sys\n"
+                f"(Path(sys.argv[4]) / 'job-artifact-proof.json').write_text({invalid!r})\n")
+            with patch(__name__ + ".source_digest", return_value="a" * 64), \
+                 patch(__name__ + ".JOB_ARTIFACT_FINALIZER", bad_exporter):
+                assert finalize_artifacts(malformed_args) == 1
+            assert malformed_receipt.read_bytes() == original_receipt
+            retirement = json.loads((malformed_stage / "diagnostics/blocked/job/retirement/public/retirement.json").read_text())
+            assert retirement["artifact_status"] == "FAIL" and retirement["check_status"] == "FAIL"
+            assert retirement["exporter_proof_status"] == "INVALID"
+            assert retirement["exporter_exit_code"] == 0 and retirement["direct_child_reaped"]
         release_observer, exit_seen = threading.Event(), threading.Event()
         original_waitid = os.waitid
         ownership = PhaseGroup()
@@ -2133,6 +2360,11 @@ def main():
     matrix.add_argument("--split", action="store_true", help="emit runtime and delivery jobs for every cell")
     self_check = sub.add_parser("self-test")
     self_check.add_argument("--julia", help="also check real Pkg argument conversion offline")
+    artifacts = sub.add_parser("finalize-artifacts", help="publish sanitized evidence after work or preparation stops")
+    artifacts.add_argument("stage")
+    artifacts.add_argument("--threads", type=int, choices=(1, 4), default=1)
+    artifacts.add_argument("--tier", choices=("unit", "quality", "mid", "outer", "all"), default="all")
+    artifacts.add_argument("--suite", choices=("all", *SUITES), default="all")
     build = sub.add_parser("build-tmux", help="setup only: download, verify and build one pinned release")
     build.add_argument("stage")
     build.add_argument("version", choices=tuple(TMUX_SHA256))
@@ -2169,6 +2401,8 @@ def main():
             build_tmux(args)
         elif args.command == "prepare":
             prepare(args)
+        elif args.command == "finalize-artifacts":
+            return finalize_artifacts(args)
         else:
             return run_checks(args) if args.worker else run(args)
     except (ValueError, FileNotFoundError, subprocess.CalledProcessError) as error:

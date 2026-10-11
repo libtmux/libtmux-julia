@@ -152,19 +152,24 @@ jobs:
           path: docs/build/api.json
           if-no-files-found: error
           retention-days: 7
+      - name: Finalize sanitized cell evidence
+        if: always()
+        timeout-minutes: 1
+        run: >-
+          python3 dev/check-matrix.py finalize-artifacts "$MATRIX_STAGE"
+          --threads '${{ matrix.threads }}'
+          --suite '${{ matrix.suite }}'
+          --tier all
       - name: Preserve cell evidence
         if: always()
+        timeout-minutes: 2
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.job_label }}
-          if-no-files-found: warn
+          if-no-files-found: error
           path: |
-            ${{ env.MATRIX_STAGE }}/results-*.json
-            ${{ env.MATRIX_STAGE }}/prepared.json
-            ${{ env.MATRIX_STAGE }}/environment/Project.toml
-            ${{ env.MATRIX_STAGE }}/environment/LocalPreferences.toml
-            ${{ env.MATRIX_STAGE }}/environment/Manifest.toml
-            ${{ env.MATRIX_STAGE }}/logs/*.log
+            ${{ env.MATRIX_STAGE }}/diagnostics/**/public/**
+            ${{ env.MATRIX_STAGE }}/public/**
 
       - name: Inspect failed cell with actor-restricted SSH
         id: runner_debug
