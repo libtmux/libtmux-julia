@@ -9,6 +9,8 @@ mutable struct Observer
     invocation::String
     source_digest::String
     process_birth_id::String
+    phase::Union{String,Nothing}
+    console::Bool
     started::UInt64
     sequence::Int
     next_testset::Int
@@ -20,6 +22,18 @@ end
 const OBSERVER = Ref{Union{Nothing,Observer}}(nothing)
 const TESTSET_ALIAS = :__LibTmuxDiagnosticTestSet
 const PROFILE_SESSION = Ref{Any}(nothing)
+const CONSOLE_EVENTS = Set((
+    "process_start",
+    "process_finish",
+    "span_start",
+    "span_finish",
+    "testset_start",
+    "testset_body_end",
+    "testset_finalize",
+    "assertion_problem",
+    "profile_checkpoint",
+    "coverage_incomplete",
+))
 
 function start_profiles end
 function stop_profiles end
@@ -133,6 +147,32 @@ function emit(event; fields...)
             json_value(observer.io, record)
             write(observer.io, '\n')
             flush(observer.io)
+            if observer.console && event in CONSOLE_EVENTS
+                try
+                    packet = merge(record, Dict("ci_phase"=>observer.phase))
+                    buffer = IOBuffer()
+                    write(buffer, "\nLIBTMUX_TEST_PROGRESS ")
+                    json_value(buffer, packet)
+                    write(buffer, '\n')
+                    bytes = take!(buffer)
+                    lock(stdout)
+                    try
+                        write(stdout, bytes)
+                        flush(stdout)
+                    finally
+                        unlock(stdout)
+                    end
+                catch error
+                    push!(observer.faults, "console_write:"*string(nameof(typeof(error))))
+                    observer.console = false
+                    observer.coverage_complete = false
+                    emit(
+                        "coverage_incomplete";
+                        reason="live_output_failed",
+                        error_type=string(nameof(typeof(error))),
+                    )
+                end
+            end
             true
         catch error
             push!(observer.faults, string(nameof(typeof(error))))
@@ -156,6 +196,7 @@ function start_observer(
     phase=get(ENV, "LIBTMUX_CI_PHASE", nothing),
     profile_mode=get(ENV, "LIBTMUX_CI_PROFILE", "off"),
     profile_symbolization=get(ENV, "LIBTMUX_CI_PROFILE_SYMBOLIZATION", "native"),
+    console::Bool=false,
 )
     OBSERVER[] === nothing || error("an observer already owns this process")
     run_id = identity(invocation, "invocation")
@@ -176,6 +217,8 @@ function start_observer(
         run_id,
         String(source_digest),
         birth_id,
+        phase_id,
+        console,
         time_ns(),
         0,
         0,

@@ -9,6 +9,7 @@ import ctypes
 import errno
 from functools import cache
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -54,7 +55,24 @@ TEST_RUNNERS = frozenset(("test/runtests.jl", "packages/LibTmuxWorkspace/test/ru
 DIAGNOSTIC_BINDINGS = ("LIBTMUX_CI_DIAGNOSTICS_DIR", "LIBTMUX_CI_DIAGNOSTICS_ROOT",
                        "LIBTMUX_CI_INVOCATION", "LIBTMUX_CI_SOURCE_DIGEST", "LIBTMUX_CI_PHASE",
                        "LIBTMUX_CI_PROCESS_TOKEN", "LIBTMUX_CI_TEST_FILE_INVENTORY", "LIBTMUX_CI_STAGE",
-                       "LIBTMUX_CI_SOURCE_ROOT", "LIBTMUX_CI_CHILD_TOKEN", "LIBTMUX_CI_PARENT_PROCESS_BIRTH_ID")
+                       "LIBTMUX_CI_SOURCE_ROOT", "LIBTMUX_CI_CHILD_TOKEN", "LIBTMUX_CI_PARENT_PROCESS_BIRTH_ID",
+                       "LIBTMUX_CI_TEST_CONSOLE")
+
+
+DIAGNOSTIC_MODULES = {}
+DIAGNOSTIC_MODULE_LOCK = threading.Lock()
+
+
+def diagnostic_module(name):
+    with DIAGNOSTIC_MODULE_LOCK:
+        if name not in DIAGNOSTIC_MODULES:
+            path = Path(__file__).resolve().parent / (name.replace("_", "-") + ".py")
+            spec = importlib.util.spec_from_file_location("libtmux_" + name, path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            DIAGNOSTIC_MODULES[name] = module
+        return DIAGNOSTIC_MODULES[name]
 
 
 def remaining(deadline):
@@ -344,7 +362,7 @@ class PhaseGroup:
 
 
 def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, deadline=None,
-          cleanup_seconds=None, interrupt_grace=0.9, progress_path=None):
+          cleanup_seconds=None, interrupt_grace=0.9, progress_path=None, live_phases=()):
     """Wait on a child-exit event; retire only this run's process group."""
     if not callable(getattr(os, "waitid", None)) or not hasattr(os, "WNOWAIT"):
         raise RuntimeError("owned process retirement needs waitid/WNOWAIT; use Python 3.13+ on macOS")
@@ -362,7 +380,7 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
                   coverage_complete=False, test_inventory_complete=False,
                   diagnostics_status="UNAVAILABLE", test_process_birth_ids=[],
                   timings=dict(first_output_byte=dict(status="UNAVAILABLE",
-                      reason="stdout is written directly to the owned log without a first-byte observer")))
+                      reason="phase has not produced observed output")))
     for field, key in (("invocation", "LIBTMUX_CI_INVOCATION"), ("source_digest", "LIBTMUX_CI_SOURCE_DIGEST")):
         if key in env:
             answer[field] = env[key]
@@ -372,6 +390,8 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
     done = threading.Event()
     observed_exit = threading.Event()
     observer_errors = []
+    output_pump = None
+    checkpoint_publisher = None
     cleanup_deadline = None
     diagnostic_receipt = Path(progress_path) if progress_path is not None else None
 
@@ -404,12 +424,14 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
             raise ValueError("diagnostics directory escaped its owned matrix stage")
         directory.mkdir(parents=True, exist_ok=False)
         token = uuid.uuid4().hex
-        for binding in ("LIBTMUX_CI_CHILD_TOKEN", "LIBTMUX_CI_PARENT_PROCESS_BIRTH_ID"):
+        for binding in ("LIBTMUX_CI_CHILD_TOKEN", "LIBTMUX_CI_PARENT_PROCESS_BIRTH_ID", "LIBTMUX_CI_TEST_CONSOLE"):
             child_env.pop(binding, None)
         child_env.update(LIBTMUX_CI_DIAGNOSTICS_DIR=str(directory), LIBTMUX_CI_PHASE=name,
                          LIBTMUX_CI_PROCESS_TOKEN=token, LIBTMUX_CI_SOURCE_ROOT=str(ROOT))
         inventory = json.loads(child_env.get("LIBTMUX_CI_TEST_FILE_INVENTORY", "{}"))
         selected = inventory.get(name)
+        if selected is not None:
+            child_env["LIBTMUX_CI_TEST_CONSOLE"] = "1"
         answer.update(invocation=invocation, source_digest=digest,
                       diagnostics_directory=str(directory), diagnostics_status="PARTIAL" if selected is not None else "UNAVAILABLE",
                       diagnostics_scope="native_runner" if selected is not None else "process_receipt_only",
@@ -448,7 +470,7 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
         if owned_group.cancelled:
             answer["status"] = "CANCELLED"
             return answer
-        with log.open("wb") as output:
+        with log.open("wb", buffering=0) as output:
             if remaining(deadline) == 0:
                 answer["reason"] = "hard deadline expired before phase admission"
                 return answer
@@ -458,7 +480,7 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
                 return answer
             launch_started = time.monotonic()
             process = subprocess.Popen(argv, cwd=cwd, env=child_env, stdin=subprocess.DEVNULL,
-                                       stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
             answer["timings"].update(process_launch_seconds=time.monotonic() - start,
                                      popen_seconds=time.monotonic() - launch_started)
             answer["started"] = True
@@ -471,6 +493,21 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
             if answer.get("expected_test_file_inventory") is not None:
                 answer["test_process_birth_ids"] = [f"{answer['process_token']}-{process.pid}"]
             save_progress()
+            streams = diagnostic_module("ci_streams")
+            decoder = None
+            native = answer.get("expected_test_file_inventory") is not None
+            if native or live_phases:
+                decoder = streams.ProgressDecoder(
+                    artifacts=diagnostic_module("ci_artifacts"), source_roots=[(ROOT.resolve(), "repository")],
+                    invocation=answer.get("invocation"), source_digest=answer.get("source_digest"),
+                    phases=(name,) if native else live_phases,
+                    direct_pid=process.pid if native else None,
+                    direct_birth=answer["test_process_birth_ids"][0] if native else None)
+            if native:
+                checkpoint_publisher = CheckpointPublisher(answer, env=env, deadline=deadline)
+            output_pump = streams.PhaseLogPump(process.stdout, output.fileno(), started=start, decoder=decoder,
+                on_progress=checkpoint_publisher.notify if checkpoint_publisher is not None else None)
+            output_pump.start()
             waiter = threading.Thread(target=observe_exit, name=f"matrix-{name}", daemon=True)
             waiter.start()
             if soft_budget is not None:
@@ -484,7 +521,7 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
                             source_digest=answer.get("source_digest")))
                         output.write((record + "\n").encode())
                         output.flush()
-                        print(record, flush=True)
+                        streams.write_console((record + "\n").encode())
                         save_progress()
             timed_out = not done.wait(remaining(deadline))
             if timed_out:
@@ -541,6 +578,22 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
             cleanup_time()
             if not owned_group.close(cleanup_deadline):
                 unretired("owned escalation timer did not retire before cleanup expired")
+        if output_pump is not None:
+            cleanup_time()
+            answer["output_observer"] = output_pump.finish(cleanup_deadline)
+            answer["timings"]["first_output_byte"] = answer["output_observer"]["first_output_byte"]
+            if (answer["output_observer"]["status"] != "PASS"
+                    or answer["output_observer"]["rejected_records"]
+                    or answer["output_observer"]["oversized_progress_lines"]
+                    or answer["output_observer"]["partial_progress_lines"]):
+                answer.update(diagnostics_status="FAIL", output_observation_complete=False)
+        elif process is not None and process.stdout is not None:
+            process.stdout.close()
+        if checkpoint_publisher is not None:
+            cleanup_time()
+            answer["checkpoint_publication"] = checkpoint_publisher.finish(cleanup_deadline)
+            if answer["checkpoint_publication"]["status"] in ("FAIL", "UNRETIRED"):
+                answer.update(diagnostics_status="FAIL", checkpoint_publication_failed=True)
         answer["seconds"] = time.monotonic() - start
         answer["log"] = str(log)
         if soft_budget is not None and answer["seconds"] >= soft_budget:
@@ -555,6 +608,10 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
             answer["seconds"] = time.monotonic() - start
             if answer.get("observed_native_failure") is True and answer["status"] == "PASS":
                 answer.update(status="FAIL", reason="native assertions or errors failed")
+            if answer.get("output_observation_complete") is False:
+                answer["diagnostics_status"] = "FAIL"
+            if answer.get("checkpoint_publication_failed") is True:
+                answer["diagnostics_status"] = "FAIL"
             if answer["diagnostics_status"] == "FAIL" and answer["status"] == "PASS":
                 answer.update(status="FAIL", reason="diagnostic evidence could not be published")
             if soft_budget is not None and answer["seconds"] >= soft_budget:
@@ -605,6 +662,201 @@ temporary = directory / "diagnostics-proof.tmp"
 temporary.write_text(json.dumps(proof, indent=2) + "\n")
 temporary.replace(directory / "diagnostics-proof.json")
 '''
+
+
+CHECKPOINT_EXPORTER = r'''
+import importlib.util
+from pathlib import Path
+import sys
+helper, directory, invocation, digest, phase_name, direct_birth, stage, ordinal, sequence = sys.argv[1:]
+directory = Path(directory)
+spec = importlib.util.spec_from_file_location("libtmux_checkpoint_artifacts", helper)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+module.assemble_checkpoint([directory / f"events-{direct_birth}.jsonl"],
+    invocation=invocation, expected_source_digest=digest,
+    source_roots=[(Path(helper).resolve().parent.parent, "repository"),
+                  (Path(stage), "stage"), (directory, "diagnostics")],
+    output=directory / "checkpoints" / f"{int(ordinal):04d}-seq-{int(sequence)}" / "public",
+    admission_path=directory / "checkpoint-admission.json",
+    expected_phase=phase_name, expected_direct_birth=direct_birth,
+    snapshot_ordinal=int(ordinal), through_sequence=int(sequence))
+'''
+
+
+class CheckpointPublisher:
+    """Coalesce flushed native prefixes without blocking test-output admission."""
+
+    def __init__(self, answer, *, env, deadline):
+        self.directory = Path(answer["diagnostics_directory"])
+        self.invocation = answer["invocation"]
+        self.digest = answer["source_digest"]
+        self.name = answer["name"]
+        self.pid = answer["pid"]
+        self.birth = answer["test_process_birth_ids"][0]
+        self.stage = env.get("LIBTMUX_CI_STAGE", str(self.directory))
+        self.env = env.copy()
+        for key in DIAGNOSTIC_BINDINGS:
+            self.env.pop(key, None)
+        self.env.update(LIBTMUX_CI_INVOCATION=self.invocation, LIBTMUX_CI_SOURCE_DIGEST=self.digest)
+        admission = {key: answer[key] for key in
+                     ("name", "started", "pid", "process_token", "invocation", "source_digest")}
+        admission_raw = (json.dumps(admission) + "\n").encode()
+        self.admission_sha256 = hashlib.sha256(admission_raw).hexdigest()
+        (self.directory / "checkpoint-admission.json").write_bytes(admission_raw)
+        self.deadline = deadline
+        self.group = PhaseGroup()
+        self.condition = threading.Condition()
+        self.pending = None
+        self.closing = False
+        self.records = []
+        self.coalesced = 0
+        self.dropped = 0
+        self.active = None
+        self.error_type = None
+        self.thread = threading.Thread(target=self._run, name="matrix-checkpoint", daemon=True)
+        self.thread.start()
+
+    def notify(self, record):
+        if record["event"] not in ("process_start", "profile_checkpoint", "assertion_problem"):
+            return
+        with self.condition:
+            if self.closing or remaining(self.deadline) == 0:
+                self.dropped += 1
+                return
+            if self.pending is not None:
+                self.coalesced += 1
+            self.pending = record["seq"]
+            self.condition.notify()
+
+    def validate_publication(self, generation, ordinal, sequence):
+        public = generation / "public"
+        artifacts = diagnostic_module("ci_artifacts")
+        if public.is_symlink() or not public.is_dir():
+            raise ValueError("checkpoint public bundle is unavailable")
+        manifest_path = public / "manifest.json"
+        if (manifest_path.is_symlink() or not manifest_path.is_file()
+                or manifest_path.stat().st_size > 64 * 1024):
+            raise ValueError("checkpoint manifest is unavailable or exceeds its bound")
+        manifest_raw = manifest_path.read_bytes()
+        manifest = artifacts.parse_json(manifest_raw)
+        if (not isinstance(manifest, dict) or type(manifest.get("schema")) is not int
+                or manifest["schema"] != 1 or manifest.get("invocation") != self.invocation
+                or manifest.get("source_digest") != self.digest or not isinstance(manifest.get("files"), dict)
+                or not 1 <= len(manifest["files"]) <= 128
+                or not {"diagnostics.json", "summary.txt", "timings.csv", "junit.xml",
+                        "partial-progress.jsonl"}.issubset(manifest["files"])):
+            raise ValueError("checkpoint manifest differs from admission")
+        total = 0
+        report_raw = bytearray()
+        for name, expected in manifest["files"].items():
+            if (not isinstance(name, str) or not artifacts.IDENTIFIER.fullmatch(name)
+                    or name in (".", "..", "manifest.json") or not isinstance(expected, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", expected)):
+                raise ValueError("checkpoint manifest has an invalid file identity")
+            path = public / name
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 32 * 1024 * 1024:
+                raise ValueError("checkpoint file is missing, unsafe or exceeds its bound")
+            digest = hashlib.sha256()
+            with path.open("rb") as stream:
+                while chunk := stream.read(64 * 1024):
+                    total += len(chunk)
+                    if total > 128 * 1024 * 1024:
+                        raise ValueError("checkpoint bundle exceeds its validation bound")
+                    digest.update(chunk)
+                    if name == "diagnostics.json":
+                        report_raw.extend(chunk)
+                        if len(report_raw) > 8 * 1024 * 1024:
+                            raise ValueError("checkpoint report exceeds its validation bound")
+            if digest.hexdigest() != expected:
+                raise ValueError("checkpoint file hash differs from manifest")
+        report = artifacts.parse_json(report_raw)
+        binding = report.get("snapshot_binding", {}) if isinstance(report, dict) else {}
+        if (not isinstance(binding, dict) or report.get("invocation") != self.invocation
+                or report.get("source_digest") != self.digest or report.get("snapshot_kind") != "LIVE_PREFIX"
+                or report.get("export_status") != "PASS" or report.get("coverage_status") != "PARTIAL"
+                or report.get("test_status") not in ("UNKNOWN", "FAIL")
+                or binding.get("phase") != self.name or binding.get("process_birth_id") != self.birth
+                or any(type(binding.get(key)) is not int for key in ("pid", "snapshot_ordinal", "through_sequence"))
+                or binding.get("pid") != self.pid or binding.get("snapshot_ordinal") != ordinal
+                or binding.get("through_sequence") != sequence
+                or binding.get("admission_sha256") != self.admission_sha256):
+            raise ValueError("checkpoint report differs from the admitted prefix")
+        return dict(manifest_sha256=hashlib.sha256(manifest_raw).hexdigest(),
+                    validated_bytes=total, snapshot_binding=binding)
+
+    def _run(self):
+        try:
+            while True:
+                with self.condition:
+                    self.condition.wait_for(lambda: self.pending is not None or self.closing)
+                    if self.pending is None:
+                        return
+                    sequence, self.pending = self.pending, None
+                    if remaining(self.deadline) == 0:
+                        self.dropped += 1
+                        return
+                ordinal = len(self.records) + 1
+                generation = self.directory / "checkpoints" / f"{ordinal:04d}-seq-{sequence}"
+                generation.mkdir(parents=True, exist_ok=False)
+                self.active = dict(snapshot_ordinal=ordinal, through_sequence=sequence,
+                                   generation=str(generation))
+                argv = [sys.executable, "-c", CHECKPOINT_EXPORTER, str(ROOT / "dev/ci-artifacts.py"),
+                        str(self.directory), self.invocation, self.digest, self.name, self.birth,
+                        self.stage, str(ordinal), str(sequence)]
+                receipt = phase("checkpoint-exporter", argv, cwd=ROOT, env=self.env,
+                    log=generation / "export.log", budget=DIAGNOSTIC_FINALIZATION_SECONDS,
+                    deadline=self.deadline, group=self.group, progress_path=generation / "phase.json")
+                item = self.active | dict(exporter=receipt, artifact_directory=None, publication_status="FAIL")
+                self.records.append(item)
+                if receipt["status"] == "PASS" and receipt["direct_child_reaped"]:
+                    started = time.monotonic()
+                    item.update(self.validate_publication(generation, ordinal, sequence),
+                                artifact_directory=str(generation / "public"), publication_status="PASS")
+                    item["validation_seconds"] = time.monotonic() - started
+                self.active = None
+        except BaseException as error:
+            self.error_type = type(error).__name__
+            with self.condition:
+                self.closing = True
+                if self.pending is not None:
+                    self.dropped += 1
+                    self.pending = None
+            self.group.cancel()
+        finally:
+            if not self.group.close(time.monotonic() + CLEANUP_SECONDS):
+                self.error_type = self.error_type or "EscalationUnretired"
+
+    def finish(self, deadline):
+        with self.condition:
+            self.closing = True
+            self.condition.notify()
+        if remaining(self.deadline) == 0:
+            self.group.cancel()
+        self.thread.join(timeout=remaining(deadline))
+        retired = not self.thread.is_alive()
+        if not retired:
+            self.group.cancel()
+        failed = self.error_type is not None or any(
+            item["publication_status"] != "PASS" or not item["exporter"]["direct_child_reaped"]
+            for item in self.records)
+        reserved = []
+        captured = self.group.lock.acquire(timeout=remaining(deadline))
+        if captured:
+            try:
+                reserved = [dict(pid=process.pid, process_group=process.pid, identity_reserved=True,
+                    owned_identity=self.group.identities.get(process),
+                    descendant_inventory="UNPROVED") for process in self.group.processes]
+            finally:
+                self.group.lock.release()
+        return dict(status="UNRETIRED" if not retired else "FAIL" if failed else
+                    "PASS" if self.records else "UNAVAILABLE", publisher_retired=retired,
+                    snapshots=self.records.copy(), active_snapshot=self.active,
+                    coalesced_markers=self.coalesced, dropped_markers=self.dropped,
+                    reserved_exporters=reserved, reserved_exporter_snapshot="OBSERVED" if captured else "UNAVAILABLE_LOCK",
+                    error_type=self.error_type, admission_scope="admitted_direct_native_process_only",
+                    child_sampling_coverage="UNPROVED", completion_verdict="UNPROVED")
 
 
 def finalize_diagnostics(answer, *, env):
@@ -817,7 +1069,8 @@ def parallel_mid(commands, *, stage, env, result, save, deadline=None):
             completed.add(future)
             result["phases"].append(item)
             progress()
-            print(f"{item['status']} {item['name']} {item['seconds']:.3f}s", flush=True)
+            diagnostic_module("ci_streams").write_console(
+                f"{item['status']} {item['name']} {item['seconds']:.3f}s\n".encode())
     except BaseException:
         group.cancel()
         raise
@@ -896,7 +1149,8 @@ def parallel_outer(commands, *, stage, env, result, save, deadline=None):
                 completed.add(future)
                 finished.add(running.pop(future)[0])
                 result["phases"].append(item)
-                print(f"{item['status']} {item['name']} {item['seconds']:.3f}s", flush=True)
+                diagnostic_module("ci_streams").write_console(
+                    f"{item['status']} {item['name']} {item['seconds']:.3f}s\n".encode())
             admit()
         if pending and remaining(deadline) > 0:
             raise RuntimeError("outer phase dependencies cannot be satisfied")
@@ -1313,7 +1567,8 @@ def run_checks(args):
                     result["phases"].append(item)
                     result["active_phase"] = None
                     save()
-                    print(f"{item['status']} {name} {item['seconds']:.3f}s", flush=True)
+                    diagnostic_module("ci_streams").write_console(
+                        f"{item['status']} {name} {item['seconds']:.3f}s\n".encode())
                 result["status"] = "PASS" if result["phases"] and all(p["status"] == "PASS" for p in result["phases"]) else "FAIL"
                 if metadata["source_digest"] != source_digest():
                     result.update(status="STALE", reason="source changed during checks")
@@ -1334,7 +1589,8 @@ def run_checks(args):
                     result, result["planned_phases"]) else "INCOMPLETE"
                 save()
     save()
-    print(f"{result['status']} matrix result: {destination}")
+    diagnostic_module("ci_streams").write_console(
+        f"{result['status']} matrix result: {destination}\n".encode())
     return 0 if result["status"] == "PASS" else 1
 
 
@@ -1343,6 +1599,34 @@ def loop_result(name, seconds, args):
         args.tier in ("all", "mid", "outer") if name == "mid" else args.tier in ("all", "outer"))
     return dict(seconds=seconds, budget_seconds=LOOP_BUDGETS[name], complete=complete,
                 status="PASS" if seconds < LOOP_BUDGETS[name] else "FAIL")
+
+
+def finish_matrix_console(args, code):
+    """Record bounded console retirement once, at the whole worker's CLI boundary."""
+    started = time.monotonic()
+    delivery = diagnostic_module("ci_streams").finish_console(started + CLEANUP_SECONDS)
+    elapsed = time.monotonic() - started
+    destination = result_path(Path(args.stage).resolve(), args, worker=args.worker)
+    if destination.is_file() and not destination.is_symlink():
+        result = json.loads(destination.read_text())
+        result.update(console_delivery=delivery, console_finalization_seconds=elapsed)
+        if code != 0 and result.get("status") == "PASS":
+            result.update(status="FAIL", reason="matrix command failed before console retirement")
+        if delivery["status"] != "PASS" and result.get("status") == "PASS":
+            result.update(status="FAIL", reason="console delivery did not retire successfully")
+        for name, loop in result.get("loops", {}).items():
+            if isinstance(loop, dict) and loop.get("seconds") is not None:
+                loop["seconds"] += elapsed
+                if loop["seconds"] >= LOOP_BUDGETS[name]:
+                    loop["status"] = "FAIL"
+                    if result.get("status") == "PASS":
+                        result.update(status="FAIL", reason="aggregate whole-command loop budget exceeded")
+        temporary = destination.with_suffix(".tmp")
+        temporary.write_text(json.dumps(result, indent=2) + "\n")
+        temporary.replace(destination)
+        if result.get("status") != "PASS":
+            code = 1
+    return code if delivery["status"] == "PASS" else 1
 
 
 def receipt_issues(details):
@@ -1519,7 +1803,9 @@ def run(args):
                            log=stage / "logs" / f"whole-{batch}-t{args.threads}.log",
                            budget=budget, soft_budget=soft_budget, deadline=deadline,
                            cleanup_seconds=WORKER_RETIREMENT_SECONDS,
-                           interrupt_grace=WORKER_RETIREMENT_SECONDS)
+                           interrupt_grace=WORKER_RETIREMENT_SECONDS,
+                           live_phases=tuple(name for name in cancellation["planned_phases"]
+                                             if name in metadata.get("test_file_inventory", {})))
         except BaseException as error:
             result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
                           active_phase=batch, error_type=type(error).__name__,
@@ -1568,11 +1854,17 @@ def run(args):
                            if details else cancellation)
     result["supervisor_seconds"] = time.monotonic() - started
     save()
-    print(f"{result['status']} supervised matrix result: {destination}")
+    diagnostic_module("ci_streams").write_console(
+        f"{result['status']} supervised matrix result: {destination}\n".encode())
     return 0 if result["status"] == "PASS" else 1
 
 
 def self_test(julia=None):
+    diagnostic_module("ci_streams").self_test(diagnostic_module("ci_artifacts"), ROOT.resolve())
+    import unittest
+    console_tests = diagnostic_module("test_ci_streams")
+    controls = unittest.defaultTestLoader.loadTestsFromTestCase(console_tests.ConsoleControls)
+    assert unittest.TextTestRunner(verbosity=0).run(controls).wasSuccessful()
     if julia:
         script = PACKAGE_SPECIFICATIONS + r'''
 specifications = package_specifications(["Aqua=0.8.18", "JSON=1.9.0"])
@@ -1652,6 +1944,16 @@ println("PASS admitted version arguments construct real Pkg specifications")
                    cwd=base, env=os.environ.copy(), log=base / "literal.log", budget=0.9)
         assert ok["status"] == "PASS" and (base / "literal.log").read_text().strip() == literal
         assert not (base / "must-not-exist").exists()
+        binary = phase("binary-output", [sys.executable, "-c",
+            "import os;os.write(1,bytes([0,127,255,10]));os.write(2,b'stderr\\n')"],
+            cwd=base, env=os.environ.copy(), log=base / "binary.log", budget=0.9)
+        assert binary["status"] == "PASS" and binary["direct_child_reaped"]
+        assert (base / "binary.log").read_bytes() == bytes((0, 127, 255, 10)) + b"stderr\n"
+        assert binary["timings"]["first_output_byte"]["status"] == "OBSERVED"
+        empty = phase("empty-output", [sys.executable, "-c", "pass"], cwd=base,
+                      env=os.environ.copy(), log=base / "empty.log", budget=0.9)
+        assert empty["status"] == "PASS" and empty["output_observer"]["eof_observed"]
+        assert empty["timings"]["first_output_byte"]["reason"] == "empty output"
         diagnostic_env = os.environ.copy()
         diagnostic_env.update(LIBTMUX_CI_DIAGNOSTICS_ROOT=str(base / "diagnostics"),
                               LIBTMUX_CI_STAGE=str(base), LIBTMUX_CI_INVOCATION="control",
@@ -1701,7 +2003,9 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert bound["status"] == "PASS" and bound["invocation"] == "control"
         assert (base / "bound.log").read_text().splitlines() == [
             str(base.resolve() / "diagnostics" / "owned-diagnostics"), "owned-diagnostics"]
-        assert bound["timings"]["first_output_byte"]["status"] == "UNAVAILABLE"
+        assert bound["timings"]["first_output_byte"]["status"] == "OBSERVED"
+        assert bound["timings"]["first_output_byte"]["application_readiness"] == "UNPROVED"
+        assert bound["output_observer"]["reader_retired"] and bound["output_observer"]["eof_observed"]
         assert bound["timings"]["reaped_seconds"] >= bound["timings"]["exit_observed_seconds"]
         assert not bound["coverage_complete"] and not bound["test_inventory_complete"]
         public = Path(bound["diagnostics_directory"]) / "public"
@@ -1732,6 +2036,92 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert retirement["artifact_status"] == "PASS" and retirement["check_status"] == "FAIL"
         assert retirement["direct_child_reaped"] and retirement["exporter_exit_code"] == 0
         assert str(base) not in json.dumps(retirement)
+        prefix_program = r'''
+import json, os, pathlib, sys, threading
+directory = pathlib.Path(os.environ["LIBTMUX_CI_DIAGNOSTICS_DIR"])
+birth = f"{os.environ['LIBTMUX_CI_PROCESS_TOKEN']}-{os.getpid()}"
+with (directory / f"events-{birth}.jsonl").open("w") as journal:
+    sequence = 0
+    def emit(name, **fields):
+        global sequence
+        sequence += 1
+        record = dict(schema=2, event=name, seq=sequence, pid=os.getpid(), thread=1,
+            elapsed_ns=sequence, invocation=os.environ["LIBTMUX_CI_INVOCATION"],
+            source_digest=os.environ["LIBTMUX_CI_SOURCE_DIGEST"], process_birth_id=birth, **fields)
+        journal.write(json.dumps(record) + "\n")
+        journal.flush()
+        if name in ("process_start", "assertion_problem"):
+            print("LIBTMUX_TEST_PROGRESS " + json.dumps(record | dict(ci_phase=os.environ["LIBTMUX_CI_PHASE"])), flush=True)
+    emit("process_start", phase=os.environ["LIBTMUX_CI_PHASE"], julia="1.13.0", threads=1,
+         tool_identity_scope="synthetic Python protocol control; no Julia execution claim")
+    emit("file_inventory", files=["test/fixture.jl"], scope="declared_files_only")
+    emit("span_start", kind="file", label="test/fixture.jl")
+    emit("testset_start", testset_id=1, parent_id=None, description="intentional prefix failure", file="test/fixture.jl", line=5)
+    emit("assertion_problem", testset_id=1, result_type="Fail", problem_kind="test",
+         file="test/fixture.jl", line=5, detail_status="rendered", detail="expected 1; observed 2")
+    if sys.argv[1] == "hard":
+        threading.Event().wait()
+    emit("testset_body_end", testset_id=1, body_outcome="returned")
+    emit("testset_finalize", testset_id=1, body_outcome="returned", native_finish="threw", seconds=.001,
+         counts=dict(passed=1, failed=1, errored=0, broken=0))
+    emit("span_finish", kind="file", label="test/fixture.jl", outcome="returned", seconds=.002)
+    emit("process_finish", outcome="returned", coverage_complete=True)
+'''
+        prefix_env = diagnostic_env | {"LIBTMUX_CI_TEST_FILE_INVENTORY": json.dumps({
+            name: dict(source_digest="a" * 64, files=[dict(path="test/fixture.jl", sha256="b" * 64)])
+            for name in ("prefix-failure", "prefix-hard")})}
+        for name, mode in (("prefix-failure", "complete"), ("prefix-hard", "hard")):
+            prefix = phase(name, [sys.executable, "-c", prefix_program, mode], cwd=base,
+                           env=prefix_env, log=base / (name + ".log"), budget=0.6)
+            assert prefix["status"] == ("FAIL" if mode == "complete" else "TIMEOUT")
+            assert prefix["semantic_status"] == ("PASS" if mode == "complete" else "TIMEOUT")
+            assert prefix["direct_child_reaped"] and prefix["exit_observer_retired"]
+            assert prefix["checkpoint_publication"]["publisher_retired"]
+            snapshots = prefix["checkpoint_publication"]["snapshots"]
+            assert snapshots and all(item["exporter"]["direct_child_reaped"] for item in snapshots)
+            partial_reports = [json.loads((Path(item["artifact_directory"]) / "diagnostics.json").read_text())
+                               for item in snapshots if item["artifact_directory"]]
+            assert any(report["test_status"] == "FAIL" for report in partial_reports)
+            for report in partial_reports:
+                assert report["snapshot_kind"] == "LIVE_PREFIX" and report["coverage_status"] == "PARTIAL"
+                assert report["test_status"] != "PASS"
+            failure = next(report for report in partial_reports if report["test_status"] == "FAIL")
+            assert failure["processes"][0]["assertion_problems"][0]["detail"] == "expected 1; observed 2"
+        missing_directory = base / "missing-checkpoint"
+        missing_directory.mkdir()
+        missing_answer = dict(diagnostics_directory=str(missing_directory), invocation="control",
+            source_digest="a" * 64, name="missing-checkpoint", started=True, pid=os.getpid(),
+            process_token="missing-control", test_process_birth_ids=[f"missing-control-{os.getpid()}"])
+        with patch(__name__ + ".CHECKPOINT_EXPORTER", "pass"):
+            publisher = CheckpointPublisher(missing_answer, env=diagnostic_env, deadline=time.monotonic() + 0.9)
+            publisher.notify(dict(event="process_start", seq=1))
+            missing = publisher.finish(time.monotonic() + 0.9)
+        assert missing["status"] == "FAIL" and missing["publisher_retired"]
+        assert missing["snapshots"][0]["exporter"]["exit_code"] == 0
+        assert missing["snapshots"][0]["publication_status"] == "FAIL"
+        assert missing["snapshots"][0]["artifact_directory"] is None and not missing["reserved_exporters"]
+        incomplete = missing_directory / "incomplete-bundle"
+        public = incomplete / "public"
+        public.mkdir(parents=True)
+        report_raw = json.dumps(dict(invocation=publisher.invocation, source_digest=publisher.digest,
+            snapshot_kind="LIVE_PREFIX", export_status="PASS", coverage_status="PARTIAL", test_status="UNKNOWN",
+            snapshot_binding=dict(phase=publisher.name, process_birth_id=publisher.birth, pid=publisher.pid,
+                snapshot_ordinal=1, through_sequence=1, admission_sha256=publisher.admission_sha256))).encode()
+        (public / "diagnostics.json").write_bytes(report_raw)
+        (public / "manifest.json").write_text(json.dumps(dict(schema=1, invocation=publisher.invocation,
+            source_digest=publisher.digest, files={"diagnostics.json": hashlib.sha256(report_raw).hexdigest()})))
+        try:
+            publisher.validate_publication(incomplete, 1, 1)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("checkpoint accepted a bundle missing its required reports")
+        console_args = SimpleNamespace(stage=str(base), threads=1, tier="all", suite="all", worker=False)
+        console_result = result_path(base, console_args)
+        console_result.write_text(json.dumps(dict(status="PASS", loops={})))
+        with patch.object(diagnostic_module("ci_streams"), "finish_console", return_value=dict(status="PASS")):
+            assert finish_matrix_console(console_args, 1) == 1
+        assert json.loads(console_result.read_text())["status"] == "FAIL"
         preparation_stage = base / "preparation-only"
         with patch(__name__ + ".source_digest", return_value="a" * 64):
             assert finalize_artifacts(SimpleNamespace(stage=str(preparation_stage), threads=1,
@@ -2479,7 +2869,15 @@ def main():
         elif args.command == "finalize-artifacts":
             return finalize_artifacts(args)
         else:
-            return run_checks(args) if args.worker else run(args)
+            try:
+                code = run_checks(args) if args.worker else run(args)
+            except BaseException:
+                try:
+                    finish_matrix_console(args, 1)
+                except BaseException as error:
+                    sys.stderr.write(f"FAIL console retirement: {type(error).__name__}\n")
+                raise
+            return finish_matrix_console(args, code)
     except (ValueError, FileNotFoundError, subprocess.CalledProcessError) as error:
         print(f"NOT RUN: {error}", file=sys.stderr)
         return 2
