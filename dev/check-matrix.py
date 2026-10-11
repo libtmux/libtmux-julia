@@ -372,19 +372,39 @@ class PhaseGroup:
             if self.cancelled:
                 return
             self.cancelled = True
-        self.signal(signal.SIGINT)
-        # Retire nested groups before the supervisor's 900 ms worker grace ends.
-        self.escalation = threading.Timer(0.8, self.signal, (signal.SIGKILL,))
-        self.escalation.daemon = True
-        self.escalation.start()
+            for process in self.processes:
+                self._signal(process, signal.SIGINT)
+            # Retire nested groups before the supervisor's 900 ms worker grace ends.
+            escalation = None
+            try:
+                escalation = threading.Timer(0.8, self.signal, (signal.SIGKILL,))
+                escalation.daemon = True
+                escalation.start()
+            except BaseException:
+                if escalation is not None and escalation.ident is not None:
+                    self.escalation = escalation
+                for process in self.processes:
+                    self._signal(process, signal.SIGKILL)
+                raise
+            self.escalation = escalation
 
     def close(self, deadline=None):
         deadline = time.monotonic() + CLEANUP_SECONDS if deadline is None else deadline
-        if self.escalation is not None:
-            self.escalation.cancel()
-            self.escalation.join(timeout=remaining(deadline))
-            return not self.escalation.is_alive()
-        return True
+        if not self.lock.acquire(timeout=remaining(deadline)):
+            return False
+        try:
+            if self.cancelled:
+                for process in self.processes:
+                    self._signal(process, signal.SIGKILL)
+            escalation = self.escalation
+            if escalation is not None:
+                escalation.cancel()
+        finally:
+            self.lock.release()
+        if escalation is None:
+            return True
+        escalation.join(timeout=remaining(deadline))
+        return not escalation.is_alive()
 
 
 def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, deadline=None,
@@ -2042,7 +2062,121 @@ def self_test_profile_request_guard():
                 raise AssertionError("invalid private worker transport was accepted")
 
 
+def self_test_cancellation_timer():
+    """Close cannot join an unstarted timer or discard owned escalation."""
+    import selectors
+    from unittest.mock import patch
+    real_timer, real_signal = threading.Timer, signal_group
+    receipts = []
+    for mode in ("stalled-start", "failed-start", "failed-after-start"):
+        group = PhaseGroup()
+        child = subprocess.Popen([sys.executable, "-c",
+            "import signal,sys,threading;signal.signal(signal.SIGINT,signal.SIG_IGN);"
+            "sys.stdout.buffer.write(b'r');sys.stdout.buffer.flush();threading.Event().wait()"],
+            stdout=subprocess.PIPE, start_new_session=True)
+        group.add(child)
+        entered, release = threading.Event(), threading.Event()
+        timers, errors, delivered = [], [], []
+        cancellation = None
+        class ControlledTimer(real_timer):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                timers.append(self)
+
+            def start(self):
+                if mode == "failed-start":
+                    raise RuntimeError("controlled timer start failure")
+                if mode == "failed-after-start":
+                    super().start()
+                    raise RuntimeError("controlled timer start failure")
+                entered.set()
+                assert release.wait(0.9), "timer-start barrier was not released"
+                super().start()
+
+        def checked_signal(process, number):
+            assert group.lock.locked() and process in group.processes
+            assert process.returncode is None, "signalling lost its reserved identity"
+            delivered.append(number)
+            real_signal(process, number)
+
+        def cancel():
+            try:
+                group.cancel()
+            except BaseException as error:
+                errors.append(error)
+
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(child.stdout, selectors.EVENT_READ)
+                assert selector.select(0.9), "owned child did not acknowledge SIGINT-ignore"
+                assert child.stdout.read(1) == b"r"
+            child.stdout.close()
+            with patch.object(threading, "Timer", ControlledTimer), \
+                 patch(__name__ + ".signal_group", side_effect=checked_signal):
+                if mode == "stalled-start":
+                    cancellation = threading.Thread(target=cancel, daemon=True)
+                    cancellation.start()
+                    assert entered.wait(0.9), "cancel did not enter timer start"
+                    try:
+                        assert group.close(time.monotonic()) is False, \
+                            "stalled timer start hid incomplete ownership-lock admission"
+                        assert group.escalation is None, "cancel published an unstarted timer"
+                    finally:
+                        release.set()
+                    cancellation.join(timeout=0.9)
+                    assert not cancellation.is_alive() and not errors, errors
+                    assert group.escalation is timers[0] and timers[0].ident is not None
+                else:
+                    cancel()
+                    assert len(errors) == 1 and str(errors[0]) == "controlled timer start failure", errors
+                    if mode == "failed-start":
+                        assert group.escalation is None, "failed timer start remained joinable"
+                    else:
+                        assert group.escalation is timers[0] and timers[0].ident is not None
+                    assert signal.SIGKILL in delivered, "timer start failure lost owned SIGKILL"
+                assert group.close(time.monotonic() + 0.9), "started timer did not retire"
+                assert signal.SIGINT in delivered and signal.SIGKILL in delivered, \
+                    "close cancelled the only remaining SIGKILL"
+                receipts.append(dict(control=mode, status="PASS", pid=child.pid,
+                    signals=list(delivered), timers_retired=all(not timer.is_alive() for timer in timers)))
+        finally:
+            release.set()
+            if cancellation is not None:
+                cancellation.join(timeout=0.9)
+                assert not cancellation.is_alive(), "cancel survived its released start barrier"
+            for timer in timers:
+                timer.cancel()
+                if timer.ident is not None:
+                    timer.join(timeout=0.9)
+                    assert not timer.is_alive(), "owned escalation timer survived cleanup"
+            group.signal(signal.SIGKILL)
+            exited, observation = threading.Event(), {}
+            def observe_exit():
+                try:
+                    observation["exit"] = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+                except BaseException as error:
+                    observation["error"] = error
+                finally:
+                    exited.set()
+            waiter = threading.Thread(target=observe_exit, daemon=True)
+            waiter.start()
+            assert exited.wait(0.9), "owned child did not exit after SIGKILL"
+            waiter.join(timeout=0.9)
+            assert "error" not in observation, observation
+            assert observation["exit"].si_pid == child.pid
+            code = group.reap(child)
+            assert code == -signal.SIGKILL
+            if not child.stdout.closed:
+                child.stdout.close()
+            assert not group.processes and not group.identities
+            if receipts and receipts[-1]["control"] == mode:
+                receipts[-1].update(exit_code=code, exit_observed_before_reap=True,
+                                    direct_child_reaped=True, owned_identities_retired=True)
+    return receipts
+
+
 def self_test(julia=None):
+    self_test_cancellation_timer()
     self_test_profile_transport()
     self_test_profile_request_guard()
     diagnostic_module("ci_streams").self_test(diagnostic_module("ci_artifacts"), ROOT.resolve())
