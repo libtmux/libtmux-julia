@@ -16,6 +16,28 @@ struct ExpandedWindow
     focus::Bool
     panes::Tuple
 end
+@noinline Base.@nospecializeinfer function _runtime_expanded_window(
+    name,
+    index,
+    start_directory,
+    options,
+    options_after,
+    layout,
+    focus,
+    @nospecialize(panes::Tuple)
+)
+    ExpandedWindow(
+        name,
+        index,
+        start_directory,
+        options,
+        options_after,
+        layout,
+        focus,
+        panes,
+    )
+end
+
 """A workspace with explicit directories, environment values and ordered commands."""
 struct ExpandedWorkspace
     session_name::String
@@ -145,7 +167,7 @@ function expand(
     directory = _directory(config.start_directory, base, context, "\$.start_directory")
     environment = _expanded_pairs(config.environment, context, "\$.environment")
     windows = ExpandedWindow[]
-    for (wi, window) in enumerate(config.windows)
+    for (wi, window) in _RuntimeTuplePairs(config.windows)
         path = "\$.windows[$wi]"
         wname = _expanded_text(window.name, context, path * ".window_name")
         isempty(wname) &&
@@ -159,7 +181,7 @@ function expand(
         wenv = _expanded_pairs(window.environment, context, path * ".environment")
         suppress = something(window.suppress_history, config.suppress_history)
         panes = ExpandedPane[]
-        for (pi, pane) in enumerate(window.panes)
+        for (pi, pane) in _RuntimeTuplePairs(window.panes)
             ppath = path * ".panes[$pi]"
             pdir =
                 _directory(pane.start_directory, wdir, context, ppath * ".start_directory")
@@ -191,7 +213,7 @@ function expand(
         end
         push!(
             windows,
-            ExpandedWindow(
+            _runtime_expanded_window(
                 wname,
                 window.index,
                 wdir,
@@ -280,7 +302,7 @@ function plan(workspace::ExpandedWorkspace)
     for (name, value) in workspace.environment
         push!(steps, PlanStep(:set_environment, nothing, nothing, (; name, value)))
     end
-    for (wi, window) in enumerate(workspace.windows)
+    for (wi, window) in _RuntimeTuplePairs(workspace.windows)
         firstpane = first(window.panes)
         push!(
             steps,
@@ -303,7 +325,7 @@ function plan(workspace::ExpandedWorkspace)
                 PlanStep(:set_option, wi, nothing, (scope=:window, name=name, value=value)),
             )
         end
-        for (pi, pane) in enumerate(window.panes)
+        for (pi, pane) in _RuntimeTuplePairs(window.panes)
             if pi > 1
                 push!(
                     steps,
@@ -343,11 +365,11 @@ function plan(workspace::ExpandedWorkspace)
                 PlanStep(:set_option, wi, nothing, (scope=:window, name=name, value=value)),
             )
         end
-        for (pi, pane) in enumerate(window.panes)
+        for (pi, pane) in _RuntimeTuplePairs(window.panes)
             pane.focus && push!(steps, PlanStep(:focus_pane, wi, pi, (;)))
         end
     end
-    for (wi, window) in enumerate(workspace.windows)
+    for (wi, window) in _RuntimeTuplePairs(workspace.windows)
         window.focus && push!(steps, PlanStep(:focus_window, wi, nothing, (;)))
     end
     WorkspacePlan(workspace, Tuple(steps))
