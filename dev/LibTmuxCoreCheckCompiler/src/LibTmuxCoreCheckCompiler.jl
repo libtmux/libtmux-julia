@@ -41,6 +41,14 @@ LibTmuxTestDiagnostics.diagnostic_include(
     @__MODULE__,
     joinpath(SOURCE_ROOT, "test", "configuration.jl"),
 )
+LibTmuxTestDiagnostics.diagnostic_include(
+    @__MODULE__,
+    joinpath(SOURCE_ROOT, "test", "topology.jl"),
+)
+LibTmuxTestDiagnostics.diagnostic_include(
+    @__MODULE__,
+    joinpath(SOURCE_ROOT, "test", "formats.jl"),
+)
 const FILE_CHECKS = (
     model=(
         test_model_captured_identity_and_local_collections,
@@ -66,6 +74,14 @@ const FILE_CHECKS = (
         test_acquisition_captured_tmux_graph,
         test_acquisition_unavailable_fields,
         test_acquisition_real_tmux_format_row_encoding,
+    ),
+    topology=(
+        test_topology_exact_topology_references,
+        test_topology_pane_maintenance_preserves_process_and_explicit_link_identity,
+    ),
+    formats=(
+        test_formats_typed_format_observations,
+        test_formats_format_validation_before_io,
     ),
     configuration=(
         test_configuration_scopes_and_values,
