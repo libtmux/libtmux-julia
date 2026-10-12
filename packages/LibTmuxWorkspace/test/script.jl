@@ -111,7 +111,7 @@ function test_script_worker_interrupt_remains_cancellation()
         catch error
             error
         end
-        @test failure isa BeforeScriptError && failure.code == :cancelled
+        @test (failure isa BeforeScriptError ? failure.code : typeof(failure)) == :cancelled
         @test ccall(:kill, Cint, (Cint, Cint), failure.result.pid, 0) == -1
     end
 end
