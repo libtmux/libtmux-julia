@@ -1616,7 +1616,7 @@ A process-only phase preserves its command verdict without inventing test counts
 
 def snapshot_failed_phase_logs(phase, *, invocation, source_digest, stage, mapping,
                                snapshots, logs, issues, remaining_bytes):
-    """Freeze bounded original logs when the phase artifact could not publish."""
+    """Freeze bounded original logs when publication or finalizer retirement fails."""
     name, token, pid = phase.get("name"), phase.get("process_token"), phase.get("pid")
     if (phase.get("invocation") != invocation or phase.get("source_digest") != source_digest
             or phase.get("started") is not True or not isinstance(name, str) or not IDENTIFIER.fullmatch(name)
@@ -1756,8 +1756,11 @@ def assemble_job(*, invocation, expected_source_digest, source_roots, output, su
         logs, remaining_bytes = [], MAX_RECORD_BYTES
         stage = Path(supervisor_path).resolve().parent if raw_receipt is not None else None
         for record, phase in zip(bundles, (raw_receipt or {}).get("phases", [])):
-            if (record["artifact_status"] == "UNAVAILABLE" and phase.get("started") is True
-                    and "diagnostics_directory" in phase):
+            finalizer = phase.get("diagnostic_finalizer")
+            finalizer_failed = isinstance(finalizer, dict) and (
+                finalizer.get("status") != "PASS" or finalizer.get("direct_child_reaped") is not True)
+            if ((record["artifact_status"] == "UNAVAILABLE" or finalizer_failed)
+                    and phase.get("started") is True and "diagnostics_directory" in phase):
                 retained, remaining_bytes = snapshot_failed_phase_logs(phase, invocation=invocation,
                     source_digest=expected_source_digest, stage=stage, mapping=mapping,
                     snapshots=Path(temporary), logs=logs, issues=issues, remaining_bytes=remaining_bytes)
@@ -2506,6 +2509,24 @@ def self_test():
         stale = job_run("job-missing-bundle-stale-finalizer", failed_receipt | dict(
             phases=[failed_phase | dict(diagnostic_finalizer=decoder | dict(invocation="old")), version_phase]))
         assert stale["check_status"] == "FAIL" and stale["export_status"] == "FAIL" and len(stale["original_logs"]) == 1
+        published = failed_directory / "public"
+        published.mkdir()
+        for path in (linked / "public").iterdir():
+            (published / path.name).write_bytes(path.read_bytes())
+        published_hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in published.iterdir()}
+        decoder_log.write_text("KeyboardInterrupt at " + str(root / "exporter.py") + ":7\n/private/synthetic-source/secret.jl\n")
+        preserved = job_run("job-published-bundle-failed-finalizer", failed_receipt)
+        assert preserved["check_status"] == preserved["test_status"] == "FAIL" and preserved["assertion_counts"] is None
+        assert preserved["export_status"] == "PASS" and preserved["phase_bundles"][0]["artifact_status"] == "PASS"
+        assert preserved["phase_bundles"][0]["semantic_status"] == "PASS" and preserved["phase_bundles"][0]["exit_code"] == 0
+        assert len(preserved["original_logs"]) == 2, "published phase bundle hid the failed finalizer's original log"
+        snapshots = preserved["phase_bundles"][0]["original_log_snapshots"]
+        assert [item["log_role"] for item in snapshots] == ["phase_command", "diagnostic_finalizer"]
+        preserved_output = root / "job-published-bundle-failed-finalizer"
+        assert "KeyboardInterrupt" in (preserved_output / snapshots[1]["file"]).read_text()
+        assert "secret.jl" not in (preserved_output / snapshots[1]["file"]).read_text()
+        assert all(not unsafe_export(path) for path in preserved_output.iterdir())
+        assert {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in published.iterdir()} == published_hashes
         missing_command = job_receipt | dict(status="PASS", loops={}, required_phases=["missing"], phases=[])
         job = job_run("job-missing-required-command", missing_command)
         assert job["export_status"] == "FAIL" and job["check_status"] == "FAIL"
