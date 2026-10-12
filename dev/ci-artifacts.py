@@ -1112,6 +1112,27 @@ def sanitized_original_text(text, mapping, *, issues=None):
     return "\n".join(output)
 
 
+def json_privacy_view(raw):
+    """Remove only UInt64 arrays from the temporary JSON privacy-read view."""
+    return JSON_PRIVACY_TOKENS.sub(lambda match: match[0] if match["quoted"] is not None else "[]", raw)
+
+
+def _json_privacy_tokens():
+    bound = "18446744073709551615"
+    words = ["0", "[1-9][0-9]{0,18}"]
+    for index, digit in enumerate(bound):
+        lower, upper = (1 if index == 0 else 0), int(digit) - 1
+        if lower <= upper:
+            words.append(bound[:index] + f"[{lower}-{upper}]" + f"[0-9]{{{len(bound) - index - 1}}}")
+    words.append(bound)
+    word = "(?:" + "|".join(words) + r")(?=[ \t\r\n,\]])"
+    array = r"\[[ \t\r\n]*+(?:" + word + r"[ \t\r\n]*+(?:,[ \t\r\n]*+" + word + r"[ \t\r\n]*+)*+)?\]"
+    return re.compile(r'(?P<quoted>"(?:[^"\\]++|\\.)*+")|' + array, re.DOTALL)
+
+
+JSON_PRIVACY_TOKENS = _json_privacy_tokens()
+
+
 def export_strings(path):
     """Inspect decoded values so XML syntax and JSON escapes cannot hide paths."""
     def strings(value):
@@ -1134,10 +1155,10 @@ def export_strings(path):
                 elif type(item) is list or type(item) is dict:
                     yield from strings(item)
     if path.suffix == ".json":
-        yield from strings(json.loads(path.read_text()))
+        yield from strings(parse_json(json_privacy_view(path.read_text())))
     elif path.suffix == ".jsonl":
         for line in path.read_text().splitlines():
-            yield from strings(json.loads(line))
+            yield from strings(parse_json(line))
     elif path.suffix == ".xml":
         for node in ET.fromstring(path.read_text()).iter():
             yield from node.attrib.values()
@@ -1814,6 +1835,31 @@ def self_test():
         assert mapping.text(r"prefixC:\private\test.jl") == "prefixredacted-path"
         assert mapping.text(r"source:\\private\server\test.jl") == "source:redacted-path"
         assert mapping.text("bad\ufffe\uffff") == "bad??"
+
+        privacy_profile = root / "privacy-profile.json"
+        privacy_profile.write_text('{"data":[0,18446744073709551615],"detail":"literal [1,2]"}')
+        loads = json.loads
+        def reject_sample_materialization(raw, **options):
+            if "18446744073709551615" in raw:
+                raise ValueError("privacy scan decoded numeric sample words")
+            return loads(raw, **options)
+        json.loads = reject_sample_materialization
+        try:
+            assert not unsafe_export(privacy_profile)
+        finally:
+            json.loads = loads
+        assert "literal [1,2]" in list(export_strings(privacy_profile))
+        for raw in (
+            r'{"data":[1],"nested":{"\u002ftmp\u002fprivate":0}}',
+            r'{"data":[1,{"nested":[2,"\u002ftmp\u002fprivate"]}]}',
+            '{"detail":"/tmp/private","detail":0}',
+            r'{"da\u0074a":[1],"data":[2]}',
+            '{"data":[01]}', '{"data":[1 2]}', '{"data":[NaN]}',
+        ):
+            privacy_profile.write_text(raw)
+            assert unsafe_export(privacy_profile)
+        for raw in ("[1.0]", "[true]", "[null]", "[-1]", "[18446744073709551616]"):
+            assert json_privacy_view(raw) == raw
 
         owned_root = Path.home() / ".synthetic-owned-root"
         alias = "~/.synthetic-owned-root"
