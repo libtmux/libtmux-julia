@@ -107,6 +107,26 @@ jobs:
           --expected-tmux '${{ matrix.tmux }}'
           --expected-os '${{ matrix.os }}'
           --expected-arch '${{ matrix.arch }}'
+      - name: Verify native documentation export
+        if: matrix.os == 'Linux' && matrix.julia == '1.13.0' && (matrix.suite == 'all' || matrix.suite == 'delivery')
+        env:
+          JULIA_DEPOT_PATH: ${{ runner.temp }}/libtmux-julia-matrix/depot
+          JULIA_LOAD_PATH: '@:@stdlib'
+          JULIA_PKG_OFFLINE: 'true'
+          JULIA_PKG_PRECOMPILE_AUTO: '0'
+        run: |
+          julia --startup-file=no --threads='${{ matrix.threads }}' \
+            --project="$MATRIX_STAGE/environment" docs/export-api.jl
+          julia --startup-file=no --threads='${{ matrix.threads }}' \
+            --project="$MATRIX_STAGE/environment" docs/test-export-api.jl
+      - name: Preserve native documentation artifact
+        if: matrix.os == 'Linux' && matrix.julia == '1.13.0' && (matrix.suite == 'all' || matrix.suite == 'delivery')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: julia-docs-api
+          path: docs/build/api.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Preserve cell evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

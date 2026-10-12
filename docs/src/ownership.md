@@ -11,7 +11,7 @@
 | Snapshot/selection | Caller references | Ordinary Julia lifetime |
 
 Remote functions return normal results. For concurrency, call them from
-`Threads.@spawn` and fetch their results. Cancellation wakes owned work
+[`Threads.@spawn`](https://docs.julialang.org/en/v1/base/multi-threading/#Base.Threads.%40spawn) and fetch their results. Cancellation wakes owned work
 through [`CancellationToken`](@ref); it does not undo commands already sent.
 Before submission, a cancelled request sends nothing. After submission, its
 effects can be uncertain and a control ledger slot remains occupied until
@@ -138,4 +138,4 @@ Markdown.parse("```julia\n" * read(joinpath(@__DIR__, "..", "..", "examples", "c
 Close failure remains an error. A dead primary control client can prevent
 proof of remote retirement even after local clients and tasks have stopped.
 When a callback and cleanup both fail, inspect both entries in the resulting
-`CompositeException`.
+[`CompositeException`](https://docs.julialang.org/en/v1/base/base/#Base.CompositeException).

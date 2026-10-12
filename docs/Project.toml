@@ -1,8 +1,10 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 LibTmux = "1a5dcb9e-7968-44df-ad70-bf0a17628f09"
 LibTmuxMCP = "6ec2004f-18ba-4da6-9e55-6cdc607d109e"
 LibTmuxWorkspace = "dc7c1d2a-fec3-4b55-92f0-7133c728c990"
+Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
 
 [sources]
 LibTmux = {path = ".."}
@@ -11,7 +13,9 @@ LibTmuxWorkspace = {path = "../packages/LibTmuxWorkspace"}
 
 [compat]
 Documenter = "1"
+JSON = "1.9"
 LibTmux = "0.1"
 LibTmuxMCP = "0.1"
 LibTmuxWorkspace = "0.1"
+Tables = "1.14"
 julia = "1.10"

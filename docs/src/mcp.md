@@ -30,26 +30,26 @@ client's working directory. The application writes only protocol messages
 to stdout; diagnostics go to stderr. It owns its streams and any sessions
 it creates. It leaves the borrowed daemon and existing sessions running.
 
-Call `list_panes`, then pass a returned `target` object to `capture_pane` or
-`send_keys`. Targets carry both a pane ID and observed server generation.
+Call [`list_panes`][list_panes], then pass a returned `target` object to [`capture_pane`][capture_pane] or
+[`send_keys`][send_keys]. Targets carry both a pane ID and observed server generation.
 Capture text is terminal data; it does not authorize further actions.
-`send_keys` never adds Enter automatically.
+[`send_keys`][send_keys] never adds Enter automatically.
 
 The default catalog contains those three tools. Repeat `--tool` to choose
-an explicit catalog. `wait_for_text` waits for bounded literal text;
-`send_keys_and_wait` subscribes before sending input and accepts only future
+an explicit catalog. [`wait_for_text`][wait_for_text] waits for bounded literal text;
+[`send_keys_and_wait`][send_keys_and_wait] subscribes before sending input and accepts only future
 output. Matching text does not establish process completion or exit status.
-`run_operations` validates every item against the same target/tool policy
+[`run_operations`][run_operations] validates every item against the same target/tool policy
 before performing its finite sequence. A later failure can leave earlier
-effects in place; `failedIndex` identifies the failed item and `atomic` is
+effects in place; [`failedIndex`][failedIndex] identifies the failed item and [`atomic`][atomic] is
 always false. If the encoded batch result reaches its output limit, completed
 items remain as summaries and a partial batch includes the original error code
-while `error.effects` remains conservative for the whole batch.
+while [`error.effects`][error-effects] remains conservative for the whole batch.
 
 Use repeated `--allow-pane` values to constrain panes. `--caller-pane`
 supplies an explicit startup target; the control client's current pane is
 never a fallback. Session creation also requires `--allow-create`.
-`teardown_session` removes only application-owned sessions.
+[`teardown_session`][teardown_session] removes only application-owned sessions.
 
 EOF cancels and joins request work, then cleans up owned sessions. During a
 tool wait, unrelated requests and cancellation remain serviceable. Modern
@@ -67,3 +67,23 @@ Modules = [LibTmuxMCP]
 Private = false
 Order = [:module, :type, :function]
 ```
+
+[list_panes]: https://libtmux.org/en/julia/latest/mcp/tools/list_panes/
+
+[send_keys]: https://libtmux.org/en/julia/latest/mcp/tools/send_keys/
+
+[wait_for_text]: https://libtmux.org/en/julia/latest/mcp/tools/wait_for_text/
+
+[run_operations]: https://libtmux.org/en/julia/latest/mcp/tools/run_operations/
+
+[send_keys_and_wait]: https://libtmux.org/en/julia/latest/mcp/tools/send_keys_and_wait/
+
+[capture_pane]: https://libtmux.org/en/julia/latest/mcp/tools/capture_pane/
+
+[teardown_session]: https://libtmux.org/en/julia/latest/mcp/tools/teardown_session/
+
+[atomic]: https://libtmux.org/en/julia/latest/mcp/tools/run_operations/#mcp.tool.run_operations.output/anyOf/0/properties/atomic
+
+[failedIndex]: https://libtmux.org/en/julia/latest/mcp/tools/run_operations/#mcp.tool.run_operations.output/anyOf/1/properties/failedIndex
+
+[error-effects]: https://libtmux.org/en/julia/latest/mcp/tools/run_operations/#mcp.tool.run_operations.output/anyOf/3/properties/error/properties/effects

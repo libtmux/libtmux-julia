@@ -1,0 +1,66 @@
+name: docs-preview-cleanup
+
+# The default-branch workflow reads only the numeric PR from the event.
+# No pull request content is checked out or executed.
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  id-token: write
+
+concurrency:
+  group: docs-deploy-${{ github.repository }}
+  queue: max
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    environment: docs-preview-cleanup
+    steps:
+      # Closed events can be rerun after a PR reopens. Read current state
+      # before assuming the cleanup role or deleting any object.
+      - id: current
+        name: Check current cleanup eligibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          echo 'should_cleanup=false' >> "$GITHUB_OUTPUT"
+          [[ "$PR" =~ ^[1-9][0-9]*$ ]] || {
+            echo 'pull request number must be numeric' >&2
+            exit 1
+          }
+          response=$(gh api --method GET "repos/$REPOSITORY/pulls/$PR")
+          jq -e --argjson number "$PR" '
+            type == "object" and .number == $number and
+            (.state == "open" or .state == "closed")
+          ' <<< "$response" > /dev/null || {
+            echo 'invalid current pull request response' >&2
+            exit 1
+          }
+          eligible=$(jq -r '.state == "closed"' <<< "$response")
+          echo "should_cleanup=$eligible" >> "$GITHUB_OUTPUT"
+
+      - if: steps.current.outputs.should_cleanup == 'true'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.LIBTMUX_DOCS_PREVIEW_CLEANUP_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Delete this Julia preview
+        if: steps.current.outputs.should_cleanup == 'true'
+        env:
+          BUCKET: ${{ secrets.LIBTMUX_DOCS_BUCKET }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          [[ "$PR" =~ ^[0-9]+$ ]] || {
+            echo 'pull request number must be numeric' >&2
+            exit 1
+          }
+          aws s3 rm "s3://$BUCKET/en/julia/pr-$PR/" --recursive

@@ -1,0 +1,99 @@
+name: docs
+
+# Publishes this port's documentation to libtmux.org: trunk as
+# /en/julia/latest/, and each `v*` release tag as its own version plus an
+# alias, `next` for a prerelease and `stable` (the default) for a release.
+#
+# libtmux/docs builds and publishes the tree, through two reusable workflows
+# pinned to one commit: port-docs.yml decides which versions an event builds
+# and builds each from this repository's source, and reusable-deploy.yml
+# publishes them. Bump both pins together.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      source-ref:
+        description: Exact source ref to build
+        required: true
+        default: master
+      version:
+        description: URL version slug
+        required: true
+        default: latest
+      version-kind:
+        description: Version policy
+        required: true
+        type: choice
+        options: [trunk, tag, alias]
+        default: trunk
+      is-default:
+        description: Make this version canonical
+        required: true
+        type: boolean
+        default: false
+      resolves-to:
+        description: Immutable target for an alias
+        required: false
+        default: ''
+      publish:
+        description: Publish after the exact build passes
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Keep publication and close cleanup in one queue. The lock covers builds
+# too, so a close event cannot delete a preview before its build publishes.
+concurrency:
+  group: docs-deploy-${{ github.repository }}
+  queue: max
+
+jobs:
+  # The shared identity uses github.sha, the tested PR merge commit. Only
+  # same-repository PRs publish; fork PRs run the build without publishing.
+  build:
+    uses: libtmux/docs/.github/workflows/port-docs.yml@98c203127ac29f9021fc066a4dd4aa7a07fc3a28
+    with:
+      port: julia
+      tag-prefix: ''
+      publish-previews: true
+      source-ref: ${{ inputs.source-ref }}
+      version: ${{ inputs.version }}
+      version-kind: ${{ inputs.version-kind }}
+      is-default: ${{ inputs.is-default == true }}
+      resolves-to: ${{ inputs.resolves-to }}
+      publish: ${{ inputs.publish == true }}
+
+  publish:
+    needs: build
+    if: needs.build.outputs.should-publish == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.build.outputs.matrix) }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: libtmux/docs/.github/workflows/reusable-deploy.yml@98c203127ac29f9021fc066a4dd4aa7a07fc3a28
+    with:
+      # Unprefixed by locale: reusable-deploy prepends <locale>/ itself when
+      # `port` is set, so this becomes en/julia/<version>.
+      path-prefix: julia/${{ matrix.version }}
+      artifact: docs-julia-${{ matrix.version }}
+      version-kind: ${{ matrix.kind }}
+      require-current-pr: true
+      port: julia
+      version: ${{ matrix.version }}
+      label: ${{ matrix.version }}
+      is-default: ${{ matrix.isDefault }}
+      resolves-to: ${{ matrix.resolvesTo }}
+      environment: ${{ matrix.kind == 'pr' && 'docs-preview' || 'docs' }}
+    secrets:
+      role-arn: ${{ secrets[matrix.kind == 'pr' && 'LIBTMUX_DOCS_PREVIEW_ROLE_ARN' || 'LIBTMUX_DOCS_ROLE_ARN'] }}
+      bucket: ${{ secrets.LIBTMUX_DOCS_BUCKET }}
+      distribution: ${{ secrets.LIBTMUX_DOCS_DISTRIBUTION }}

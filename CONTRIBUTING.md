@@ -124,6 +124,76 @@ Check the staged diff before committing:
 $ git diff --cached --check
 ```
 
+## Documentation API export
+
+The documentation environment also exports the API for the shared website.
+Prepare it with the manual setup command below, then run:
+
+```console
+$ julia \
+    --startup-file=no \
+    --project=docs \
+    docs/export-api.jl
+```
+
+The artifact at `docs/build/api.json` records public and qualified bindings,
+constructors, fields, methods, keyword defaults, type parameters, docstrings
+and source locations. It combines Julia syntax with native method and
+documentation metadata, including declarations generated through `@eval`.
+Methods extending Base and dependency APIs remain separate from package
+bindings. The exporter captures the base inventory before loading optional
+JSON and Tables extensions and identifies their added methods.
+
+The selected environment determines the LibTmux checkout. The artifact
+records that checkout's revision and source hashes independently of the
+exporter's hash and tool versions. Uncommitted API sources or source changes
+during extraction fail the export. An optional positional argument selects
+another output path.
+
+Check the artifact against native inventories and the generated-method,
+keyword-default, source and optional-extension regressions:
+
+```console
+$ julia \
+    --startup-file=no \
+    --project=docs \
+    docs/test-export-api.jl
+```
+
+These checks verify extraction. They do not execute the documented programs
+or establish website rendering or publication.
+
+The Linux Julia 1.13 matrix job runs both commands with its prepared tool
+environment, offline, and saves the `julia-docs-api` CI artifact. It reuses
+the existing dependency preparation. Website previews and publication use
+the shared documentation workflow and record their own source and tooling
+provenance.
+
+## Website publication
+
+The [docs workflow](.github/workflows/docs.yml) builds the selected source with the
+shared libtmux.org workflow. Keep its build and publisher references pinned
+to the same full commit in `libtmux/docs`. The native exporter comes from the
+calling workflow's tested commit; its provenance stays separate from the
+selected source revision.
+
+A `master` push publishes `/en/julia/latest/`. A `v*` release tag
+publishes its version plus `next` for prereleases or `stable` for releases.
+Same-repository pull requests publish `/en/julia/pr-N/` from the tested
+merge commit. Before publishing, the workflow checks that the PR is still
+open in this repository and its current head and merge match the tested
+revision. Fork pull requests build without publishing. Closing a pull
+request deletes only its preview prefix, after confirming it is still
+closed. Cleanup shares the build and publication queue; rerunning an old
+closed event cannot delete a reopened PR's preview.
+
+To rebuild an existing revision, dispatch `docs.yml` from `master`. Set
+`source-ref`, `version`, `version-kind`, `is-default`, `resolves-to`, and
+`publish`. Use `resolves-to` only for an alias. Leave `publish` false for a
+build-only check. An immutable version must still identify its original
+source and package version. Inspect the build provenance and hosted page
+after publishing; a successful native export alone is not publication proof.
+
 ## Manual and examples
 
 Prepare the manual environment outside timed checks:
