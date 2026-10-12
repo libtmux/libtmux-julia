@@ -1,7 +1,17 @@
 module LibTmuxConsumerDiagnostics
 
 using SHA
-include("LibTmuxTestDiagnostics.jl")
+const DIAGNOSTICS_PATH = Base.find_package("LibTmuxTestDiagnostics")
+if DIAGNOSTICS_PATH !== nothing &&
+   realpath(DIAGNOSTICS_PATH) == realpath(joinpath(@__DIR__, "LibTmuxTestDiagnostics.jl"))
+    import LibTmuxTestDiagnostics
+    loaded_path = pathof(LibTmuxTestDiagnostics)
+    loaded_path !== nothing &&
+    realpath(loaded_path) == realpath(joinpath(@__DIR__, "LibTmuxTestDiagnostics.jl")) ||
+        error("cached diagnostic helper differs from the owned source")
+else
+    include("LibTmuxTestDiagnostics.jl")
+end
 const Diagnostics = LibTmuxTestDiagnostics
 const NEXT_CHILD = Threads.Atomic{Int}(0)
 

@@ -775,4 +775,12 @@ function observe_span(f::Function, kind::AbstractString, label::AbstractString)
     end
 end
 
+# Cache serialization only; no sampler, observer or process runs here.
+if ccall(:jl_generating_output, Cint, ()) == 1
+    load_profiling()
+    precompile(Tuple{typeof(json_value),ProfileBuffer,Vector{UInt}})
+    precompile(Tuple{typeof(json_value),ProfileBuffer,UInt})
+    precompile(Tuple{typeof(json_value),ProfileBuffer,Dict{String,Any}})
+end
+
 end
