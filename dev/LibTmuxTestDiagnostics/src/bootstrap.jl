@@ -3,12 +3,50 @@ module LibTmuxChildDiagnostics
 const ENTERED_NS = time_ns()
 const MODE = get(ENV, "LIBTMUX_CI_PROFILE", "off")
 const HELPER_IMPORT_NS = time_ns()
-const DIAGNOSTICS = if MODE == "off"
-    nothing
-else
-    include(joinpath(@__DIR__, "LibTmuxTestDiagnostics.jl"))
-    LibTmuxTestDiagnostics
+const HELPER_SOURCE = joinpath(@__DIR__, "LibTmuxTestDiagnostics.jl")
+const HELPER_LOADING = Ref("disabled")
+const HELPER_CACHE_USED = Ref(false)
+if MODE != "off"
+    project = get(ENV, "LIBTMUX_CI_CHILD_HELPER_PROJECT", "")
+    depot = get(ENV, "LIBTMUX_CI_CHILD_HELPER_DEPOT", "")
+    selected = Ref(false)
+    if !isempty(project) && !isempty(depot)
+        saved_load_path = copy(LOAD_PATH)
+        saved_depot_path = copy(DEPOT_PATH)
+        try
+            pushfirst!(LOAD_PATH, project)
+            pushfirst!(DEPOT_PATH, depot)
+            resolved = Base.find_package("LibTmuxTestDiagnostics")
+            package = Base.identify_package("LibTmuxTestDiagnostics")
+            if resolved !== nothing &&
+               package !== nothing &&
+               realpath(resolved) == realpath(HELPER_SOURCE) &&
+               Base.isprecompiled(package)
+                import LibTmuxTestDiagnostics
+                loaded = pathof(LibTmuxTestDiagnostics)
+                loaded !== nothing &&
+                realpath(loaded) == realpath(HELPER_SOURCE) &&
+                Base.PkgId(LibTmuxTestDiagnostics) == package ||
+                    error("cached child diagnostic helper differs from the owned source")
+                origin = get(Base.pkgorigins, package, nothing)
+                HELPER_CACHE_USED[] = origin !== nothing && origin.cachepath !== nothing
+                selected[] = true
+                HELPER_LOADING[] = "owned_package_loader"
+            end
+        finally
+            empty!(LOAD_PATH)
+            append!(LOAD_PATH, saved_load_path)
+            empty!(DEPOT_PATH)
+            append!(DEPOT_PATH, saved_depot_path)
+        end
+    end
+    if !selected[]
+        include(HELPER_SOURCE)
+        HELPER_LOADING[] = "owned_source_include"
+        HELPER_CACHE_USED[] = false
+    end
 end
+const DIAGNOSTICS = MODE == "off" ? nothing : LibTmuxTestDiagnostics
 const HELPER_IMPORTED_NS = time_ns()
 const APPLICATION_STARTED_NS = Ref{UInt64}(0)
 
@@ -116,6 +154,9 @@ function start_child()
         first_byte_seconds=nothing,
         first_byte_status="requires_parent_protocol_observation",
         application_subphase_status="unavailable_without_application_landmarks",
+        helper_loading=HELPER_LOADING[],
+        helper_cache_origin_observed=HELPER_CACHE_USED[],
+        helper_cache_scope="Julia_loader_cache_origin; cold_work_requires_paired_measurement",
     )
     APPLICATION_STARTED_NS[] = time_ns()
     diagnostics.emit("span_start"; kind="application", label="child entry to exit hook")
