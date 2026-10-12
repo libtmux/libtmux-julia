@@ -47,10 +47,24 @@ function document_fences(text, path)
 end
 
 const DOC_SNIPPETS = Dict(
+    ("WRITING.md", 1) => (
+        kind=:illustrative,
+        gate=:none,
+        fingerprint="627ab0c5444ef39183f823b88c3de81d322d948e198a12061333f695a50c13db",
+        source="",
+        note="Writing guide: the over-width line to avoid",
+    ),
+    ("WRITING.md", 2) => (
+        kind=:illustrative,
+        gate=:none,
+        fingerprint="e1961b974f1e084e53c8ceab04e56041d2b84f63ef624828acdc876c7ea109f8",
+        source="",
+        note="Writing guide: the named-value rewrite",
+    ),
     ("README.md", 1) => (
         kind=:executable,
         gate=:context,
-        fingerprint="2865ecf6edfbc339066e8bcf889af438c96d7eb36d61a0d971a5a1a095708d45",
+        fingerprint="2c6440bbf88e40247cefa7e4085b8831a475950bf67b97b2777c6f31a7269d11",
         source="",
         note="Private server, captured screen and retained snapshot",
     ),
@@ -92,49 +106,49 @@ const DOC_SNIPPETS = Dict(
     ("docs/projections.md", 2) => (
         kind=:executable,
         gate=:context,
-        fingerprint="b88c4bc32b35365f8f073940716b34bdeee28876ec6a1e5a1b2d64b0e31ddfd1",
+        fingerprint="d05f30d2b8eaa73d8d00679407a2a9dcb663e71f971199cb09d32aae4bd1efc5",
         source="",
         note="Owned snapshot passed to pane_columns with Tables 1.14",
     ),
     ("docs/src/index.md", 1) => (
         kind=:derived,
         gate=:external,
-        fingerprint="cd8ae36ca441a4fc58c0251156380640005861762c32349331a13cc8b5a08872",
+        fingerprint="d3f44d8bef2bd7278603f21a1a9e168b4ea0d7f201de3ae19aaf9ef27e23d74e",
         source="examples/owned_capture.jl",
         note="",
     ),
     ("docs/src/observations.md", 1) => (
         kind=:derived,
         gate=:external,
-        fingerprint="22027eab236347ca0ca20a9176c1848749fe344ef5191cfff38443480a5f4bc8",
+        fingerprint="eeaa100bf4c27ce7b66c01563d48fa4be9a94dfa731fda70eb4f6de2352cc830",
         source="examples/output_stream.jl",
         note="",
     ),
     ("docs/src/ownership.md", 1) => (
         kind=:derived,
         gate=:external,
-        fingerprint="f12f354402c7599c75c906532ad9dbabf247dd1d62a25645202ecaaea535e142",
+        fingerprint="257396ebfc2d0a32e9a3b2f22d0f7571ba36b162cb0c0fee855428bb64b33a49",
         source="examples/control_cancel.jl",
         note="",
     ),
     ("docs/src/queries.md", 1) => (
         kind=:derived,
         gate=:external,
-        fingerprint="653f6f18181230c5bf0157924b0cea02566465c38d1d6185caaff8d25095c45e",
+        fingerprint="c5beff64a1a7cd51654e845da6d777d9a62a9894986985ebfbf82e22b12220ab",
         source="examples/shared_windows.jl",
         note="",
     ),
     ("docs/src/queries.md", 2) => (
         kind=:executable,
         gate=:doctest,
-        fingerprint="d49a18ba90a5196cd097cfc4e8c72b50de4ee7b330988664f36a288776db8670",
+        fingerprint="2beb5f2738ee0913c06f9d5bb102cd129825b566402d5511a2c5aeb7fb46965d",
         source="",
         note="Pure callable criteria and wire conversion",
     ),
     ("docs/src/workspaces.md", 1) => (
         kind=:derived,
         gate=:external,
-        fingerprint="30416c46d48606ae135881798533f750bf53a945e194283b8509f3683b911d95",
+        fingerprint="97f9941b27e6fb0c3ecdef4fdc9139041126b1e7667f42a962fc673edefb39a5",
         source="packages/LibTmuxWorkspace/examples/owned_load.jl",
         note="",
     ),
@@ -233,8 +247,8 @@ function shipped_programs(root)
 end
 
 function derived_source(entry, root)
-    matched = match(r"(?s)read\(joinpath\(@__DIR__,\s*(.*?)\),\s*String\)", entry.code)
-    matched === nothing &&
+    matched = match(r"(?s)joinpath\(\s*@__DIR__,\s*(.*?)\)", entry.code)
+    (matched === nothing || !occursin("read(", entry.code)) &&
         error("Derived fence must read one literal example path: $(entry.path)")
     arguments = matched.captures[1]
     parts = [part.captures[1] for part in eachmatch(r"\"([^\"]+)\"", arguments)]

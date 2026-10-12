@@ -132,7 +132,8 @@ Environment writes remain available through the control connection.
 
 ```@eval
 using Markdown
-Markdown.parse("```julia\n" * read(joinpath(@__DIR__, "..", "..", "examples", "control_cancel.jl"), String) * "\n```")
+example = joinpath(@__DIR__, "..", "..", "examples", "control_cancel.jl")
+Markdown.parse("```julia\n" * read(example, String) * "\n```")
 ```
 
 Close failure remains an error. A dead primary control client can prevent

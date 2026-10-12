@@ -12,7 +12,13 @@ From the repository root:
 $ julia \
     --startup-file=no \
     --project=benchmark \
-    -e 'using Pkg; Pkg.develop([PackageSpec(path="."), PackageSpec(path="packages/LibTmuxMCP"), PackageSpec(path="packages/LibTmuxWorkspace")]); Pkg.instantiate()'
+    -e 'using Pkg;
+        Pkg.develop([
+            PackageSpec(path="."),
+            PackageSpec(path="packages/LibTmuxMCP"),
+            PackageSpec(path="packages/LibTmuxWorkspace"),
+        ]);
+        Pkg.instantiate()'
 ```
 
 Set `LIBTMUX_TEST_TMUX` to select a different tmux executable. Every driver
@@ -152,7 +158,10 @@ Compare workspace launcher compiler profiles with repeated randomized order:
 $ julia \
     --startup-file=no \
     --project=benchmark \
-    packages/LibTmuxWorkspace/dev/cli_latency.jl benchmark/results/workspace.json all 3
+    packages/LibTmuxWorkspace/dev/cli_latency.jl \
+    benchmark/results/workspace.json \
+    all \
+    3
 ```
 
 Every load/freeze invocation starts a fresh Julia process against prepared
