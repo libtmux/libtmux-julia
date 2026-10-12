@@ -263,7 +263,7 @@ def ancestors(identifier, testsets):
 
 
 def analyze_process(process):
-    testsets, problems, spans, profiles = {}, [], [], []
+    testsets, problems, spans, profiles, file_exceptions = {}, [], [], [], []
     inventory, file_starts, file_finishes, files_open = set(), [], [], {}
     inventory_seen = False
     finish = None
@@ -327,6 +327,23 @@ def analyze_process(process):
             finish = event
         elif kind == "coverage_incomplete":
             process["issues"].append(fault("coverage_incomplete", event.get("reason", "native coverage incomplete")))
+            if event.get("reason") == "test_file_aborted" or "file_exception" in event:
+                metadata, file, line = event.get("file_exception"), event.get("file"), event.get("line")
+                matching_finish = [item for item in file_finishes if item.get("label") == file]
+                valid = (event.get("reason") == "test_file_aborted" and isinstance(metadata, dict)
+                    and isinstance(metadata.get("error_type"), str) and bool(metadata["error_type"].strip())
+                    and isinstance(metadata.get("detail"), str) and bool(metadata["detail"].strip())
+                    and isinstance(metadata.get("exception_details"), list) and bool(metadata["exception_details"])
+                    and all(isinstance(item, str) and bool(item.strip()) for item in metadata["exception_details"])
+                    and metadata.get("backtrace_scope") == "original_caught_file_exception"
+                    and portable_file(file) and file in inventory and file in file_starts
+                    and len(matching_finish) == 1 and matching_finish[0].get("outcome") in ("threw", "interrupted")
+                    and type(line) is int and line >= 0
+                    and not any(item["file"] == file for item in file_exceptions))
+                if valid:
+                    file_exceptions.append(metadata | dict(file=file, line=line, seq=event["seq"]))
+                else:
+                    process["issues"].append(fault("file_exception_shape", "aborted-file exception metadata or file admission rejected", severe=True))
         elif kind == "file_inventory":
             files = event.get("files")
             if (event.get("scope") != "declared_files_only" or not isinstance(files, list) or not files
@@ -396,7 +413,6 @@ def analyze_process(process):
                               and len(file_starts) == len(file_finishes) == len(inventory)
                               and set(file_starts) == inventory
                               and all(event.get("outcome") == "returned"
-                                      or event.get("outcome") == "threw" and counts["failed"] + counts["errored"] > 0
                                       for event in file_finishes))
     outcome = finish.get("outcome", "unknown") if finish else "unknown"
     complete = process["source_bound"] and not process["issues"] and finish is not None and bodies_complete and file_coverage_complete
@@ -407,6 +423,7 @@ def analyze_process(process):
     if outcome not in ("returned", "failed"):
         complete = complete and outcome == "threw" and counts["failed"] + counts["errored"] > 0
     process.update(testsets=list(testsets.values()), assertion_problems=problems, assertion_counts=counts,
+                   file_exceptions=file_exceptions,
                    count_scope="nonoverlapping_finalized_subtrees_and_uncovered_problems; lower_bound",
                    count_testsets=sorted(selected), process_finish=finish, process_outcome=outcome,
                    test_bodies_complete=complete, spans=spans, profiles=profiles,
@@ -815,6 +832,14 @@ def junit(report):
             node = ET.SubElement(case, tag, type=problem.get("problem_kind", "unknown"),
                                  message=f"native {problem.get('result_type', 'problem')}; detail={availability}")
             node.text = detail
+        for exception in process["file_exceptions"]:
+            case = ET.SubElement(suite, "testcase", name=f"{exception['file']} > file execution", classname="file-exception",
+                                 file=exception["file"])
+            if exception["line"] > 0:
+                case.set("line", str(exception["line"]))
+            node = ET.SubElement(case, "error", type=exception["error_type"],
+                                 message="file execution aborted; original caught exception retained; native assertion counts unchanged")
+            node.text = exception["detail"] + "\nOriginal exception chain:\n" + "\n".join(exception["exception_details"])
         known = {"failed": sum(problem.get("result_type") == "Fail" for problem in process["assertion_problems"]),
                  "errored": sum(problem.get("result_type") == "Error" for problem in process["assertion_problems"])}
         if any(process["assertion_counts"][key] > known[key] for key in known):
@@ -961,7 +986,9 @@ def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, m
     issues, processes = evidence["issues"], evidence["processes"]
     complete = not issues and receipt_complete(receipt, processes)
     counts = {key: sum(process["assertion_counts"][key] for process in processes) for key in COUNT_KEYS}
-    native_failed = counts["failed"] + counts["errored"] > 0 or any(process["assertion_problems"] for process in processes)
+    file_exception_count = sum(len(process["file_exceptions"]) for process in processes)
+    native_failed = (counts["failed"] + counts["errored"] > 0
+                     or any(process["assertion_problems"] for process in processes) or file_exception_count > 0)
     supervisor_failed = receipt and (receipt.get("status") != "PASS" or any(phase.get("status") != "PASS" or phase.get("soft_limit_exceeded") for phase in receipt.get("phases", [])))
     test_status = "FAIL" if native_failed or supervisor_failed else "PASS" if complete else "UNKNOWN"
     report = dict(schema=1, invocation=invocation, source_digest=expected_source_digest,
@@ -977,6 +1004,11 @@ def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, m
                                "Original logs are bounded snapshots; direct-child reap does not prove descendants stopped writing.",
                                "Assembly time covers bundle rendering; the supervisor times input collection and publication as finalizer overhead."])
     report.update(extra_report or {})
+    report["file_exception_count"] = file_exception_count
+    report["file_exception_count_scope"] = "observed_validated_file_records; native assertion counts unchanged"
+    report["file_exception_detail_status"] = "AVAILABLE" if file_exception_count else "NOT_OBSERVED"
+    if file_exception_count:
+        report["check_status"] = "FAIL"
     report["profile_metadata"] = []
     report["profile_records"] = copy_profiles(processes, event_paths, invocation=invocation,
         source_digest=expected_source_digest, mapping=mapping, output=output, issues=issues, metadata=report["profile_metadata"])
@@ -1063,11 +1095,17 @@ def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, m
                f"Checkpoint copy: {report['profile_copy_status']} ({copied}/{attempted}). Symbolization: {report['profile_symbolization_status']}. Sample/process/time coverage: UNPROVED.",
                f"Invocation: {invocation}. Source digest: {expected_source_digest}.",
                f"Assertion counts ({report['count_scope']}): {json.dumps(report['assertion_counts'], sort_keys=True)}.",
-               f"Original assertion/error details: {report['failure_detail_status']}.",
+               f"Original native assertion/error details: {report['failure_detail_status']}.",
                "JUnit case counts represent diagnostic units, not native assertion totals.", "", "Process identity:"]
     for process in processes:
         identity = process["events"][0] if process["events"] else {}
         summary.append(f"{process['process_id']}: pid={process['pid']}; phase={process.get('phase')}; Julia={identity.get('julia', 'unavailable')}; threads={identity.get('threads', 'unavailable')}.")
+    if file_exception_count:
+        summary.extend(["", "File execution errors (diagnostic units; native assertion counts unchanged):"])
+        for process in processes:
+            for exception in process["file_exceptions"]:
+                summary.append(f"{process['process_id']} {exception['file']}:{exception['line'] if exception['line'] else 'unknown'} {exception['error_type']}:")
+                summary.extend([exception["detail"], "Original exception chain:", *exception["exception_details"]])
     if retained:
         summary.extend(["", "Profile checkpoints:"])
         summary.extend(f"{record['process_id']} {record['mode']} checkpoint {record['checkpoint_seq']}: symbols={record['symbolization_status']}; unresolved_addresses={record['unresolved_addresses']}; buffer_full={record['buffer_full']}; truncated={record['truncated']}." for record in retained)
@@ -1156,7 +1194,7 @@ def assemble_checkpoint(event_paths, *, invocation, expected_source_digest, sour
                         snapshot_ordinal, through_sequence):
     """Publish an admitted, flushed native prefix without a completion verdict.
 
-Read only through the notified start/checkpoint/assertion sequence. Later producer
+Read only through the notified start/checkpoint/assertion/file-error sequence. Later producer
 writes are outside this snapshot. The caller owns finite export/cleanup limits
 and gives every generation a fresh output directory.
 """
@@ -1210,7 +1248,10 @@ and gives every generation a fresh output directory.
             or len(process["events"]) != through_sequence):
         raise ValueError("checkpoint prefix identity or structure differs from admission")
     marker = process["events"][-1]
-    if marker["event"] not in ("process_start", "profile_checkpoint", "assertion_problem") or marker["seq"] != through_sequence:
+    file_error_marker = (marker["event"] == "coverage_incomplete"
+                         and any(item["seq"] == marker["seq"] for item in process["file_exceptions"]))
+    if (marker["event"] not in ("process_start", "profile_checkpoint", "assertion_problem") and not file_error_marker
+            or marker["seq"] != through_sequence):
         raise ValueError("checkpoint prefix does not end at a supported flushed marker")
     process["input_name"] = mapping.text(event_path.name)
     binding = dict(phase=expected_phase, process_birth_id=expected_direct_birth, pid=admission["pid"],
@@ -1221,7 +1262,7 @@ and gives every generation a fresh output directory.
         binding.update(checkpoint_seq=marker.get("checkpoint_seq"), profile_input_sha256=marker.get("input_sha256"),
                        profile_mode=marker.get("mode"))
     native_failed = (process["assertion_counts"]["failed"] + process["assertion_counts"]["errored"] > 0
-                     or bool(process["assertion_problems"]))
+                     or bool(process["assertion_problems"]) or bool(process["file_exceptions"]))
     extra = dict(snapshot_kind="LIVE_PREFIX", snapshot_binding=binding,
         check_status="FAIL" if native_failed else "UNKNOWN", test_inventory_complete=False,
         child_inventory_status="UNPROVED", observed_file_coverage_complete=False,
@@ -1641,7 +1682,7 @@ def self_test():
         failed_receipt["phases"][0].update(semantic_status="FAIL", exit_code=1)
         receipt.write_text(json.dumps(failed_receipt))
         result = run("completed-native-error")
-        assert result["test_status"] == "FAIL" and result["coverage_status"] == "COMPLETE"
+        assert result["test_status"] == "FAIL" and result["coverage_status"] == "PARTIAL"
         receipt.write_text(json.dumps(supervisor))
         stale = json.loads(json.dumps(events))
         stale[0]["source_digest"] = "older"
@@ -1824,6 +1865,17 @@ def self_test():
         assert result["assertion_counts"]["failed"] == 1 and result["profile_copy_status"] == "UNAVAILABLE"
         assert result["failure_detail_status"] == "AVAILABLE" and not result["diagnostics_complete"]
         assert "Expression: 1 == 2" in (root / "live-native-assertion-marker/junit.xml").read_text()
+        file_exception = dict(error_type="LoadError", detail="Expected file setup failure at test/runtests.jl:1",
+            exception_details=["ErrorException: expected file setup failure"], backtrace_scope="original_caught_file_exception")
+        file_failure = phase_events[:3] + [event("span_finish", 4, kind="file", label="test/runtests.jl", outcome="threw", seconds=.01),
+            event("coverage_incomplete", 5, reason="test_file_aborted", file="test/runtests.jl", line=0, file_exception=file_exception)]
+        result = checkpoint_run("live-file-exception", items=file_failure)
+        assert result["test_status"] == result["check_status"] == "FAIL" and result["coverage_status"] == "PARTIAL"
+        assert result["assertion_counts"] == dict.fromkeys(COUNT_KEYS, 0) and result["file_exception_count"] == 1
+        assert result["snapshot_binding"]["marker"] == "coverage_incomplete" and result["profile_copy_status"] == "UNAVAILABLE"
+        assert result["processes"][0]["file_exceptions"][0]["detail"] == file_exception["detail"]
+        assert "Expected file setup failure" in (root / "live-file-exception/summary.txt").read_text()
+        assert ET.fromstring((root / "live-file-exception/junit.xml").read_text()).find(".//testcase[@classname='file-exception']/error").text.startswith(file_exception["detail"])
         def reject_checkpoint(name, **changes):
             try:
                 checkpoint_run(name, **changes)
@@ -1840,6 +1892,8 @@ def self_test():
             reject_checkpoint("live-reject-" + name, admission=admission)
         reject_checkpoint("live-reject-ordinal", snapshot_ordinal=True)
         reject_checkpoint("live-reject-sequence", through_sequence=100)
+        reject_checkpoint("live-reject-file-exception-shape", items=file_failure[:-1] + [file_failure[-1] | dict(file_exception=file_exception | dict(detail=""))])
+        reject_checkpoint("live-reject-generic-coverage-marker", items=file_failure[:-1] + [file_failure[-1] | dict(reason="unmapped", file_exception=None)])
         reject_checkpoint("live-reject-nonmarker", items=phase_events[:5])
         reject_checkpoint("live-reject-truncated-marker", items=phase_events[:1],
             tail=json.dumps(checkpoint_marker).encode()[:-5], through_sequence=2)

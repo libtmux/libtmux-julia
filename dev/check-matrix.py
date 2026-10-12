@@ -55,7 +55,7 @@ DIAGNOSTIC_BINDINGS = ("LIBTMUX_CI_DIAGNOSTICS_DIR", "LIBTMUX_CI_DIAGNOSTICS_ROO
                        "LIBTMUX_CI_INVOCATION", "LIBTMUX_CI_SOURCE_DIGEST", "LIBTMUX_CI_PHASE",
                        "LIBTMUX_CI_PROCESS_TOKEN", "LIBTMUX_CI_TEST_FILE_INVENTORY", "LIBTMUX_CI_STAGE",
                        "LIBTMUX_CI_SOURCE_ROOT", "LIBTMUX_CI_CHILD_TOKEN", "LIBTMUX_CI_PARENT_PROCESS_BIRTH_ID",
-                       "LIBTMUX_CI_TEST_CONSOLE")
+                       "LIBTMUX_CI_TEST_CONSOLE", "LIBTMUX_CI_TEST_CONTINUE")
 
 
 DIAGNOSTIC_MODULES = {}
@@ -430,6 +430,7 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
         nonlocal diagnostic_receipt
         child_env = env.copy()
         child_env.update(LIBTMUX_CI_PROFILE="off", LIBTMUX_CI_PROFILE_SYMBOLIZATION=symbolization)
+        child_env.pop("LIBTMUX_CI_TEST_CONTINUE", None)
         root = child_env.get("LIBTMUX_CI_DIAGNOSTICS_ROOT")
         if root is None:
             return child_env
@@ -445,7 +446,8 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
             raise ValueError("diagnostics directory escaped its owned matrix stage")
         directory.mkdir(parents=True, exist_ok=False)
         token = uuid.uuid4().hex
-        for binding in ("LIBTMUX_CI_CHILD_TOKEN", "LIBTMUX_CI_PARENT_PROCESS_BIRTH_ID", "LIBTMUX_CI_TEST_CONSOLE"):
+        for binding in ("LIBTMUX_CI_CHILD_TOKEN", "LIBTMUX_CI_PARENT_PROCESS_BIRTH_ID", "LIBTMUX_CI_TEST_CONSOLE",
+                        "LIBTMUX_CI_TEST_CONTINUE"):
             child_env.pop(binding, None)
         child_env.update(LIBTMUX_CI_DIAGNOSTICS_DIR=str(directory), LIBTMUX_CI_PHASE=name,
                          LIBTMUX_CI_PROCESS_TOKEN=token, LIBTMUX_CI_SOURCE_ROOT=str(ROOT))
@@ -456,6 +458,7 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
         child_env["LIBTMUX_CI_PROFILE"] = mode
         if selected is not None:
             child_env["LIBTMUX_CI_TEST_CONSOLE"] = "1"
+            child_env["LIBTMUX_CI_TEST_CONTINUE"] = "1"
         answer.update(invocation=invocation, source_digest=digest,
                       diagnostics_directory=str(directory), diagnostics_status="PARTIAL" if selected is not None else "UNAVAILABLE",
                       diagnostics_scope="native_runner" if selected is not None else "process_receipt_only",
@@ -632,8 +635,8 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
                 finalize_diagnostics(answer, env=env)
         finally:
             answer["seconds"] = time.monotonic() - start
-            if answer.get("observed_native_failure") is True and answer["status"] == "PASS":
-                answer.update(status="FAIL", reason="native assertions or errors failed")
+            if (answer.get("observed_native_failure") is True or answer.get("observed_file_failure") is True) and answer["status"] == "PASS":
+                answer.update(status="FAIL", reason="test assertions, errors or file execution failed")
             if answer.get("output_observation_complete") is False:
                 answer["diagnostics_status"] = "FAIL"
             if answer.get("checkpoint_publication_failed") is True:
@@ -678,6 +681,10 @@ proof = dict(schema=1, invocation=invocation, source_digest=digest, phase=phase_
     observed_assertion_counts=report["assertion_counts"],
     observed_native_failure=(report["assertion_counts"]["failed"] + report["assertion_counts"]["errored"] > 0
         or any(process["assertion_problems"] for process in report["processes"])),
+    observed_file_failure=any(process.get("file_exceptions") for process in report["processes"]),
+    observed_file_exception_count=sum(len(process.get("file_exceptions", [])) for process in report["processes"]),
+    observed_direct_native_complete=any(process["process_id"] == report["direct_process_birth_id"]
+        and process["test_bodies_complete"] for process in report["processes"]),
     observed_file_coverage_complete=report["observed_file_coverage_complete"],
     expected_file_inventory_matches=report["expected_file_inventory_matches"],
     observed_process_birth_ids=report["observed_process_birth_ids"],
@@ -746,7 +753,10 @@ class CheckpointPublisher:
         self.thread.start()
 
     def notify(self, record):
-        if record["event"] not in ("process_start", "profile_checkpoint", "assertion_problem"):
+        if (record["event"] not in ("process_start", "profile_checkpoint", "assertion_problem")
+                and not (record["event"] == "coverage_incomplete"
+                         and record.get("reason") == "test_file_aborted"
+                         and isinstance(record.get("file_exception"), dict))):
             return
         with self.condition:
             if self.closing or remaining(self.deadline) == 0:
@@ -924,9 +934,16 @@ def finalize_diagnostics(answer, *, env):
                 or (request["mode"] != "off" and not request["require_direct_native"]
                     and profile_status != "UNVERIFIED")):
             raise ValueError("diagnostic sampler proof differs from the admitted request")
+        file_failure = proof.get("observed_file_failure")
+        file_exception_count = proof.get("observed_file_exception_count")
+        if (type(file_failure) is not bool or type(file_exception_count) is not int
+                or file_exception_count < 0 or file_failure != (file_exception_count > 0)):
+            raise ValueError("diagnostic file-failure proof is missing or contradictory")
         answer["diagnostics_proof"] = proof
         answer["profile_request_status"] = profile_status
         answer["observed_native_failure"] = proof.get("observed_native_failure") is True
+        answer["observed_file_failure"] = proof.get("observed_file_failure") is True
+        answer["observed_file_exception_count"] = proof.get("observed_file_exception_count")
         answer["observed_assertion_counts"] = proof.get("observed_assertion_counts")
         manifest_path = directory / "public" / "manifest.json"
         if manifest_path.is_symlink() or not manifest_path.is_file() or manifest_path.stat().st_size > 64 * 1024:
@@ -939,8 +956,11 @@ def finalize_diagnostics(answer, *, env):
         if proof.get("original_logs"):
             answer["log_sha256"] = proof["original_logs"][0]["input_sha256"]
             answer["log_binding_scope"] = proof["original_logs"][0]["binding_scope"]
+        native_incomplete = (answer.get("expected_test_file_inventory") is not None
+            and (proof.get("observed_direct_native_complete") is not True
+                 or proof.get("expected_file_inventory_matches") is not True))
         answer["diagnostics_status"] = "FAIL" if (proof.get("artifact_export_status") != "PASS"
-            or profile_status == "FAIL") else "PASS" if (profile_status not in ("EMPTY", "UNVERIFIED")
+            or profile_status == "FAIL" or native_incomplete) else "PASS" if (profile_status not in ("EMPTY", "UNVERIFIED")
             and proof.get("observed_file_coverage_complete") is True
             and proof.get("expected_file_inventory_matches") is True and not proof.get("issues")
             and not proof.get("process_issues")) else "PARTIAL"
@@ -2246,12 +2266,13 @@ println("PASS admitted version arguments construct real Pkg specifications")
                               LIBTMUX_CI_STAGE=str(base), LIBTMUX_CI_INVOCATION="control",
                               LIBTMUX_CI_SOURCE_DIGEST="a" * 64,
                               LIBTMUX_CI_DIAGNOSTICS_DIR="inherited-unowned-directory",
-                              LIBTMUX_CI_PROFILE="off", LIBTMUX_CI_PROFILE_SYMBOLIZATION="deferred")
+                              LIBTMUX_CI_PROFILE="off", LIBTMUX_CI_PROFILE_SYMBOLIZATION="deferred",
+                              LIBTMUX_CI_TEST_CONTINUE="1")
         profile_env = diagnostic_env | dict(LIBTMUX_CI_PROFILE="cpu",
             LIBTMUX_CI_TEST_FILE_INVENTORY=json.dumps({name: dict(source_digest="a" * 64,
                 files=[dict(path="test/fixture.jl", sha256="b" * 64)])
                 for name in ("profile-normal", "profile-unit")}))
-        profile_probe = "import json,os;print(json.dumps([os.environ['LIBTMUX_CI_PROFILE'],os.environ['LIBTMUX_CI_PROFILE_SYMBOLIZATION']]))"
+        profile_probe = "import json,os;print(json.dumps([os.environ['LIBTMUX_CI_PROFILE'],os.environ['LIBTMUX_CI_PROFILE_SYMBOLIZATION'],os.environ.get('LIBTMUX_CI_TEST_CONTINUE')]))"
         for name, mode, required in (("profile-normal", "cpu", True),
                                      ("profile-unit", "off", False),
                                      ("imports", "cpu", False),
@@ -2259,7 +2280,10 @@ println("PASS admitted version arguments construct real Pkg specifications")
             sampled = phase(name, [sys.executable, "-c", profile_probe], cwd=base,
                 env=profile_env, log=base / (name + ".log"), budget=0.9)
             assert sampled["semantic_status"] == "PASS" and sampled["exit_code"] == 0
-            assert json.loads((base / (name + ".log")).read_text()) == [mode, "deferred"]
+            assert json.loads((base / (name + ".log")).read_text()) == [
+                mode, "deferred", "1" if name in ("profile-normal", "profile-unit") else None]
+            if name == "profile-unit":
+                assert sampled["status"] == sampled["diagnostics_status"] == "FAIL", "zero exit without native EOF passed"
             assert sampled["profile_request"] == dict(mode=mode, symbolization="deferred",
                                                        require_direct_native=required)
             assert sampled["profile_request_status"] == ("FAIL" if required else
@@ -2271,7 +2295,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
             env=os.environ.copy() | dict(LIBTMUX_CI_PROFILE="cpu", LIBTMUX_CI_PROFILE_SYMBOLIZATION="deferred"),
             log=base / "unbound-profile.log", budget=0.9)
         assert unbound_profile["status"] == "PASS"
-        assert json.loads((base / "unbound-profile.log").read_text()) == ["off", "deferred"]
+        assert json.loads((base / "unbound-profile.log").read_text()) == ["off", "deferred", None]
         assert unbound_profile["profile_request"] == dict(mode="off", symbolization="deferred", require_direct_native=False)
         from unittest.mock import patch
         for binding, invalid in (("LIBTMUX_CI_PROFILE", "unknown"),

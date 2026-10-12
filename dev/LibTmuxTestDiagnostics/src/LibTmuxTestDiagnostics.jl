@@ -17,6 +17,7 @@ mutable struct Observer
     lock::ReentrantLock
     faults::Vector{String}
     coverage_complete::Bool
+    admission_stop_cause::Union{Nothing,String}
 end
 
 const OBSERVER = Ref{Union{Nothing,Observer}}(nothing)
@@ -236,6 +237,7 @@ function start_observer(
         ReentrantLock(),
         String[],
         true,
+        nothing,
     )
     OBSERVER[] = observer
     emit(
@@ -287,16 +289,71 @@ function close_observer(; outcome="unknown")
     nothing
 end
 
-function incomplete(reason, source)
+function incomplete(reason, source; file_exception=nothing)
     observer = OBSERVER[]
     observer === nothing && return
     observer.coverage_complete = false
+    details = file_exception === nothing ? (;) : (; file_exception)
     emit(
         "coverage_incomplete";
         reason,
         file=source_file(source.file),
         line=Int(source.line),
+        details...,
     )
+    nothing
+end
+
+function stop_cause(error)
+    error isa InterruptException && return "interrupt"
+    error isa Union{OutOfMemoryError,StackOverflowError} && return "resource_failure"
+    pending = Any[error]
+    seen = Base.IdSet{Any}()
+    while !isempty(pending)
+        length(seen) >= 128 && return "uninspectable_exception_chain"
+        current = pop!(pending)
+        current in seen && continue
+        push!(seen, current)
+        current isa InterruptException && return "interrupt"
+        current isa Union{OutOfMemoryError,StackOverflowError} && return "resource_failure"
+        if current isa LoadError
+            length(seen) + length(pending) >= 128 && return "uninspectable_exception_chain"
+            push!(pending, current.error)
+        elseif current isa CapturedException
+            length(seen) + length(pending) >= 128 && return "uninspectable_exception_chain"
+            push!(pending, current.ex)
+        elseif current isa CompositeException
+            for item in current.exceptions
+                length(seen) + length(pending) >= 128 &&
+                    return "uninspectable_exception_chain"
+                push!(pending, item)
+            end
+        elseif current isa TaskFailedException
+            for item in Base.current_exceptions(current.task; backtrace=false)
+                length(seen) + length(pending) >= 128 &&
+                    return "uninspectable_exception_chain"
+                push!(pending, item.exception)
+            end
+        end
+    end
+    nothing
+end
+
+function admission_stopped()
+    observer = OBSERVER[]
+    observer === nothing && return false
+    lock(observer.lock) do
+        observer.admission_stop_cause !== nothing
+    end
+end
+
+function stop_admission(cause, source)
+    observer = OBSERVER[]
+    observer === nothing && return
+    lock(observer.lock) do
+        observer.admission_stop_cause = cause
+        incomplete("test_admission_stopped_" * cause, source)
+    end
     nothing
 end
 
@@ -469,8 +526,10 @@ function body_finish(ts)
 end
 
 function instrument_body(body)
-    token, error, answer =
-        gensym(:diagnostic_ts), gensym(:diagnostic_error), gensym(:answer)
+    token, error, answer, cause = gensym(:diagnostic_ts),
+    gensym(:diagnostic_error),
+    gensym(:answer),
+    gensym(:stop_cause)
     quote
         local $token = $(GlobalRef(LibTmuxTestDiagnostics, :body_start))()
         try
@@ -478,9 +537,17 @@ function instrument_body(body)
             $(GlobalRef(LibTmuxTestDiagnostics, :body_outcome))($token, "returned")
             $answer
         catch $error
+            local $cause = $(GlobalRef(LibTmuxTestDiagnostics, :stop_cause))($error)
+            if $cause !== nothing
+                $(GlobalRef(LibTmuxTestDiagnostics, :stop_admission))(
+                    $cause,
+                    $token isa $(GlobalRef(LibTmuxTestDiagnostics, :ObservedTestSet)) &&
+                    $token.source !== nothing ? $token.source : LineNumberNode(0, :unknown),
+                )
+            end
             $(GlobalRef(LibTmuxTestDiagnostics, :body_outcome))(
                 $token,
-                $error isa InterruptException ? "interrupted" : "threw",
+                $cause == "interrupt" ? "interrupted" : "threw",
             )
             rethrow()
         finally
@@ -692,7 +759,9 @@ function observe_span(f::Function, kind::AbstractString, label::AbstractString)
         outcome = "returned"
         answer
     catch error
-        outcome = error isa InterruptException ? "interrupted" : "threw"
+        outcome =
+            stop_cause(error) == "interrupt" || admission_stopped() ? "interrupted" :
+            "threw"
         rethrow()
     finally
         emit(
