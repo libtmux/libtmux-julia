@@ -70,6 +70,27 @@ function child_command(command::Cmd, owner, token)
         )
         command = addenv(
             command,
+            "LIBTMUX_CI_CHILD_HELPER_PROJECT"=>nothing,
+            "LIBTMUX_CI_CHILD_HELPER_DEPOT"=>nothing,
+        )
+        project = Base.active_project()
+        loaded = pathof(Diagnostics)
+        resolved = Base.find_package("LibTmuxTestDiagnostics")
+        source = realpath(joinpath(@__DIR__, "LibTmuxTestDiagnostics.jl"))
+        if project !== nothing &&
+           !isempty(DEPOT_PATH) &&
+           loaded !== nothing &&
+           resolved !== nothing &&
+           realpath(loaded) == source &&
+           realpath(resolved) == source
+            command = addenv(
+                command,
+                "LIBTMUX_CI_CHILD_HELPER_PROJECT"=>dirname(project),
+                "LIBTMUX_CI_CHILD_HELPER_DEPOT"=>first(DEPOT_PATH),
+            )
+        end
+        command = addenv(
+            command,
             "LIBTMUX_CI_PROFILE"=>required("LIBTMUX_CI_PROFILE"),
             "LIBTMUX_CI_PROFILE_SYMBOLIZATION"=>get(
                 ENV,

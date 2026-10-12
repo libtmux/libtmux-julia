@@ -103,7 +103,11 @@ def main():
     parser.add_argument("julia")
     parser.add_argument("--threads", type=int, choices=(1, 4), default=1)
     parser.add_argument("--evidence", type=Path)
+    parser.add_argument("--tool-project", type=Path)
+    parser.add_argument("--tool-depot", type=Path)
     args = parser.parse_args()
+    if (args.tool_project is None) != (args.tool_depot is None):
+        parser.error("--tool-project and --tool-depot must be supplied together")
     root = Path(__file__).resolve().parents[3]
     spec = importlib.util.spec_from_file_location("libtmux_child_control_matrix", root/"dev/check-matrix.py")
     driver = importlib.util.module_from_spec(spec)
@@ -149,10 +153,14 @@ def main():
                    LTJ_CONTROL_PARENT_SECRET="must-not-inherit")
         env.pop("TMUX", None)
         env.pop("TMUX_PANE", None)
+        argv = [args.julia, "--startup-file=no", "--history-file=no", f"--threads={args.threads}"]
+        if args.tool_project is not None:
+            argv.append("--project=" + str(args.tool_project))
+            env["JULIA_DEPOT_PATH"] = str(args.tool_depot)
+        argv += ["-e", program, str(source)]
         started = time.monotonic()
         code, stdout, stderr, command_seconds, cleanup = capture_child(
-            driver, [args.julia, "--startup-file=no", "--history-file=no",
-                     f"--threads={args.threads}", "-e", program, str(source)], env, directory)
+            driver, argv, env, directory)
         process_receipt = dict(exit_code=code, julia_command_seconds=command_seconds,
                                source_digest=digest, source_scope="consumer_driver_control_only",
                                cleanup=cleanup)
@@ -185,6 +193,10 @@ def main():
             assert entry["parent_process_birth_id"] == admission["process_birth_id"]
             child_start, = [record for record in child_records if record["event"] == "process_start"]
             assert child_start["threads"] == args.threads
+            if args.tool_project is not None:
+                ready, = [record for record in child_records if record["event"] == "child_entry_ready"]
+                assert ready["helper_loading"] == "owned_package_loader"
+                assert ready["helper_cache_origin_observed"] is True
             checkpoints = [record for record in child_records if record["event"] == "profile_checkpoint"]
             assert checkpoints, "actual child checkpoint was not retained"
             payloads = [json.loads((Path(directory) / record["file"]).read_text()) for record in checkpoints]
@@ -204,6 +216,7 @@ def main():
                        stderr_bytes_preserved=True, ignorestatus_preserved=True,
                        parent_randomness_preserved=True,
                        restricted_environment_preserved=True,
+                       positive_cache_requested=args.tool_project is not None,
                        cleanup=cleanup,
                        source_scope="consumer_driver_control_only",
                        julia_command_seconds=command_seconds,
