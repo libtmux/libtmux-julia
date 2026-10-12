@@ -7,6 +7,8 @@ const SOURCE_ROOT = normpath(joinpath(@__DIR__, "..", "..", ".."))
 const TEST_CACHE_DEFINITIONS_ONLY = true
 const TEST_CACHE_ENTRIES = Ref(0)
 const TEST_CACHE_FIXTURES = Ref(0)
+include(joinpath(SOURCE_ROOT, "test", "support", "owned_tmux.jl"))
+using .OwnedTmux: with_tmux
 LibTmuxTestDiagnostics.diagnostic_include(
     @__MODULE__,
     joinpath(SOURCE_ROOT, "test", "model.jl"),
@@ -31,6 +33,14 @@ LibTmuxTestDiagnostics.diagnostic_include(
     @__MODULE__,
     joinpath(SOURCE_ROOT, "test", "projection.jl"),
 )
+LibTmuxTestDiagnostics.diagnostic_include(
+    @__MODULE__,
+    joinpath(SOURCE_ROOT, "test", "acquisition.jl"),
+)
+LibTmuxTestDiagnostics.diagnostic_include(
+    @__MODULE__,
+    joinpath(SOURCE_ROOT, "test", "configuration.jl"),
+)
 const FILE_CHECKS = (
     model=(
         test_model_captured_identity_and_local_collections,
@@ -51,6 +61,16 @@ const FILE_CHECKS = (
     sibling_wire=(test_sibling_wire_explicit_sibling_wire_adapters,),
     projection=(
         test_projection_explicit_scalar_projection_retains_captured_coverage_and_schema,
+    ),
+    acquisition=(
+        test_acquisition_captured_tmux_graph,
+        test_acquisition_unavailable_fields,
+        test_acquisition_real_tmux_format_row_encoding,
+    ),
+    configuration=(
+        test_configuration_scopes_and_values,
+        test_configuration_inventories_retain_literals_sparse_entries_and_inheritance,
+        test_configuration_rejects_invalid_arguments_before_io,
     ),
 )
 if ccall(:jl_generating_output, Cint, ()) == 1
