@@ -781,6 +781,8 @@ if ccall(:jl_generating_output, Cint, ()) == 1
     precompile(Tuple{typeof(json_value),ProfileBuffer,Vector{UInt}})
     precompile(Tuple{typeof(json_value),ProfileBuffer,UInt})
     precompile(Tuple{typeof(json_value),ProfileBuffer,Dict{String,Any}})
+    precompile(Tuple{typeof(json_value),IOStream,Dict{String,Any}})
+    precompile(Tuple{typeof(json_value),IOBuffer,Dict{String,Any}})
 end
 
 end
