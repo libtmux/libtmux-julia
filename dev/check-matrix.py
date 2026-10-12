@@ -664,7 +664,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
-helper, directory, invocation, digest, phase_name, direct_birth, stage = sys.argv[1:]
+helper, directory, invocation, digest, phase_name, direct_birth, stage, reuse = sys.argv[1:]
 directory = Path(directory)
 spec = importlib.util.spec_from_file_location("libtmux_ci_artifacts", helper)
 module = importlib.util.module_from_spec(spec)
@@ -675,7 +675,7 @@ report = module.assemble_phase(sorted(directory.glob("events-*.jsonl")),
     source_roots=[(Path(helper).resolve().parent.parent, "repository"),
                   (Path(stage), "stage"), (directory, "diagnostics")],
     output=directory / "public", phase_path=directory / "phase.json",
-    expected_phase=phase_name, expected_direct_birth=direct_birth or None)
+    expected_phase=phase_name, expected_direct_birth=direct_birth or None, profile_reuse=json.loads(reuse))
 proof = dict(schema=1, invocation=invocation, source_digest=digest, phase=phase_name,
     profile_request=report["profile_request"], profile_request_status=report["profile_request_status"],
     observed_assertion_counts=report["assertion_counts"],
@@ -700,9 +700,10 @@ temporary.replace(directory / "diagnostics-proof.json")
 
 CHECKPOINT_EXPORTER = r'''
 import importlib.util
+import json
 from pathlib import Path
 import sys
-helper, directory, invocation, digest, phase_name, direct_birth, stage, ordinal, sequence = sys.argv[1:]
+helper, directory, invocation, digest, phase_name, direct_birth, stage, ordinal, sequence, reuse = sys.argv[1:]
 directory = Path(directory)
 spec = importlib.util.spec_from_file_location("libtmux_checkpoint_artifacts", helper)
 module = importlib.util.module_from_spec(spec)
@@ -715,7 +716,7 @@ module.assemble_checkpoint([directory / f"events-{direct_birth}.jsonl"],
     output=directory / "checkpoints" / f"{int(ordinal):04d}-seq-{int(sequence)}" / "public",
     admission_path=directory / "checkpoint-admission.json",
     expected_phase=phase_name, expected_direct_birth=direct_birth,
-    snapshot_ordinal=int(ordinal), through_sequence=int(sequence))
+    snapshot_ordinal=int(ordinal), through_sequence=int(sequence), profile_reuse=json.loads(reuse))
 '''
 
 
@@ -749,6 +750,7 @@ class CheckpointPublisher:
         self.dropped = 0
         self.active = None
         self.error_type = None
+        self.profile_reuse = None
         self.thread = threading.Thread(target=self._run, name="matrix-checkpoint", daemon=True)
         self.thread.start()
 
@@ -820,8 +822,12 @@ class CheckpointPublisher:
                 or binding.get("through_sequence") != sequence
                 or binding.get("admission_sha256") != self.admission_sha256):
             raise ValueError("checkpoint report differs from the admitted prefix")
-        return dict(manifest_sha256=hashlib.sha256(manifest_raw).hexdigest(),
-                    validated_bytes=total, snapshot_binding=binding)
+        manifest_sha256 = hashlib.sha256(manifest_raw).hexdigest()
+        reuse = (dict(index_path=str(public / "profile-cache-index.json"),
+                      approved_manifest_sha256=manifest_sha256)
+                 if "profile-cache-index.json" in manifest["files"] else None)
+        return dict(manifest_sha256=manifest_sha256,
+                    validated_bytes=total, snapshot_binding=binding, profile_reuse=reuse)
 
     def _run(self):
         try:
@@ -841,7 +847,7 @@ class CheckpointPublisher:
                                    generation=str(generation))
                 argv = [sys.executable, "-c", CHECKPOINT_EXPORTER, str(ROOT / "dev/ci-artifacts.py"),
                         str(self.directory), self.invocation, self.digest, self.name, self.birth,
-                        self.stage, str(ordinal), str(sequence)]
+                        self.stage, str(ordinal), str(sequence), json.dumps(self.profile_reuse)]
                 receipt = phase("checkpoint-exporter", argv, cwd=ROOT, env=self.env,
                     log=generation / "export.log", budget=DIAGNOSTIC_FINALIZATION_SECONDS,
                     deadline=self.deadline, group=self.group, progress_path=generation / "phase.json")
@@ -852,6 +858,7 @@ class CheckpointPublisher:
                     item.update(self.validate_publication(generation, ordinal, sequence),
                                 artifact_directory=str(generation / "public"), publication_status="PASS")
                     item["validation_seconds"] = time.monotonic() - started
+                    self.profile_reuse = item["profile_reuse"]
                 self.active = None
         except BaseException as error:
             self.error_type = type(error).__name__
@@ -890,6 +897,7 @@ class CheckpointPublisher:
         return dict(status="UNRETIRED" if not retired else "FAIL" if failed else
                     "PASS" if self.records else "UNAVAILABLE", publisher_retired=retired,
                     snapshots=self.records.copy(), active_snapshot=self.active,
+                    profile_reuse=self.profile_reuse,
                     coalesced_markers=self.coalesced, dropped_markers=self.dropped,
                     reserved_exporters=reserved, reserved_exporter_snapshot="OBSERVED" if captured else "UNAVAILABLE_LOCK",
                     error_type=self.error_type, admission_scope="admitted_direct_native_process_only",
@@ -909,7 +917,8 @@ def finalize_diagnostics(answer, *, env):
         argv = [sys.executable, "-c", DIAGNOSTIC_FINALIZER, str(ROOT / "dev/ci-artifacts.py"),
                 str(directory), answer["invocation"], answer["source_digest"], answer["name"],
                 f"{answer['process_token']}-{answer['pid']}" if answer.get("started") else "",
-                env.get("LIBTMUX_CI_STAGE", str(directory))]
+                env.get("LIBTMUX_CI_STAGE", str(directory)),
+                json.dumps(answer.get("checkpoint_publication", {}).get("profile_reuse"))]
         decoder = phase("diagnostic-finalizer", argv, cwd=ROOT, env=child_env,
                         log=directory / "finalization.log", budget=DIAGNOSTIC_FINALIZATION_SECONDS,
                         progress_path=directory / "finalization-phase.json")
