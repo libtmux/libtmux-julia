@@ -1332,6 +1332,9 @@ def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, m
     if report.get("phase_bundles"):
         summary.extend(["", "Phase artifacts (counts remain separate):"])
         summary.extend(f"{item['phase']}: final command={item['command_status']}; artifact={item['artifact_status']}; profiles={item.get('profile_copy_status', 'unavailable')}; symbols={item.get('profile_symbolization_status', 'unavailable')}; bundle={item.get('bundle', 'unavailable')}." for item in report["phase_bundles"])
+    for bundle in report.get("phase_bundles", []):
+        for snapshot in bundle.get("original_log_snapshots", []):
+            summary.append(f"{bundle['phase']} {snapshot['log_role']} original log: {snapshot['file']}; pid={snapshot['pid']}; bytes={snapshot['snapshot_bytes']}; truncated={snapshot['truncated']}; retirement_hash={snapshot['retirement_hash_status']}.")
     summary.extend(["", "Ranked timings:"])
     summary.extend(f"{row['seconds'] if row['seconds'] is not None else 'unavailable'}s {row['kind']} {row['name']} ({row['outcome']})" for row in rows)
     summary.extend(["", "Limitations:"] + report["limitations"])
@@ -1590,6 +1593,80 @@ A process-only phase preserves its command verdict without inventing test counts
         receipt=receipt, logs=logs, extra_report=proof, profile_reuse=reuse)
 
 
+def snapshot_failed_phase_logs(phase, *, invocation, source_digest, stage, mapping,
+                               snapshots, logs, issues, remaining_bytes):
+    """Freeze bounded original logs when the phase artifact could not publish."""
+    name, token, pid = phase.get("name"), phase.get("process_token"), phase.get("pid")
+    if (phase.get("invocation") != invocation or phase.get("source_digest") != source_digest
+            or phase.get("started") is not True or not isinstance(name, str) or not IDENTIFIER.fullmatch(name)
+            or not isinstance(token, str) or not IDENTIFIER.fullmatch(token) or type(pid) is not int or pid <= 0):
+        issues.append(fault("fallback_log_binding_fault", "original phase log identity rejected", phase=name, severe=True))
+        return [], remaining_bytes
+    value = phase.get("diagnostics_directory")
+    if not isinstance(value, str):
+        issues.append(fault("fallback_log_binding_fault", "original log directory is unavailable", phase=name, severe=True))
+        return [], remaining_bytes
+    directory = Path(value)
+    if (not directory.is_absolute() or not directory.is_dir() or not mapping.owns(directory) or directory.resolve() not in
+            {stage / "diagnostics" / invocation / tier / name for tier in ("mid", "outer")}):
+        issues.append(fault("fallback_log_binding_fault", "original log directory differs from its invocation", phase=name, severe=True))
+        return [], remaining_bytes
+    candidates = [("phase_command", phase, stage / "logs" / (name + ".log"), f"{token}-{pid}")]
+    finalizer = phase.get("diagnostic_finalizer")
+    if isinstance(finalizer, dict):
+        candidates.append(("diagnostic_finalizer", finalizer, directory / "finalization.log", None))
+    retained = []
+    for role, admitted, expected_path, birth in candidates:
+        if remaining_bytes <= 0 or len(logs) >= MAX_SETUP_FILES:
+            issues.append(fault("fallback_log_limit", "bounded original log inventory exhausted", phase=name))
+            break
+        if (admitted.get("invocation") != invocation or admitted.get("source_digest") != source_digest
+                or admitted.get("started") is not True or type(admitted.get("pid")) is not int or admitted["pid"] <= 0
+                or admitted.get("direct_child_reaped") is not True or admitted.get("cleanup_status") != "REAPED"
+                or role == "diagnostic_finalizer" and admitted.get("name") != "diagnostic-finalizer"
+                or not isinstance(admitted.get("log"), str) or not Path(admitted["log"]).is_absolute()
+                or not mapping.owns(admitted["log"]) or not Path(admitted["log"]).is_file()
+                or Path(admitted["log"]).resolve() != expected_path):
+            issues.append(fault("fallback_log_binding_fault", "original log differs from its owned retired process", phase=name, log_role=role, severe=True))
+            continue
+        local_issues = []
+        raw = input_bytes(admitted["log"], mapping, local_issues, limit=min(64 * 1024, remaining_bytes))
+        issues.extend(item | dict(phase=name, log_role=role) for item in local_issues)
+        if any(item["severe"] for item in local_issues):
+            continue
+        digest = hashlib.sha256(raw).hexdigest()
+        retirement_digest = admitted.get("log_sha256")
+        retirement_hash_status = "NOT_SUPPLIED"
+        if retirement_digest is not None:
+            if not isinstance(retirement_digest, str) or not SHA256.fullmatch(retirement_digest):
+                issues.append(fault("fallback_log_binding_fault", "retirement log hash is malformed", phase=name, log_role=role, severe=True))
+                continue
+            whole, hash_issues = raw, []
+            if any(item["kind"] == "input_truncated" for item in local_issues):
+                whole = input_bytes(admitted["log"], mapping, hash_issues, limit=MAX_RECORD_BYTES)
+            if whole and not whole.startswith(raw):
+                issues.append(fault("stale_fallback_log", "original log prefix changed during its snapshot", phase=name, log_role=role, severe=True))
+                continue
+            if hash_issues:
+                retirement_hash_status = "UNVERIFIED"
+                issues.append(fault("fallback_log_hash_unverified", "whole retirement hash exceeds its validation bound or is unavailable; current bounded prefix retained", phase=name, log_role=role))
+            elif hashlib.sha256(whole).hexdigest() != retirement_digest:
+                issues.append(fault("stale_fallback_log", "original log bytes differ from the retirement receipt", phase=name, log_role=role, severe=True))
+                continue
+            else:
+                retirement_hash_status = "VERIFIED_WHOLE_LOG"
+        snapshot = snapshots / f"log-{len(logs) + 1:04d}.raw"
+        snapshot.write_bytes(raw)
+        logs.append(dict(path=snapshot, invocation=invocation, source_digest=source_digest,
+            phase=name, process_birth_id=birth, input_sha256=digest, binding_scope="current_owned_log_snapshot"))
+        retained.append(dict(file=f"original-log-{len(logs):04d}.txt", log_role=role, pid=admitted["pid"],
+            input_sha256=digest, snapshot_bytes=len(raw), snapshot_scope="bounded_owned_retired_process_log",
+            retirement_log_sha256=retirement_digest, retirement_hash_status=retirement_hash_status,
+            truncated=any(item["kind"] == "input_truncated" for item in local_issues)))
+        remaining_bytes -= len(raw)
+    return retained, remaining_bytes
+
+
 def assemble_job(*, invocation, expected_source_digest, source_roots, output, supervisor_path):
     """Index the final command/loop verdict without adding repeated native counts."""
     require_binding(invocation, expected_source_digest)
@@ -1650,8 +1727,23 @@ def assemble_job(*, invocation, expected_source_digest, source_roots, output, su
         failure_detail_status="NOT_AGGREGATED; see per-phase original failure details",
         phase_bundles=bundles, child_inventory_status="UNPROVED", test_inventory_complete=False,
         receipt_timing_boundary="final supervisor receipt includes per-phase diagnostic finalization; job exporter is separately timed")
-    return publish_bundle(evidence, (), invocation=invocation, expected_source_digest=expected_source_digest,
-        mapping=mapping, output=output, receipt=receipt, extra_report=extra)
+    output = Path(output)
+    if not mapping.owns(output) or output.exists() or output.is_symlink():
+        raise ValueError("output must be a fresh directory inside an owned root")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".job-log-snapshot-", dir=output.parent) as temporary:
+        logs, remaining_bytes = [], MAX_RECORD_BYTES
+        stage = Path(supervisor_path).resolve().parent if raw_receipt is not None else None
+        for record, phase in zip(bundles, (raw_receipt or {}).get("phases", [])):
+            if (record["artifact_status"] == "UNAVAILABLE" and phase.get("started") is True
+                    and "diagnostics_directory" in phase):
+                retained, remaining_bytes = snapshot_failed_phase_logs(phase, invocation=invocation,
+                    source_digest=expected_source_digest, stage=stage, mapping=mapping,
+                    snapshots=Path(temporary), logs=logs, issues=issues, remaining_bytes=remaining_bytes)
+                if retained:
+                    record["original_log_snapshots"] = retained
+        return publish_bundle(evidence, (), invocation=invocation, expected_source_digest=expected_source_digest,
+            mapping=mapping, output=output, receipt=receipt, logs=logs, extra_report=extra)
 
 
 def assemble_preparation(*, stage, invocation, expected_source_digest, source_roots,
@@ -2334,6 +2426,40 @@ def self_test():
         contradictory_job = job_receipt | dict(phases=[phase_receipt | dict(diagnostics_directory=str(linked), exit_code=7)])
         job = job_run("job-contradictory-phase", contradictory_job)
         assert job["export_status"] == "FAIL" and job["phase_bundles"][0]["command_status"] == "FAIL"
+        failed_directory = root / "diagnostics/current/outer/tests"
+        failed_directory.mkdir(parents=True)
+        (root / "logs").mkdir(exist_ok=True)
+        failed_log = root / "logs/tests.log"
+        failed_log.write_text("PASS product at " + str(root / "source.jl") + ":7\n")
+        decoder_log = failed_directory / "finalization.log"
+        decoder_log.write_text("KeyboardInterrupt at " + str(root / "exporter.py") + ":7\n/private/synthetic-source/secret.jl\n")
+        decoder = dict(name="diagnostic-finalizer", invocation="current", source_digest=digest,
+            started=True, pid=124, status="TIMEOUT", semantic_status="TIMEOUT", exit_code=-2,
+            cleanup_status="REAPED", direct_child_reaped=True, log=str(decoder_log))
+        failed_phase = phase_receipt | dict(diagnostics_directory=str(failed_directory),
+            log=str(failed_log), log_sha256=hashlib.sha256(failed_log.read_bytes()).hexdigest(),
+            status="FAIL", semantic_status="PASS", exit_code=0, diagnostics_status="FAIL", diagnostic_finalizer=decoder)
+        version_phase = phase_receipt | dict(name="julia-version", process_token="version", pid=125,
+            diagnostics_status="UNAVAILABLE", expected_test_file_inventory=None)
+        failed_receipt = job_receipt | dict(phases=[failed_phase, version_phase], required_phases=["tests", "julia-version"])
+        lost = job_run("job-missing-bundle-original-logs", failed_receipt)
+        assert lost["check_status"] == "FAIL" and lost["export_status"] == "PASS" and lost["assertion_counts"] is None
+        assert len(lost["original_logs"]) == 2 and not any(item["severe"] for item in lost["issues"])
+        original = root / "job-missing-bundle-original-logs"
+        assert "owned/source.jl:7" in (original / lost["original_logs"][0]["file"]).read_text()
+        assert "KeyboardInterrupt" in (original / lost["original_logs"][1]["file"]).read_text()
+        assert "secret.jl" not in (original / lost["original_logs"][1]["file"]).read_text()
+        assert all(not unsafe_export(path) for path in original.iterdir())
+        decoder_log.write_text(decoder_log.read_text() + "x" * (128 * 1024))
+        hashed_decoder = decoder | dict(log_sha256=hashlib.sha256(decoder_log.read_bytes()).hexdigest())
+        clipped = job_run("job-missing-bundle-clipped-log", failed_receipt | dict(
+            phases=[failed_phase | dict(diagnostic_finalizer=hashed_decoder), version_phase]))
+        snapshots = clipped["phase_bundles"][0]["original_log_snapshots"]
+        assert snapshots[1]["truncated"] and snapshots[1]["snapshot_bytes"] == 64 * 1024
+        assert snapshots[1]["retirement_hash_status"] == "VERIFIED_WHOLE_LOG" and clipped["export_status"] == "PASS"
+        stale = job_run("job-missing-bundle-stale-finalizer", failed_receipt | dict(
+            phases=[failed_phase | dict(diagnostic_finalizer=decoder | dict(invocation="old")), version_phase]))
+        assert stale["check_status"] == "FAIL" and stale["export_status"] == "FAIL" and len(stale["original_logs"]) == 1
         missing_command = job_receipt | dict(status="PASS", loops={}, required_phases=["missing"], phases=[])
         job = job_run("job-missing-required-command", missing_command)
         assert job["export_status"] == "FAIL" and job["check_status"] == "FAIL"
