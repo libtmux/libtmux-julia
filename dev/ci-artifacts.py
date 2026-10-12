@@ -9,6 +9,7 @@ subtrees. Missing bodies and unknown inventories remain partial.
 
 import argparse
 import csv
+from dataclasses import dataclass, field
 import hashlib
 import json
 import math
@@ -18,6 +19,7 @@ import re
 import sys
 import tempfile
 import time
+from types import MappingProxyType
 import xml.etree.ElementTree as ET
 
 
@@ -536,9 +538,190 @@ def profile_observations(payload, event):
                 sample_coverage_status="UNPROVED", symbolization_scope="checkpoint lookup only; not sample/process/time coverage")
 
 
-def copy_profiles(processes, event_paths, *, invocation, source_digest, mapping, output, issues, metadata=None):
+
+@dataclass
+class ProfileCacheBuild:
+    entries: list = field(default_factory=list)
+    verified_outputs: dict = field(default_factory=dict)
+    hits: int = 0
+    misses: int = 0
+
+
+def profile_policy_sha256():
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+def profile_mapping_sha256(mapping):
+    policy = dict(roots=mapping.roots,
+        source_aliases=[(pattern.pattern, pattern.flags, logical) for pattern, logical in mapping.source_aliases])
+    return hashlib.sha256(json.dumps(policy, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+
+
+def profile_event_sha256(event):
+    return hashlib.sha256(json.dumps(event, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class ProfileReuse:
+    directory: Path
+    entries: object
+    policy: str
+    fingerprint: str
+    invocation: str
+    source_digest: str
+    phase: str
+
+    @classmethod
+    def from_approval(cls, index_path, *, approved_manifest_sha256, invocation, source_digest,
+                      expected_phase, mapping):
+        index_path = Path(index_path)
+        if not mapping.owns(index_path) or index_path.name != "profile-cache-index.json":
+            raise ValueError("unowned or unsupported profile reuse index")
+        local_issues = []
+        manifest_raw = input_bytes(index_path.parent / "manifest.json", mapping, local_issues, limit=64*1024)
+        if local_issues or hashlib.sha256(manifest_raw).hexdigest() != approved_manifest_sha256:
+            raise ValueError("profile cache manifest differs from supervisor approval")
+        manifest = parse_json(manifest_raw)
+        if (not isinstance(manifest, dict) or type(manifest.get("schema")) is not int or manifest["schema"] != 1
+                or manifest.get("invocation") != invocation or manifest.get("source_digest") != source_digest
+                or not isinstance(manifest.get("files"), dict)):
+            raise ValueError("profile cache manifest identity differs")
+        index_raw = input_bytes(index_path, mapping, local_issues, limit=MAX_RECORD_BYTES)
+        if local_issues or hashlib.sha256(index_raw).hexdigest() != manifest["files"].get(index_path.name):
+            raise ValueError("profile cache index differs from approved manifest")
+        index = parse_json(index_raw)
+        if (not isinstance(index, dict) or set(index) != {"schema", "invocation", "source_digest", "phase", "exporter_policy_sha256", "mapping_sha256", "profiles"}
+                or type(index.get("schema")) is not int or index["schema"] != 1
+                or index.get("invocation") != invocation or index.get("source_digest") != source_digest
+                or index.get("phase") != expected_phase or index.get("exporter_policy_sha256") != profile_policy_sha256()
+                or index.get("mapping_sha256") != profile_mapping_sha256(mapping)
+                or not isinstance(index.get("profiles"), list) or len(index["profiles"]) > MAX_PROFILE_CHECKPOINTS):
+            raise ValueError("profile cache policy, source or phase differs")
+        entries = {}
+        total = 0
+        for entry in index["profiles"]:
+            if (not isinstance(entry, dict) or set(entry) != {"process_id", "checkpoint_seq", "mode", "input_sha256", "raw_bytes", "event_sha256", "safe_file", "safe_bytes", "safe_sha256", "record", "redacted_paths"}
+                    or not bounded_structure(entry)
+                    or not isinstance(entry.get("process_id"), str) or not IDENTIFIER.fullmatch(entry["process_id"])
+                    or type(entry.get("checkpoint_seq")) is not int or entry["checkpoint_seq"] <= 0
+                    or entry.get("mode") not in ("cpu", "wall")
+                    or not isinstance(entry.get("input_sha256"), str) or not SHA256.fullmatch(entry["input_sha256"])
+                    or not isinstance(entry.get("event_sha256"), str) or not SHA256.fullmatch(entry["event_sha256"])
+                    or not isinstance(entry.get("safe_sha256"), str) or not SHA256.fullmatch(entry["safe_sha256"])
+                    or type(entry.get("raw_bytes")) is not int or not 0 <= entry["raw_bytes"] <= MAX_PROFILE_BYTES
+                    or type(entry.get("safe_bytes")) is not int or not 0 <= entry["safe_bytes"] <= MAX_PROFILE_BYTES
+                    or not isinstance(entry.get("safe_file"), str) or not IDENTIFIER.fullmatch(entry["safe_file"])
+                    or not entry["safe_file"].endswith(".json") or not isinstance(entry.get("record"), dict)
+                    or type(entry.get("redacted_paths")) is not int or entry["redacted_paths"] < 0):
+                raise ValueError("malformed profile cache entry")
+            record = entry["record"]
+            if (record.get("status") != "RAW_PRESERVED" or record.get("process_id") != entry["process_id"]
+                    or type(record.get("checkpoint_seq")) is not int or record["checkpoint_seq"] != entry["checkpoint_seq"] or record.get("mode") != entry["mode"]
+                    or record.get("input_sha256") != entry["input_sha256"] or type(record.get("data_words")) is not int
+                    or record["data_words"] < 0 or type(record.get("threads")) is not int or record["threads"] <= 0
+                    or not isinstance(record.get("julia"), str) or record.get("capture_status") not in ("captured", "empty")
+                    or type(record.get("lookup_addresses")) is not int or record["lookup_addresses"] < 0
+                    or type(record.get("unresolved_addresses")) is not int or not 0 <= record["unresolved_addresses"] <= record["lookup_addresses"]
+                    or record.get("symbolization_status") not in ("PARTIAL", "COMPLETE", "UNAVAILABLE")
+                    or record.get("symbolization_policy") not in (None, "native", "deferred")
+                    or any(record.get(flag) is not None and type(record[flag]) is not bool for flag in ("buffer_full", "truncated"))
+                    or record.get("decoder_status") != "RAW_PRESERVED_NATIVE_DECODER_UNVERIFIED"
+                    or record.get("sample_coverage_status") != "UNPROVED"
+                    or record.get("capture_seconds") is not None and (not finite_number(record["capture_seconds"]) or record["capture_seconds"] < 0)):
+                raise ValueError("profile cache record contradicts entry")
+            if manifest["files"].get(entry["safe_file"]) != entry["safe_sha256"]:
+                raise ValueError("profile cache bytes are not in approved manifest")
+            total += entry["raw_bytes"]
+            if total > MAX_PROFILE_TOTAL_BYTES:
+                raise ValueError("profile cache exceeds total bound")
+            key = (entry["process_id"], entry["checkpoint_seq"], entry["mode"], entry["input_sha256"])
+            if key in entries:
+                raise ValueError("duplicate profile cache key")
+            if any(type(value) not in (str, int, float, bool, type(None)) for value in record.values()):
+                raise ValueError("profile cache record contains unsupported structure")
+            frozen_record = MappingProxyType(record.copy())
+            entries[key] = MappingProxyType(entry | dict(record=frozen_record))
+        return cls(index_path.parent, MappingProxyType(entries), index["exporter_policy_sha256"],
+            index["mapping_sha256"], invocation, source_digest, expected_phase)
+
+    def copy(self, process, start, event, raw, output, filename, mapping, build):
+        if process.get("phase") != self.phase:
+            raise ValueError("profile reuse context differs from current phase")
+        key = (process["process_id"], event["checkpoint_seq"], event["mode"], event["input_sha256"])
+        entry = self.entries.get(key)
+        if entry is None:
+            build.misses += 1
+            return None
+        if (profile_mapping_sha256(mapping) != self.fingerprint or profile_policy_sha256() != self.policy
+                or entry["raw_bytes"] != len(raw) or hashlib.sha256(raw).hexdigest() != entry["input_sha256"]
+                or entry["event_sha256"] != profile_event_sha256(event)
+                or entry["record"]["julia"] != start.get("julia") or type(start.get("threads")) is not int
+                or entry["record"]["threads"] != start["threads"] or type(event.get("data_words")) is not int
+                or entry["record"]["data_words"] != event["data_words"] or entry["record"]["capture_status"] != event["status"]):
+            raise ValueError("profile reuse differs from current raw event or policy")
+        source, destination = self.directory / entry["safe_file"], output / filename
+        if not mapping.owns(source) or source.is_symlink() or not source.is_file():
+            raise ValueError("profile reuse source is unavailable or unsafe")
+        count, digest = 0, hashlib.sha256()
+        with source.open("rb") as reader, destination.open("xb") as writer:
+            while chunk := reader.read(64*1024):
+                count += len(chunk)
+                if count > min(MAX_PROFILE_BYTES, entry["safe_bytes"]):
+                    raise ValueError("profile reuse source exceeds bound")
+                digest.update(chunk)
+                writer.write(chunk)
+        if count != entry["safe_bytes"] or digest.hexdigest() != entry["safe_sha256"]:
+            raise ValueError("profile reuse source differs from immutable proof")
+        build.verified_outputs[str(destination.resolve())] = entry["safe_sha256"]
+        mapping.redacted_paths += entry["redacted_paths"]
+        build.hits += 1
+        copied = dict(entry["record"]) | dict(file=filename)
+        build.entries.append(dict(entry) | dict(safe_file=filename, record=copied))
+        return copied
+
+
+def capture_profile_cache_entry(build, process, event, raw, safe_path, record, redacted_paths):
+    safe = safe_path.read_bytes()
+    build.entries.append(dict(process_id=process["process_id"], checkpoint_seq=event["checkpoint_seq"],
+        mode=event["mode"], input_sha256=event["input_sha256"], raw_bytes=len(raw),
+        event_sha256=profile_event_sha256(event), safe_file=safe_path.name,
+        safe_bytes=len(safe), safe_sha256=hashlib.sha256(safe).hexdigest(),
+        record=record.copy(), redacted_paths=redacted_paths))
+
+
+def write_profile_cache_index(build, output, mapping, invocation, digest, phase):
+    if phase is None:
+        return
+    payload = dict(schema=1, invocation=invocation, source_digest=digest, phase=phase,
+        exporter_policy_sha256=profile_policy_sha256(), mapping_sha256=profile_mapping_sha256(mapping),
+        profiles=build.entries)
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode() + b"\n"
+    if len(raw) > MAX_RECORD_BYTES:
+        raise ValueError("profile cache index exceeds bound")
+    (output / "profile-cache-index.json").write_bytes(raw)
+
+
+def profile_reuse_context(approval, *, invocation, source_digest, expected_phase, mapping):
+    if approval is None:
+        return None
+    if (not isinstance(approval, dict) or set(approval) != {"index_path", "approved_manifest_sha256"}
+            or not isinstance(approval["index_path"], (str, Path))
+            or not isinstance(approval["approved_manifest_sha256"], str)
+            or not SHA256.fullmatch(approval["approved_manifest_sha256"])):
+        raise ValueError("profile reuse requires a supervisor-approved descriptor")
+    return ProfileReuse.from_approval(approval["index_path"],
+        approved_manifest_sha256=approval["approved_manifest_sha256"], invocation=invocation,
+        source_digest=source_digest, expected_phase=expected_phase, mapping=mapping)
+
+
+def copy_profiles(processes, event_paths, *, invocation, source_digest, mapping, output, issues,
+                  metadata=None, profile_reuse=None, profile_cache_build=None):
     """Retain hashed raw checkpoints; native decoder success needs separate proof."""
     records, previous, total_bytes, attempted = [], {}, 0, 0
+    build = profile_cache_build if profile_cache_build is not None else ProfileCacheBuild()
+    if profile_reuse is not None and (not isinstance(profile_reuse, ProfileReuse)
+            or profile_reuse.invocation != invocation or profile_reuse.source_digest != source_digest):
+        raise ValueError("profile reuse context differs from current source or invocation")
     for process in processes:
         start = process["events"][0] if process["events"] else {}
         directory = Path(event_paths[process["input_ordinal"] - 1]).parent
@@ -578,6 +761,12 @@ def copy_profiles(processes, event_paths, *, invocation, source_digest, mapping,
                 issues.append(fault("stale_profile", "checkpoint bytes differ from the event digest", severe=True))
                 record["reason"] = "checkpoint_digest_mismatch"
                 continue
+            if profile_reuse is not None:
+                filename = f"profile-{len(records):04d}-{event['mode']}.json"
+                cached = profile_reuse.copy(process, start, event, raw, output, filename, mapping, build)
+                if cached is not None:
+                    record.update(cached)
+                    continue
             try:
                 payload = parse_json(raw)
             except (ValueError, UnicodeError, RecursionError):
@@ -603,6 +792,7 @@ def copy_profiles(processes, event_paths, *, invocation, source_digest, mapping,
                 continue
             filename = f"profile-{len(records):04d}-{event['mode']}.json"
             # Sample words are validated UInt64 values, so only metadata needs path mapping.
+            redaction_before = mapping.redacted_paths
             safe = mapping.value({key: value for key, value in payload.items() if key not in ("data", "lookup")})
             safe["data"] = payload["data"]
             safe["lookup"] = {address: mapping.value(frames) for address, frames in payload["lookup"].items()}
@@ -615,6 +805,8 @@ def copy_profiles(processes, event_paths, *, invocation, source_digest, mapping,
                           julia=payload["julia"], threads=payload["threads"],
                           decoder_status=safe["decoder_status"],
                           capture_seconds=event["capture_seconds"] if finite_number(event.get("capture_seconds")) and event["capture_seconds"] >= 0 else None)
+            capture_profile_cache_entry(build, process, event, raw, output / filename, record,
+                mapping.redacted_paths - redaction_before)
     return records
 
 
@@ -968,7 +1160,11 @@ def export_strings(path):
                 yield line
 
 
-def unsafe_export(path):
+def unsafe_export(path, *, reused_profile_sha256=None):
+    if reused_profile_sha256 is not None:
+        return (not isinstance(reused_profile_sha256, str) or not SHA256.fullmatch(reused_profile_sha256)
+            or path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_PROFILE_BYTES
+            or hashlib.sha256(path.read_bytes()).hexdigest() != reused_profile_sha256)
     try:
         return any(PRIVATE_PATH_REJECT.search(value) or ABSOLUTE_PATH.search(value) for value in export_strings(path))
     except (ValueError, UnicodeError, RecursionError, ET.ParseError):
@@ -976,9 +1172,10 @@ def unsafe_export(path):
 
 
 def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, mapping,
-                 output, receipt=None, logs=(), extra_report=None, snapshots=()):
+                 output, receipt=None, logs=(), extra_report=None, snapshots=(), profile_reuse=None):
     """Write a private build; callers publish only after the reject scan."""
     started = time.monotonic()
+    profile_cache_build = ProfileCacheBuild()
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     if output.is_symlink() or any(output.iterdir()):
@@ -1011,7 +1208,10 @@ def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, m
         report["check_status"] = "FAIL"
     report["profile_metadata"] = []
     report["profile_records"] = copy_profiles(processes, event_paths, invocation=invocation,
-        source_digest=expected_source_digest, mapping=mapping, output=output, issues=issues, metadata=report["profile_metadata"])
+        source_digest=expected_source_digest, mapping=mapping, output=output, issues=issues, metadata=report["profile_metadata"],
+        profile_reuse=profile_reuse, profile_cache_build=profile_cache_build)
+    report["profile_reuse_counts"] = dict(reused=profile_cache_build.hits,
+        fully_validated=len(profile_cache_build.entries)-profile_cache_build.hits, misses=profile_cache_build.misses)
     retained = [record for record in report["profile_records"] if record["status"] == "RAW_PRESERVED"]
     copied, attempted = len(retained), len(report["profile_records"])
     report["profile_copy_status"] = ("PARTIAL" if copied < attempted else "RAW_PRESERVED") if copied else "UNAVAILABLE"
@@ -1140,9 +1340,11 @@ def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, m
     report["export_status"] = "FAIL" if any(item["severe"] for item in issues) or any(item["severe"] for process in processes for item in process["issues"]) else "PASS"
     report["assembly_seconds"] = time.monotonic() - started
     (output / "diagnostics.json").write_text(json.dumps(mapping.value(report), indent=2, sort_keys=True) + "\n")
+    write_profile_cache_index(profile_cache_build, output, mapping, invocation, expected_source_digest, report.get("phase") or report.get("snapshot_binding", {}).get("phase"))
     manifest = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in output.iterdir() if path.is_file()}
     (output / "manifest.json").write_text(json.dumps(dict(schema=1, invocation=invocation, source_digest=expected_source_digest, files=manifest), indent=2, sort_keys=True) + "\n")
-    unsafe = [path.name for path in output.iterdir() if unsafe_export(path)]
+    unsafe = [path.name for path in output.iterdir() if unsafe_export(path,
+        reused_profile_sha256=profile_cache_build.verified_outputs.get(str(path.resolve())))]
     if unsafe:
         # A rejected export keeps no uploadable unsafe payload.
         for filename in unsafe:
@@ -1152,7 +1354,8 @@ def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, m
 
 
 def publish_bundle(evidence, event_paths, *, invocation, expected_source_digest,
-                   mapping, output, receipt=None, logs=(), extra_report=None, snapshots=(), validate_report=None):
+                   mapping, output, receipt=None, logs=(), extra_report=None, snapshots=(), validate_report=None,
+                   profile_reuse=None):
     """Expose only a complete sanitized bundle, including its hash manifest.
 
 A killed exporter can leave its private build, but the workflow never uploads
@@ -1167,7 +1370,8 @@ that build. Evidence coverage may remain partial even when publication succeeds.
         build = Path(temporary) / "bundle"
         report = write_bundle(evidence, event_paths, invocation=invocation,
                               expected_source_digest=expected_source_digest, mapping=mapping,
-                              output=build, receipt=receipt, logs=logs, extra_report=extra_report, snapshots=snapshots)
+                              output=build, receipt=receipt, logs=logs, extra_report=extra_report, snapshots=snapshots,
+                              profile_reuse=profile_reuse)
         if validate_report is not None:
             validate_report(report)
         build.replace(output)
@@ -1191,7 +1395,7 @@ def assemble(event_paths, *, invocation, expected_source_digest, source_roots, o
 
 def assemble_checkpoint(event_paths, *, invocation, expected_source_digest, source_roots,
                         output, admission_path, expected_phase, expected_direct_birth,
-                        snapshot_ordinal, through_sequence):
+                        snapshot_ordinal, through_sequence, profile_reuse=None):
     """Publish an admitted, flushed native prefix without a completion verdict.
 
 Read only through the notified start/checkpoint/assertion/file-error sequence. Later producer
@@ -1267,6 +1471,8 @@ and gives every generation a fresh output directory.
         check_status="FAIL" if native_failed else "UNKNOWN", test_inventory_complete=False,
         child_inventory_status="UNPROVED", observed_file_coverage_complete=False,
         receipt_timing_boundary="live admitted prefix; no completion, exit, reaping or whole-command timing proof")
+    reuse = profile_reuse_context(profile_reuse, invocation=invocation, source_digest=expected_source_digest,
+        expected_phase=expected_phase, mapping=mapping)
     def validate(report):
         if report["export_status"] != "PASS":
             raise ValueError("checkpoint publication rejected invalid evidence")
@@ -1279,11 +1485,11 @@ and gives every generation a fresh output directory.
                 raise ValueError("checkpoint publication has no retained bound payload")
     return publish_bundle(evidence, event_paths, invocation=invocation,
         expected_source_digest=expected_source_digest, mapping=mapping, output=output,
-        extra_report=extra, validate_report=validate)
+        extra_report=extra, validate_report=validate, profile_reuse=reuse)
 
 
 def assemble_phase(event_paths, *, invocation, expected_source_digest, source_roots,
-                   output, phase_path, expected_phase, expected_direct_birth=None):
+                   output, phase_path, expected_phase, expected_direct_birth=None, profile_reuse=None):
     """Bind one admitted phase and publish its native evidence without recounting.
 
 The phase receipt authenticates the direct child; observed children cannot prove
@@ -1377,9 +1583,11 @@ A process-only phase preserves its command verdict without inventing test counts
         direct_log_binding_status="BOUND" if logs else "UNAVAILABLE",
         receipt_timing_boundary="direct-command retirement before this artifact finalizer; final supervisor receipt includes finalization",
         finalizer_timing_status="NOT_YET_IN_PHASE_SNAPSHOT")
+    reuse = profile_reuse_context(profile_reuse, invocation=invocation, source_digest=expected_source_digest,
+        expected_phase=expected_phase, mapping=mapping)
     return publish_bundle(evidence, event_paths, invocation=invocation,
         expected_source_digest=expected_source_digest, mapping=mapping, output=output,
-        receipt=receipt, logs=logs, extra_report=proof)
+        receipt=receipt, logs=logs, extra_report=proof, profile_reuse=reuse)
 
 
 def assemble_job(*, invocation, expected_source_digest, source_roots, output, supervisor_path):
@@ -1844,6 +2052,70 @@ def self_test():
         assert result["snapshot_kind"] == "LIVE_PREFIX" and result["coverage_status"] == "PARTIAL"
         assert not result["test_inventory_complete"] and not result["diagnostics_complete"]
         assert result["profile_copy_status"] == "RAW_PRESERVED" and result["profile_symbolization_status"] == "PARTIAL"
+        # Reuse profile bytes, never the earlier prefix's counts or verdict.
+        cache_public = root / "live-checkpoint"
+        approval = dict(index_path=cache_public / "profile-cache-index.json",
+            approved_manifest_sha256=hashlib.sha256((cache_public / "manifest.json").read_bytes()).hexdigest())
+        cached = checkpoint_run("live-cache-hit", profile_reuse=approval)
+        assert cached["profile_reuse_counts"] == dict(reused=1, fully_validated=0, misses=0)
+        profile_name = result["profile_records"][0]["file"]
+        assert (root / "live-cache-hit" / profile_name).read_bytes() == (cache_public / profile_name).read_bytes()
+        later_failure = phase_events[:-1] + [checkpoint_marker,
+            event("testset_start", 1, testset_id=3, parent_id=None, description="later failure", file="test/runtests.jl", line=20),
+            event("assertion_problem", 1, testset_id=3, result_type="Fail", problem_kind="test", file="test/runtests.jl", line=21, detail="Expression: 1 == 2")]
+        failed_cache = checkpoint_run("live-cache-current-failure", items=later_failure, profile_reuse=approval)
+        assert failed_cache["profile_reuse_counts"]["reused"] == 1
+        assert failed_cache["test_status"] == "FAIL" and failed_cache["assertion_counts"]["failed"] == 1
+        assert failed_cache["processes"][0]["assertion_problems"]
+        fallback = checkpoint_run("live-cache-default-fallback", profile_reuse=None)
+        assert fallback["profile_reuse_counts"] == dict(reused=0, fully_validated=1, misses=0)
+        assert (root / "live-cache-default-fallback" / profile_name).read_bytes() == (cache_public / profile_name).read_bytes()
+        raw_before = profile.read_bytes()
+        profile.write_bytes(raw_before.replace(b"123", b"456", 1))
+        try:
+            checkpoint_run("live-cache-raw-tamper", profile_reuse=approval)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("cache accepted changed raw profile bytes")
+        profile.write_bytes(raw_before)
+        safe_path = cache_public / profile_name
+        safe_before = safe_path.read_bytes()
+        safe_path.write_bytes(b'{"data":["/private/not-a-word"]}\n')
+        try:
+            checkpoint_run("live-cache-sanitized-tamper", profile_reuse=approval)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("cache accepted changed sanitized profile bytes")
+        safe_path.write_bytes(safe_before)
+        from unittest.mock import patch
+        with patch("pathlib.Path.home", return_value=root.parent):
+            first_map = SourceMap([(root, "owned")])
+        with patch("pathlib.Path.home", return_value=root / "another-home"):
+            second_map = SourceMap([(root, "owned")])
+        assert first_map.roots == second_map.roots
+        assert profile_mapping_sha256(first_map) != profile_mapping_sha256(second_map)
+        assert first_map.text("~/" + root.name + "/test.jl") != second_map.text("~/" + root.name + "/test.jl")
+        try:
+            ProfileReuse.from_approval(approval["index_path"],
+                approved_manifest_sha256=approval["approved_manifest_sha256"], invocation="current",
+                source_digest=digest, expected_phase="tests", mapping=first_map)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("cache accepted changed effective home aliases")
+        context = ProfileReuse.from_approval(approval["index_path"],
+            approved_manifest_sha256=approval["approved_manifest_sha256"], invocation="current",
+            source_digest=digest, expected_phase="tests", mapping=SourceMap([(root, "owned")]))
+        entry = next(iter(context.entries))
+        try:
+            context.entries[entry]["record"]["data_words"] = 99
+        except TypeError:
+            pass
+        else:
+            raise AssertionError("immutable profile proof changed")
+        checkpoint_run("live-cache-restored-current-prefix")
         binding = result["snapshot_binding"]
         prefix = b"".join(source.read_bytes().splitlines(keepends=True)[:binding["through_sequence"]])
         assert binding["event_prefix_sha256"] == hashlib.sha256(prefix).hexdigest()
