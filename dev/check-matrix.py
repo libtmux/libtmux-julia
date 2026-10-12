@@ -1136,7 +1136,7 @@ def finalize_artifacts(args):
 
 def parallel_mid(commands, *, stage, env, result, save, deadline=None):
     """Run independent offline phases; receipts and cancellation stay with the worker."""
-    priority = {"core-unit": 0, "mcp-unit": 1, "format": 2, "quality": 3}
+    priority = {"core-unit": 0, "mcp-unit": 1, "workspace-unit": 2, "format": 3, "quality": 4}
     ordered = sorted(commands, key=lambda item: priority.get(item[0], 4))
     group = PhaseGroup()
     pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="matrix-phase")
@@ -1513,10 +1513,11 @@ def command_plan(args, stage, metadata):
         raise ValueError("native compiler cache control must be 0 or 1")
     cached_normal = ["env", f"LIBTMUX_TEST_COMPILER_CACHE={cache}", *normal]
     minimal = [*normal, "--compile=min", "-O0"]
+    tools = [args.julia, "--startup-file=no", "--threads=1", f"--project={project}"]
     qa_cache = os.environ.get("LIBTMUX_LOOP_QUALITY_CACHE", "1")
     if qa_cache not in ("0", "1"):
         raise ValueError("QA compiler cache control must be 0 or 1")
-    quality_command = ["env", f"LIBTMUX_QUALITY_COMPILER_CACHE={qa_cache}", *minimal]
+    quality_command = ["env", f"LIBTMUX_QUALITY_COMPILER_CACHE={qa_cache}", *tools, "--compile=min", "-O0"]
     commands = []
     outer_budget = LOOP_BUDGETS["outer"]
     def add(name, argv, budget, tier):
@@ -1525,7 +1526,7 @@ def command_plan(args, stage, metadata):
     add("workspace-unit", [*minimal, "packages/LibTmuxWorkspace/test/runtests.jl", "unit"], 10, "unit")
     add("mcp-unit", [*minimal, "packages/LibTmuxMCP/test/runtests.jl", "unit"], 10, "unit")
     add("quality", [*quality_command, "dev/check-quality.jl", "quality"], 10, "quality")
-    add("format", [*normal, "dev/check-quality.jl", "format"], 10, "quality")
+    add("format", [*tools, "dev/check-quality.jl", "format"], 10, "quality")
     add("generated", [*minimal, "dev/generate-criteria.jl", "--check"], 10, "quality")
     add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 10, "quality")
     add("consumer-diagnostics", [*minimal, "dev/check-consumers.jl", "--self-test"], 10, "quality")
