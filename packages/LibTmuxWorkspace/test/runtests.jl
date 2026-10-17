@@ -1,7 +1,8 @@
 using Test
 
 suite = isempty(ARGS) ? "unit" : only(ARGS)
-suite in ("unit", "integration", "cli", "all") || error("unknown workspace suite")
+suite in ("unit", "integration", "cli", "old-daemon", "all") ||
+    error("unknown workspace suite")
 if suite in ("unit", "all")
     include("config.jl")
     include("script.jl")
@@ -17,4 +18,8 @@ end
 if suite in ("cli", "all")
     # Outer: launches installed CLI consumers, including their Julia startup.
     include("cli_integration.jl")
+end
+if suite in ("integration", "old-daemon", "all")
+    # Needs real builds; skips unless LIBTMUX_TEST_TMUX and the client are set.
+    include("old_daemon.jl")
 end

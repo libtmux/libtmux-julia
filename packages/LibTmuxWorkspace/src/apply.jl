@@ -46,6 +46,10 @@ function _created_window(server, session_ref, window_ref, remaining, cancel)
     LibTmux.WindowLinkRef(link), pane
 end
 
+# Readiness and rollback each run several tmux commands, and each can start a
+# second client process to check the daemon release.
+const _STEP_BUDGET = 5.0
+
 function _with_ready_marker(publish, timeout, cancel; _monitor=FolderMonitor)
     started = time_ns()
     directory = mktempdir(; prefix="libtmux-julia-ready-")
@@ -119,7 +123,7 @@ function _with_ready_marker(publish, timeout, cancel; _monitor=FolderMonitor)
 end
 
 function _pane_ready(server, session_ref, pane, timeout, cancel)
-    _with_ready_marker(min(0.9, timeout()), cancel) do marker, content
+    _with_ready_marker(min(_STEP_BUDGET, timeout()), cancel) do marker, content
         pending = marker * ".pending"
         line =
             " (command printf '%s' " *
@@ -139,7 +143,7 @@ end
 
 function _rollback_created(server, session_ref, created_session, links, created)
     outcomes = NamedTuple[]
-    started, budget = time_ns(), 0.9
+    started, budget = time_ns(), _STEP_BUDGET
     remaining() = _remaining(started, budget, nothing)
     if created_session && session_ref !== nothing
         try
@@ -239,6 +243,8 @@ function apply(
         rollback_outcomes,
     )
     try
+        # A refused release must not be preceded by a step that never runs.
+        LibTmux._preflight(server; timeout=remaining(), cancel)
         for (index, step) in enumerate(prepared.steps)
             current = index
             remaining()
@@ -415,7 +421,10 @@ function apply(
         answer
     catch error
         error isa WorkspaceApplyError && rethrow()
-        current in completed || push!(unknown, (step=current, effect=:uncertain_step))
+        # A refused release or failed version probe never dispatched the step.
+        LibTmux._not_dispatched(error) ||
+            current in completed ||
+            push!(unknown, (step=current, effect=:uncertain_step))
         outcomes =
             rollback == :created ?
             _rollback_created(server, session_ref, created_session, links, created) : ()

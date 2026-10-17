@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import platform
 import shutil
@@ -576,7 +577,25 @@ println("PASS admitted version arguments construct real Pkg specifications")
         step = step.split("- name:", 1)[0]
         assert "if:" not in step and MINIMUM_TMUX in step
         client = [l for l in workflow.splitlines() if "LIBTMUX_TEST_CLIENT_TMUX" in l]
-        assert len(client) == 1 and "real_old" not in client[0]
+        assert client and all("real_old" not in l for l in client)
+        # The package suites that need real old daemons run in the reject job
+        # and fail rather than skip when the builds are absent.
+        for suite in ("LibTmuxWorkspace", "LibTmuxMCP"):
+            command = f"packages/{suite}/test/runtests.jl old-daemon"
+            assert command in workflow, command
+        assert workflow.count("LIBTMUX_TEST_REQUIRE_OLD_DAEMON: '1'") == 2
+        # The reject environment must import what those steps import: direct
+        # dependencies for the test files, and the core package's weak
+        # dependencies, which Pkg.develop cannot validate on Julia 1.10 alone.
+        prepare = workflow.split("- name: Prepare the package environment", 1)[1]
+        prepare = prepare.split("- name:", 1)[0]
+        needed = set(tomllib.loads((ROOT / "Project.toml").read_text())["weakdeps"])
+        for suite in ("LibTmuxWorkspace", "LibTmuxMCP"):
+            source = (ROOT / "packages" / suite / "test" / "old_daemon.jl").read_text()
+            needed |= set(re.findall(r"(?m)^\s*(?:using|import)\s+([A-Za-z0-9_]+)", source))
+        needed -= {"Test", "LibTmux", "LibTmuxWorkspace", "LibTmuxMCP"}
+        missing = sorted(name for name in needed if f'"{name}"' not in prepare)
+        assert not missing, f"reject environment lacks {missing}"
         assert not {cell["tmux"] for cell in rejected} & {cell["tmux"] for cell in cells}
         assert all(cell["tmux"] != MINIMUM_TMUX for cell in rejected)
         assert len({cell["label"] for cell in rejected}) == len(rejected)
