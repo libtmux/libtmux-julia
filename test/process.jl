@@ -170,4 +170,29 @@ end
     )
 end
 
+# A descendant that inherited the client's pipes can hold them open forever.
+@testset "an exited client's silent pipes are closed after a quiet interval" begin
+    mktempdir(; prefix="ltj-drain-") do directory
+        script = joinpath(directory, "held")
+        pidfile = joinpath(directory, "holder.pid")
+        write(script, "#!/bin/sh\necho kept\nsleep 20 &\necho \$! > '$pidfile'\n")
+        chmod(script, 0o700)
+        try
+            started = time_ns()
+            result = LibTmux._run_process(`$script`)
+            @test String(result.stdout) == "kept\n" && result.exitcode == 0
+            @test (time_ns() - started) / 1e9 < 5
+        finally
+            for pid in split(isfile(pidfile) ? read(pidfile, String) : "")
+                run(ignorestatus(`kill $pid`))
+            end
+        end
+
+        # Output that arrives slowly, within the quiet interval, is kept whole.
+        write(script, "#!/bin/sh\nprintf a\nsleep 0.1\nprintf b\nsleep 0.1\nprintf c\n")
+        result = LibTmux._run_process(`$script`)
+        @test String(result.stdout) == "abc" && result.exitcode == 0
+    end
+end
+
 include("process_retirement.jl")
