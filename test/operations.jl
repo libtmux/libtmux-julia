@@ -25,7 +25,7 @@
             @test any(w -> w.name == "#{literal}", windows(snapshot(server)))
             LibTmux.select_layout(server, extra, :even_horizontal)
             version = only(read_formats(server, extra, FormatField("version"))).value
-            if version in ("3.2a", "3.3", "3.3a", "3.4")
+            if version in ("3.3", "3.3a", "3.4")
                 @test_throws UnsupportedCapability select_layout(
                     server,
                     extra,
@@ -66,6 +66,11 @@ end
         write(
             executable,
             raw"""#!/bin/sh
+if [ "$6" = run-shell ]; then
+    printf 'unknown command: %s3.7\n' "${8%\#\{version\}}" >&2
+    exit 1
+fi
+shift 7
 printf '%s\n' "$5" >> "$0.calls"
 case "$5" in
     display-message)

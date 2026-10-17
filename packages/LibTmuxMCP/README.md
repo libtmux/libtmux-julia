@@ -70,6 +70,11 @@ includes the pane ID and observed server generation. Listing returns unique
 physical panes plus linked session/window contexts; it preserves the
 difference between one pane and several occurrences.
 
+The server needs tmux 3.3a or newer. A tool called against an older or
+unreadable tmux fails with code `unsupported_tmux` and `effects: none`; the
+message says to upgrade tmux and restart the server, or pin the previous
+libtmux release.
+
 `--caller-pane %3` resolves a default target at startup. It never uses the
 control client's current pane. Repeating `--allow-pane` restricts the target
 set. Repeating `--tool` replaces the default catalog. The same policy applies

@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       cells: ${{ steps.cells.outputs.cells }}
+      rejected: ${{ steps.rejected.outputs.cells }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,8 +47,39 @@ jobs:
           --output "$RUNNER_TEMP/libtmux-julia-release-preflight.toml"
       - id: cells
         run: echo "cells=$(python3 dev/check-matrix.py matrix --split)" >> "$GITHUB_OUTPUT"
+      - id: rejected
+        run: echo "cells=$(python3 dev/check-matrix.py matrix --rejection)" >> "$GITHUB_OUTPUT"
       - name: Check matrix ownership and result states
         run: python3 dev/check-matrix.py self-test
+
+  reject:
+    needs: matrix
+    name: ${{ matrix.job_label }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.rejected) }}
+    timeout-minutes: 15
+    env:
+      TMPDIR: /tmp
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: '1.10.0'
+          arch: x64
+      - name: Prepare Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libevent-dev libncurses-dev bison
+      - name: Prepare pinned tmux release
+        run: python3 dev/check-matrix.py build-tmux "$RUNNER_TEMP/libtmux-julia-reject" '${{ matrix.tmux }}'
+      - name: Assert the release is refused without effect
+        env:
+          LIBTMUX_TEST_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/${{ matrix.tmux }}/bin/tmux
+        run: julia --startup-file=no --project=. --threads=1 test/runtests.jl rejection
 
   check:
     needs: matrix

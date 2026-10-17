@@ -2,8 +2,8 @@
 
 | Boundary | Current evidence |
 | --- | --- |
-| Julia / tmux | 1.10.0 / 3.2a and 1.13.0 / 3.7c in the listed CI cells |
-| Linux x86_64 | 1.10.0 / 3.2a / 1 thread and 1.13.0 / 3.7c / 4 threads passed |
+| Julia / tmux | 1.10.0 / 3.3a and 1.13.0 / 3.7c in the listed CI cells |
+| Linux x86_64 | 1.10.0 / 3.3a / 1 thread and 1.13.0 / 3.7c / 4 threads passed |
 | macOS arm64 | 1.13.0 / 3.7c / 1 thread passed |
 | macOS x86_64 | 1.13.0 / 3.7c / 1 thread passed |
 | Full package suite | Core, MCP, workspace, extensions, documentation, external imports, examples and launchers passed in all listed cells |
@@ -12,9 +12,24 @@ These are exact CI cells, not a promise for other Julia, tmux, platform,
 architecture or thread combinations. An independent guide walkthrough and
 benchmark baselines remain open.
 
+The minimum tmux release for ordinary operations is 3.3a. Every subprocess
+command first reads the connected daemon's release, not the client's `-V`
+report, and runs behind a fence on that release; a typed operation reads the release once and the fence still checks each of its commands. A daemon below 3.3a, an
+unreadable release, or a daemon replaced after the version check raises
+[`UnsupportedTmuxVersion`](@ref) before the command has any effect. Reading
+the release fires no `after-*` or `command-error` hook. An endpoint with no
+daemon is checked against the `-V` report of the executable that would start it,
+and `kill-server` on such an endpoint does nothing. Releases are compared with
+their patch letters, so 3.3 is below the floor; `next-X.Y` and `X.Y-rc` rank
+below `X.Y`, and a bare `master` or OpenBSD report names no release and is
+refused as unrecognized. A daemon older than 3.2 has no `run-shell -C` and is
+refused as unsupported the same way. Each refusal says to upgrade tmux and
+restart the server, or pin the previous libtmux release. CI keeps 3.2a and 3.3
+as rejection cells that assert this refusal and that nothing changed.
+
 The repository capability manifest records implemented, deferred, excluded
-and untested surfaces. tmux letter suffixes are meaningful; `3.2a` is not
-silently normalized to `3.2`.
+and untested surfaces. tmux letter suffixes are meaningful; `3.3a` is not
+silently normalized to `3.3`.
 
 Local POSIX tmux is the initial transport scope. SSH, native Windows tmux,
 private tmux imsg access and Python workspace plugins are excluded. Query

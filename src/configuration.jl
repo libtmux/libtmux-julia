@@ -195,9 +195,7 @@ function _configuration_string_option(context, name)
     startswith(name, '@') && return true
     metadata = _tmux_option_metadata(name)
     if metadata === nothing && _tmux_option_versioned(name)
-        result = _operation_command(context, "display-message", "-p", "#{version}")
-        version = _configuration_text(result)
-        version === nothing || (metadata = _tmux_option_metadata(name, version))
+        metadata = _tmux_option_metadata(name, _context_release(context))
     end
     metadata !== nothing && metadata.kind === :string
 end

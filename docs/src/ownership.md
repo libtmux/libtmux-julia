@@ -98,11 +98,10 @@ read a broad option listing, whose user-defined names can contain raw newlines.
 An empty string or empty array masks inheritance; a missing sparse index stays
 missing. Hook reads preserve tmux's canonical command bodies and numeric indices.
 
-The generated option catalog pins metadata from tmux 3.2a through 3.7c.
-Most entries have stable types and scopes. Seven require an exact pinned
-version: `allow-passthrough`, `destroy-unattached`, `pane-border-format`,
-`pane-border-style`, `pane-active-border-style`, `window-linked` and
-`window-unlinked`. Those seven are refused on an unpinned version such as
+The generated option catalog pins metadata from tmux 3.3 through 3.7c.
+Most entries have stable types and scopes. Four require an exact pinned
+version: `allow-passthrough`, `destroy-unattached`, `pane-active-border-style`
+and `pane-border-style`. Those four are refused on an unpinned version such as
 3.7d; other catalog entries still use named commands to check availability.
 Unknown names and incompatible scopes are rejected. Unavailable built-ins and
 target errors retain their `ControlResult` instead of becoming absent values.

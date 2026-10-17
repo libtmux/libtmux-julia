@@ -129,14 +129,7 @@ function select_layout(
     text = _layout_argument(layout)
     context = _control_topology_context(connection, target; kwargs...)
     if endswith(text, "-mirrored")
-        rows = _control_rows(
-            connection,
-            "display-message",
-            ["version"];
-            timeout=_snapshot_remaining(context.started, context.budget),
-            cancel=context.cancel,
-        )
-        _check_layout_version(text, only(only(rows)))
+        _check_layout_version(text, something(_control_release(connection), ""))
     end
     _control_topology_effect(
         context,
