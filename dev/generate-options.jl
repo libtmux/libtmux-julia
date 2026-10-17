@@ -2,7 +2,6 @@ using SHA
 using TOML
 
 const OPTION_RELEASES = (
-    "3.2a",
     "3.3",
     "3.3a",
     "3.4",
