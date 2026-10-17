@@ -89,6 +89,7 @@ function new_window(
 )
     context = _control_operation_context(connection; kwargs...)
     _control_exact_target(connection, target)
+    name === nothing || _check_name(connection, name, :new_window)
     index === nothing || (index = _window_index(index))
     fields = ["pid", "start_time", "socket_path", "window_id"]
     args = [

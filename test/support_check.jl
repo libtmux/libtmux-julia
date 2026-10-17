@@ -328,7 +328,8 @@ end
     end
 end
 
-@testset "control attach reads identity without firing hooks" begin
+# Control acquisition needs tmux 3.7; below it the refusal is tested in features.jl.
+control_supported && @testset "control attach reads identity without firing hooks" begin
     OwnedTmux.with_tmux() do fixture
         server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
         session = new_session(server; name="identity", command=["/bin/cat"])

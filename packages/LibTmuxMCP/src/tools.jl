@@ -998,6 +998,7 @@ function _tool_error(error, name)
         error isa LibTmux.DeadlineExceeded ? "deadline" :
         error isa LibTmux.OutputLimitExceeded ? "output_limit" :
         error isa LibTmux.UnsupportedTmuxVersion ? "unsupported_tmux" :
+        error isa LibTmux.UnsupportedCapability ? "unsupported_capability" :
         error isa LibTmux.ObservationLost ? "observation_lost" : "operation_failed"
     mutating = _tool_can_mutate(name)
     uncertain =

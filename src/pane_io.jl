@@ -150,7 +150,7 @@ function _cleanup_owned_buffer(server, buffer)
     nothing
 end
 
-function _load_owned_buffer(context, buffer, bytes)
+function _load_owned_buffer(context, buffer, bytes; exact_delete::Bool=true)
     try
         _operation_command(
             context,
@@ -161,6 +161,8 @@ function _load_owned_buffer(context, buffer, bytes)
             input=bytes,
         )
     catch original
+        # Before 3.4 a delete by a missing name can take an unrelated buffer.
+        exact_delete || rethrow()
         try
             _cleanup_owned_buffer(context.server, buffer)
         catch cleanup
@@ -182,6 +184,7 @@ remote I/O. Empty input errors because tmux does not create empty buffers.
 function load_buffer(server::Server, bytes::AbstractVector{UInt8}; kwargs...)
     isempty(bytes) && throw(ArgumentError("tmux does not create empty buffers"))
     context = _operation_context(server; kwargs...)
+    _require_buffer_release(context, :load_buffer)
     _verify_row_codec(
         server,
         context.started,
@@ -222,6 +225,7 @@ end
 """Delete the explicitly supplied generation-bound buffer."""
 function delete_buffer(server::Server, buffer::BufferRef; kwargs...)
     context = _target_context(server, buffer; kwargs...)
+    _require_buffer_release(context, :delete_buffer)
     _operation_command(
         context,
         "delete-buffer",
@@ -268,7 +272,10 @@ enabled it. No Enter is appended. tmux receives exact buffer bytes, but the
 terminal driver and target application can transform them.
 
 Success, failure and cancellation attempt bounded cleanup of only the new
-buffer with an uncancelled 900 ms context. A cleanup failure preserves the
+buffer with an uncancelled 900 ms context. Before tmux 3.4 an exact-name delete
+can take an unrelated buffer when the name is missing, so the paste itself
+deletes the buffer (`paste-buffer -d`) and a failed stage leaves its named
+buffer behind instead of risking another one. A cleanup failure preserves the
 original error in `CompositeException`. Subprocess generation checks remain
 best effort; input already delivered to the pane cannot be rolled back.
 Empty bytes validate the target and return `nothing` without sending input.
@@ -282,9 +289,17 @@ function paste_bytes(
 )
     context = _target_context(server, pane; kwargs...)
     isempty(bytes) && return nothing
+    exact_delete = _version_at_least(_checked_release(context), BUFFER_DELETE_MINIMUM_TMUX)
     args = _paste_args(context, pane, bracketed)
     buffer = _new_buffer_ref(context, pane.server)
-    _load_owned_buffer(context, buffer, bytes)
+    _load_owned_buffer(context, buffer, bytes; exact_delete)
+    exact_delete || return _operation_command(
+        context,
+        args...,
+        "-d",
+        "-b",
+        _literal_tmux_argument(string(buffer.id)),
+    )
     original = nothing
     try
         _operation_command(
