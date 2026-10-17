@@ -615,6 +615,15 @@ function _open_control_lane(
     server.socket_path === nothing ||
         server.socket_path == session.server.socket_path ||
         throw(CrossServerReference(string(session.id)))
+    # The attach cannot start a daemon, so only a live endpoint needs a release
+    # check; the handshake below binds the connection to the captured daemon.
+    release = _check_daemon(
+        server,
+        _client_environment(ENV);
+        cancel,
+        timeout=_snapshot_remaining(started, budget),
+        started,
+    )
     selector =
         server.socket_path === nothing ? ["-L", something(server.socket_name)] :
         ["-S", server.socket_path]
@@ -698,6 +707,7 @@ function _open_control_lane(
             nothing,
             nothing,
         )
+        _remember_control_release!(connection, release)
         push!(connection.workers, Threads.@spawn _control_reader(connection))
         push!(connection.workers, Threads.@spawn _control_writer(connection))
         push!(connection.workers, Threads.@spawn _control_stderr(connection))
@@ -737,24 +747,30 @@ function _open_control_lane(
             connection.startup_failed &&
                 throw(ControlConnectionError(:attach_failed, false))
         end
-        fields = ["pid", "start_time", "socket_path", "session_id"]
-        row = only(
-            _control_rows(
-                connection,
-                "display-message",
-                fields;
-                timeout=_snapshot_remaining(started, budget),
-                cancel,
-                _opening=true,
-            ),
+        # An `if-shell` fence compares the daemon against the captured identity
+        # on this connection without running a user hook; `display-message`
+        # would fire `after-display-message` on every attach.
+        generation = split(session.server.generation, ':'; limit=2)
+        length(generation) == 2 || throw(StaleReference(string(session.id)))
+        pid, start_time = generation
+        marker = "libtmux-identity-" * replace(string(uuid4()), "-" => "")
+        expected = "#{&&:#{==:#{pid},$pid},#{&&:#{==:#{start_time},$start_time},#{==:#{session_id},$(session.id)}}}"
+        reply = _control_request(
+            connection,
+            ["if-shell", "-F", expected, "", marker],
+            _ControlReplyPolicy(; diagnostics=true);
+            timeout=_snapshot_remaining(started, budget),
+            cancel,
+            opening=true,
         )
-        _observed_int(row[1], "pid")
-        _observed_int(row[2], "start_time")
-        identity = ServerIdentity(socket_path=row[3], generation=row[1] * ":" * row[2])
-        identity.socket_path == session.server.socket_path ||
-            throw(CrossServerReference(string(session.id)))
-        identity == session.server && row[4] == string(session.id) ||
-            throw(StaleReference(string(session.id)))
+        if reply.failed
+            occursin(
+                "unknown command: " * marker,
+                decode_text(reply.stdout; invalid=:replace),
+            ) && throw(StaleReference(string(session.id)))
+            throw(ControlCommandError(reply, "if-shell"))
+        end
+        identity = session.server
         lock(connection.lock) do
             connection.state === :opening ||
                 throw(ControlConnectionError(connection.reason, false))

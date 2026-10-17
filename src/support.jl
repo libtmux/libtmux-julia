@@ -299,3 +299,18 @@ function _context_release(context)
     version === nothing ? _executable_version(context.server, environment; options...) :
     version
 end
+
+# The subprocess probe checked the daemon's version before a control attach. A
+# control reply cannot carry the probe, and a display-message read would fire
+# the user's hook, so the connection keeps the checked release.
+const _CONTROL_RELEASES = WeakKeyDict{Any,String}()
+const _CONTROL_RELEASES_LOCK = ReentrantLock()
+
+function _remember_control_release!(connection, release)
+    release === nothing ||
+        lock(() -> _CONTROL_RELEASES[connection] = release, _CONTROL_RELEASES_LOCK)
+    nothing
+end
+
+_control_release(connection) =
+    lock(() -> get(_CONTROL_RELEASES, connection, nothing), _CONTROL_RELEASES_LOCK)
