@@ -200,22 +200,37 @@ function _cli_record(writer::_CLIOutput, event, data)
     end
 end
 
+# `freeze` raises a tmux release refusal bare and `load` wraps it in the apply
+# error. Both report the refusal itself, with its remedy, under one code.
+function _cli_refusal(error)
+    error isa LibTmux.UnsupportedTmuxVersion && return error
+    error isa WorkspaceApplyError &&
+        error.cause isa LibTmux.UnsupportedTmuxVersion &&
+        return error.cause
+    nothing
+end
+
 function _cli_report_error(writer::_CLIOutput, error)
     Base.@nospecialize error
     code = _cli_exit(error)
-    message = sprint(showerror, error)
+    refusal = _cli_refusal(error)
+    message = sprint(showerror, refusal === nothing ? error : refusal)
     _cli_emit(writer, :err, message * "\n")
     payload = Dict{String,Any}(
         "status" => "error",
         "exit_code" => code,
         "error" => Dict(
             "code" =>
+                refusal !== nothing ? "tmux_unsupported" :
                 error isa WorkspaceConfigError ? string(error.code) :
                 string(nameof(typeof(error))),
             "message" => message,
         ),
     )
-    error isa WorkspaceApplyError && (payload["result"] = _jsonable(error.result))
+    # A refusal before any step leaves nothing to inspect.
+    error isa WorkspaceApplyError &&
+        !(refusal !== nothing && error.result.status == :failed) &&
+        (payload["result"] = _jsonable(error.result))
     if writer.mode == "json"
         _cli_emit(writer, :out, JSON.json(payload) * "\n")
     elseif writer.mode == "ndjson"

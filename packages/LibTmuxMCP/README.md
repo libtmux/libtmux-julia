@@ -156,6 +156,10 @@ The default catalog contains [`list_panes`][tool_list_panes],
 - Repeat `--tool` to replace the default catalog.
 - The same policy applies to every item in
   [`run_operations`][tool_run_operations] before any item executes.
+- The server needs tmux 3.3a or newer. A tool called against an older or
+  unreadable tmux fails with code `unsupported_tmux` and `effects: none`. The
+  message says to upgrade tmux and restart the server, or pin the previous
+  libtmux release.
 
 | Tool | Effect |
 | --- | --- |
