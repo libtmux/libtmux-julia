@@ -12,7 +12,7 @@ export Snapshot, SessionSnapshot, WindowSnapshot, PaneSnapshot, ClientSnapshot
 export WindowLink, PaneOccurrence, Selection, snapshot, snapshotof
 export sessions, windows, panes, clients, windowlinks, paneoccurrences, window, session
 export entitykey, occurrencekey, hascoverage, SnapshotCoverageError, InconsistentSnapshot
-export UnsupportedCapability
+export UnsupportedCapability, UnsupportedTmuxVersion, MINIMUM_TMUX_VERSION
 export InvalidUTF8Error, TextDecoder, decode_text, decode!
 export new_session, new_window, split_window, select_layout
 export select_pane, select_window
@@ -47,6 +47,7 @@ export encode_rust_where, decode_rust_where
 
 include("server.jl")
 include("process.jl")
+include("support.jl")
 include("text.jl")
 include("lifecycle.jl")
 include("model.jl")

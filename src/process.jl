@@ -518,8 +518,15 @@ Run one tmux client with literal arguments and return owned output bytes.
 The client uses UTF-8 mode independently of the caller's locale.
 Nonzero exits raise `CommandError` unless `check=false`. I/O yields to other
 Julia tasks. Cancellation kills and reaps the client, not any remote pane job.
-This subprocess path checks no server generation; use strict references only
-through transports that explicitly advertise that capability.
+The call checks the release of the selected daemon, or of the executable that
+would create it, against tmux 3.3a. The first command to an endpoint probes the
+release; later commands to the same executable and endpoint skip the probe.
+Every command runs behind a fence on the checked release, so a replaced daemon
+raises `UnsupportedTmuxVersion` before any effect. A fence mismatch, a vanished
+endpoint or a tmux 3.1 or older answer drops the remembered release and probes
+once more. The probe runs no user hook. It does not pin a server generation;
+use strict references only through transports that explicitly advertise that
+capability.
 
 The first cancellation, deadline, output overflow or pipe error wins. Its
 `result` retains bounded output and observed exit/signal evidence after client
@@ -541,19 +548,71 @@ function run_command(
     args::AbstractString...;
     check::Bool=true,
     env::AbstractDict=ENV,
+    _checked::Union{Nothing,Base.RefValue{Any}}=nothing,
     kwargs...,
 )
     started = time_ns()
     isempty(args) &&
         throw(ArgumentError("supply a tmux command; implicit attach is not supported"))
-    argv = _argv(server, collect(args))
-    sum(ncodeunits(arg) + 1 for arg in argv) <= 14 * 1024 || throw(
+    sum(ncodeunits(arg) + 1 for arg in _argv(server, collect(args))) <= 14 * 1024 || throw(
         ArgumentError(
             "command exceeds the conservative 14 KiB limit; use a buffer/input operation for large data",
         ),
     )
     environment = _client_environment(env)
-    result = _run_process(setenv(Cmd(argv), environment); _started=started, kwargs...)
+    cleanup = first(args) == "kill-server"
+    result = checked = nothing
+    for attempt = 1:2
+        # A known live endpoint skips the probe. The fence below still checks
+        # every command and drops a stale entry, so a replaced or vanished
+        # daemon costs one retry before any effect.
+        known =
+            _checked !== nothing && _checked[] !== nothing ? _checked[].version :
+            _cached_release(server)
+        reused = attempt == 1 && known !== nothing
+        checked =
+            reused ? (; version=known, live=true) :
+            _check_version(
+                server,
+                environment;
+                cleanup,
+                cancel=get(kwargs, :cancel, nothing),
+                timeout=get(kwargs, :timeout, nothing),
+                started,
+            )
+        # An absent endpoint has nothing to stop, so cleanup is complete.
+        checked.version === nothing && return CommandResult(UInt8[], UInt8[], 0, 0)
+        marker = _version_marker()
+        argv = _fenced_argv(server, args, checked, marker)
+        result = _run_process(setenv(Cmd(argv), environment); _started=started, kwargs...)
+        mismatch = _fence_failed(result, marker)
+        vanished =
+            reused &&
+            result.exitcode != 0 &&
+            _endpoint_absent(decode_text(result.stderr; invalid=:replace))
+        # An old daemon that replaced the cached one answers the fenced command
+        # with a protocol diagnostic instead of the marker.
+        stale =
+            reused &&
+            result.exitcode != 0 &&
+            any(_pre_probe_diagnostic, _stderr_lines(result))
+        if (mismatch || vanished || stale) && reused
+            _forget_release!(server)
+            _checked === nothing || (_checked[] = nothing)
+            continue
+        end
+        mismatch && _throw_fence()
+        break
+    end
+    if result.exitcode == 0 && result.termsignal == 0
+        if cleanup
+            _forget_release!(server)
+            _checked === nothing || (_checked[] = nothing)
+        else
+            _remember_release!(server, checked.version)
+            _checked === nothing || (_checked[] = (; checked.version, live=true))
+        end
+    end
     if check && (result.exitcode != 0 || result.termsignal != 0)
         throw(CommandError(result, String(first(args))))
     end

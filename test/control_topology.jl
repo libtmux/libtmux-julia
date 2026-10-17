@@ -94,7 +94,7 @@
                     invalid_checksum,
                 )
                 @test select_layout(connection, alpha.window, "even-h") isa ControlResult
-                if field(alpha.window, "version") in ("3.2a", "3.3", "3.3a", "3.4")
+                if field(alpha.window, "version") in ("3.3", "3.3a", "3.4")
                     @test_throws UnsupportedCapability select_layout(
                         connection,
                         alpha.window,
