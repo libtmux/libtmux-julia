@@ -149,14 +149,12 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
 
 end
 
-# The waiting tools acquire control clients, which need tmux 3.7; the refusal
-# below it is tested on its own.
-mcp_real_tmux_supported = LibTmux._version_at_least(
+# The waiting tools observe through control clients (tmux 3.7) and poll the
+# screen below it, so the evidence they report differs by release.
+mcp_control_supported = LibTmux._version_at_least(
     last(split(readchomp(`$(get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) -V`))),
     LibTmux.CONTROL_MINIMUM_TMUX,
 )
-mcp_real_tmux_supported ||
-    @warn "MCP literal-wait tests skipped: the test tmux is below $(LibTmux.CONTROL_MINIMUM_TMUX)"
 
 if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
     @testset "MCP tools use exact authorized real-tmux targets" begin
@@ -556,7 +554,7 @@ exit 99
 end
 
 # Outer integration: three fresh dual-client control connections exercise real cancellation cleanup.
-if any(arg -> arg in ("observation", "all"), ARGS) && mcp_real_tmux_supported
+if any(arg -> arg in ("observation", "all"), ARGS)
     @testset "MCP literal waits use observations and own cancellation" begin
         environment = Dict(
             "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
@@ -587,12 +585,14 @@ if any(arg -> arg in ("observation", "all"), ARGS) && mcp_real_tmux_supported
                     Dict("keys"=>["λ-ready", "Enter"], "text"=>"reply:λ-ready"),
                 )
                 @test !sent.is_error
-                @test sent.structured_content["source"] == "output" &&
+                @test sent.structured_content["source"] ==
+                      (mcp_control_supported ? "output" : "screen") &&
                       sent.structured_content["keysSent"]
                 @test sent.structured_content["evidence"] == "literal_text"
                 baseline = tool_result(app, "wait_for_text", Dict("text"=>"reply:λ-ready"))
                 @test !baseline.is_error &&
-                      baseline.structured_content["source"] == "baseline"
+                      baseline.structured_content["source"] ==
+                      (mcp_control_supported ? "baseline" : "screen")
                 @test baseline.structured_content["continuity"] == "reset"
                 entered = Channel{Any}(2)
                 token = CancellationToken()
