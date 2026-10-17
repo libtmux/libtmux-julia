@@ -96,7 +96,9 @@ end
             @test success(sentinel)
             environment = LibTmux._client_environment(ENV)
             sessions() = readlines(
-                ignorestatus(OwnedTmux.tmuxcmd(fixture, "list-sessions", "-F", "#{session_name}")),
+                ignorestatus(
+                    OwnedTmux.tmuxcmd(fixture, "list-sessions", "-F", "#{session_name}"),
+                ),
             )
 
             # A live endpoint is checked against the daemon and keeps -N.
@@ -140,8 +142,7 @@ end
                 [LibTmux.TmuxCommand("new-session", "-d", "-s", "replaced")];
                 timeout=60,
             )
-            @test only(group).status === :skipped &&
-                  group.error isa UnsupportedTmuxVersion
+            @test only(group).status === :skipped && group.error isa UnsupportedTmuxVersion
             @test sessions() == ["sentinel"]
             rm(script * ".probe")
 
@@ -164,6 +165,33 @@ end
             @test_throws UnsupportedTmuxVersion run_command(server, "list-sessions")
             rm(script * ".probe")
         end
+    end
+end
+
+@testset "a daemon that vanished after the version check is not restarted" begin
+    tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
+    mktempdir(; prefix="ltj-adm-") do directory
+        socket = joinpath(directory, "s")
+        script = scripted_client(directory, tmux)
+        write(script * ".probe", "9.9")
+        server = Server(socket_path=socket, tmux=script)
+        environment = Dict(
+            "PATH" => get(ENV, "PATH", "/usr/bin:/bin"),
+            "HOME" => directory,
+            "XDG_CONFIG_HOME" => directory,
+            "TERM" => "xterm-256color",
+            "SHELL" => "/bin/sh",
+        )
+        failure = try
+            run_command(server, "new-session", "-d", "-s", "revived"; env=environment)
+        catch error
+            error
+        end
+        @test failure isa CommandError
+        failure isa CommandError &&
+            @test LibTmux._endpoint_absent(String(copy(failure.result.stderr)))
+        @test !ispath(socket)
+        run(ignorestatus(`$tmux -S $socket kill-server`))
     end
 end
 
