@@ -399,7 +399,7 @@ end
     get_environment(connection::ControlConnection, scope, name; inherit=false, kwargs...)
 
 Refuse an environment read that cannot preserve `EnvironmentValue` metadata
-under the admitted control grammar. tmux 3.2a through the researched 3.7 dialect
+under the admitted control grammar. tmux 3.3a through the researched 3.7 dialect
 print literal environment newlines; format lookup cannot distinguish absent,
 hidden and removal entries or their local/global origin. Use an explicit
 `Server` read when that best-effort transport is acceptable. This method never

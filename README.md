@@ -41,8 +41,9 @@ $ julia \
     -e 'using Pkg; Pkg.activate("."); Pkg.add(Pkg.PackageSpec(url="https://github.com/libtmux/libtmux-julia.git", rev="v0.1.0-alpha.1"))'
 ```
 
-Have `tmux` on your `PATH`. Julia 1.10+ and tmux 3.2a+ are the compatibility
-targets; see [tested platforms and limits](docs/src/compatibility.md). APIs
+Have `tmux` on your `PATH`. Julia 1.10+ and tmux 3.3a+ are the compatibility
+targets. Operations refuse an older or unreadable tmux release before they
+have any effect; see [tested platforms and limits](docs/src/compatibility.md). APIs
 may change during alpha development. Pkg records the requested revision and
 package tree in your project's `Manifest.toml`.
 

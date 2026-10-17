@@ -14,8 +14,9 @@ $ julia \
     -e 'using Pkg; Pkg.activate("."); Pkg.add(Pkg.PackageSpec(url="https://github.com/libtmux/libtmux-julia.git", rev="v0.1.0-alpha.1"))'
 ```
 
-Have `tmux` on `PATH`. Julia 1.10+ and tmux 3.2a+ are the compatibility
-targets; [Compatibility](compatibility.md) records the exact tested cells.
+Have `tmux` on `PATH`. Julia 1.10+ and tmux 3.3a+ are the compatibility
+targets. Operations refuse an older or unreadable tmux release before they
+have any effect; [Compatibility](compatibility.md) records the exact tested cells.
 
 ## MCP application
 
