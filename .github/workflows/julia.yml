@@ -14,14 +14,14 @@ on:
       debug_cell:
         description: Matrix cell to inspect when debug_runner is enabled
         type: choice
-        default: Linux-x86_64-julia1.13.0-tmux3.7c-t4-all
+        default: Linux-x86_64-julia1.13.1-tmux3.7c-t4-all
         options:
           - Linux-x86_64-julia1.10.0-tmux3.2a-t1-all
           - Linux-x86_64-julia1.10.0-tmux3.2a-t4-all
-          - Linux-x86_64-julia1.13.0-tmux3.7c-t1-all
-          - Linux-x86_64-julia1.13.0-tmux3.7c-t4-all
-          - Darwin-arm64-julia1.13.0-tmux3.7c-t1-all
-          - Darwin-x86_64-julia1.13.0-tmux3.7c-t1-all
+          - Linux-x86_64-julia1.13.1-tmux3.7c-t1-all
+          - Linux-x86_64-julia1.13.1-tmux3.7c-t4-all
+          - Darwin-arm64-julia1.13.1-tmux3.7c-t1-all
+          - Darwin-x86_64-julia1.13.1-tmux3.7c-t1-all
 
 permissions:
   contents: read
@@ -196,7 +196,7 @@ jobs:
           --expected-os '${{ matrix.os }}'
           --expected-arch '${{ matrix.arch }}'
       - name: Verify native documentation export
-        if: matrix.os == 'Linux' && matrix.julia == '1.13.0' && (matrix.suite == 'all' || matrix.suite == 'delivery')
+        if: matrix.os == 'Linux' && matrix.julia == '1.13.1' && (matrix.suite == 'all' || matrix.suite == 'delivery')
         env:
           JULIA_DEPOT_PATH: ${{ runner.temp }}/libtmux-julia-matrix/depot
           JULIA_LOAD_PATH: '@:@stdlib'
@@ -208,7 +208,7 @@ jobs:
           julia --startup-file=no --threads='${{ matrix.threads }}' \
             --project="$MATRIX_STAGE/environment" docs/test-export-api.jl
       - name: Preserve native documentation artifact
-        if: matrix.os == 'Linux' && matrix.julia == '1.13.0' && (matrix.suite == 'all' || matrix.suite == 'delivery')
+        if: matrix.os == 'Linux' && matrix.julia == '1.13.1' && (matrix.suite == 'all' || matrix.suite == 'delivery')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: julia-docs-api-${{ matrix.job_label }}
