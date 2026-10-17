@@ -53,6 +53,18 @@ $ /usr/bin/time -p julia \
     test/runtests.jl integration
 ```
 
+Assert that a release below the 3.3a floor is refused without effect by
+pointing the tmux selector at that release. `LIBTMUX_TEST_CLIENT_TMUX`
+optionally adds a newer client that must not qualify the older daemon:
+
+```console
+$ LIBTMUX_TEST_TMUX=/path/to/tmux-3.2a julia \
+    --startup-file=no \
+    --project=. \
+    --threads=1 \
+    test/runtests.jl rejection
+```
+
 Run both suites before handoff, and repeat with `--threads=4` when changing
 process ownership, cancellation, or concurrent I/O:
 
@@ -391,10 +403,13 @@ Both must pass at the same source revision to complete a split cell. Use
 `--suite runtime` or `--suite delivery` to run one partition locally; omitting
 the option runs both.
 
-Pull requests run four combined QA cells: Linux floor at one thread, current
-Linux at four threads, and current macOS on each architecture at one thread.
-Intermediate releases and macOS floor evidence remain explicit compatibility
-work; an unrun release is not support.
+Pull requests run four combined QA cells: Linux floor (tmux 3.3a) at one
+thread, current Linux at four threads, and current macOS on each architecture
+at one thread. Rejection cells run tmux 3.2a and the unpatched 3.3 release
+against `test/runtests.jl rejection`; they assert that operations are refused
+without effect and sit outside the supported matrix. Intermediate releases and
+macOS floor evidence remain explicit compatibility work; an unrun release is
+not support.
 
 The driver saves structured results before and after each phase. Interrupted
 runs retain completed failures and identify the unfinished phase; they never

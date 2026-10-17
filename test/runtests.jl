@@ -2,7 +2,8 @@ using Test
 using LibTmux
 
 suite = isempty(ARGS) ? "all" : only(ARGS)
-suite in ("unit", "integration", "all") || error("suite must be unit, integration or all")
+suite in ("unit", "integration", "rejection", "all") ||
+    error("suite must be unit, integration, rejection or all")
 if suite in ("unit", "all")
     include("server.jl")
     include("process.jl")
@@ -44,4 +45,8 @@ if suite in ("integration", "all")
     include("control_configuration.jl")
     include("control_options.jl")
     include("control_buffers.jl")
+end
+if suite == "rejection"
+    # Run against a tmux executable below the supported floor.
+    include("support_rejection.jl")
 end

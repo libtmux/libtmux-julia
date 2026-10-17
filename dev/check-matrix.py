@@ -38,12 +38,19 @@ SUITES = ("runtime", "delivery")
 
 TMUX_SHA256 = {
     "3.2a": "551553a4f82beaa8dadc9256800bcc284d7c000081e47aa6ecbb6ff36eacd05f",
+    "3.3": "b2382ac391f6a1c5b93293016cdc9488337d9a04b9d611ae05eac164740351dc",
     "3.3a": "e4fd347843bd0772c4f48d6dde625b0b109b7a380ff15db21e97c11a4dcdf93f",
     "3.4": "551ab8dea0bf505c0ad6b7bb35ef567cdde0ccb84357df142c254f35a23e19aa",
     "3.5a": "16216bd0877170dfcc64157085ba9013610b12b082548c7c9542cc0103198951",
     "3.6b": "390759d25fdba016887ec982b808927e637070fd7d03a8021f8ef3102b9ae3c7",
     "3.7c": "7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf",
 }
+
+
+# Releases below the supported floor. Their cells assert refusal without effect
+# and stay outside the supported matrix.
+REJECTED_TMUX = ("3.2a", "3.3")
+MINIMUM_TMUX = "3.3a"
 
 
 def tmux_configure_command(target, version, os_name):
@@ -89,11 +96,17 @@ def qa_cells():
                           julia=julia, tmux=tmux, threads=threads, suites=tuple(suites),
                           status="NOT RUN"))
 
-    add("Linux", "ubuntu-24.04", "x86_64", "1.10.0", "3.2a", suites=("all",))
+    add("Linux", "ubuntu-24.04", "x86_64", "1.10.0", MINIMUM_TMUX, suites=("all",))
     add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.7c", 4, ("all",))
     for runner, arch in (("macos-15", "arm64"), ("macos-15-intel", "x86_64")):
         add("Darwin", runner, arch, "1.13.1", "3.7c", suites=("all",))
     return cells
+
+
+def rejection_cells():
+    return [dict(label=f"Linux-x86_64-julia1.10.0-tmux{tmux}-rejection", tmux=tmux,
+                 job_label=f"Reject tmux {tmux}")
+            for tmux in REJECTED_TMUX]
 
 
 def source_digest():
@@ -508,7 +521,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
             raise AssertionError("registry seeding accepted a shared symbolic link")
         assert tmux_configure_command(base, "3.7c", "Darwin") == [
             "./configure", f"--prefix={base}", "--enable-utf8proc", "--enable-jemalloc"]
-        assert tmux_configure_command(base, "3.2a", "Darwin") == [
+        assert tmux_configure_command(base, "3.3a", "Darwin") == [
             "./configure", f"--prefix={base}", "--enable-utf8proc"]
         assert tmux_configure_command(base, "3.7c", "Linux") == [
             "./configure", f"--prefix={base}"]
@@ -531,7 +544,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
             (cell["os"], cell["arch"], cell["julia"], cell["tmux"], cell["threads"])
             for cell in cells
         ] == [
-            ("Linux", "x86_64", "1.10.0", "3.2a", 1),
+            ("Linux", "x86_64", "1.10.0", "3.3a", 1),
             ("Linux", "x86_64", "1.13.1", "3.7c", 4),
             ("Darwin", "arm64", "1.13.1", "3.7c", 1),
             ("Darwin", "x86_64", "1.13.1", "3.7c", 1),
@@ -539,6 +552,12 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert sum(len(cell["suites"]) for cell in cells) == 4
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
+        rejected = rejection_cells()
+        assert [cell["tmux"] for cell in rejected] == ["3.2a", "3.3"]
+        assert all(cell["tmux"] in TMUX_SHA256 for cell in rejected)
+        assert not {cell["tmux"] for cell in rejected} & {cell["tmux"] for cell in cells}
+        assert all(cell["tmux"] != MINIMUM_TMUX for cell in rejected)
+        assert len({cell["label"] for cell in rejected}) == len(rejected)
         from types import SimpleNamespace
         from unittest.mock import patch
         from contextlib import redirect_stdout
@@ -593,6 +612,8 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     matrix = sub.add_parser("matrix")
     matrix.add_argument("--split", action="store_true", help="emit runtime and delivery jobs for every cell")
+    matrix.add_argument("--rejection", action="store_true",
+                        help="emit the unsupported releases whose refusal is asserted")
     self_check = sub.add_parser("self-test")
     self_check.add_argument("--julia", help="also check real Pkg argument conversion offline")
     build = sub.add_parser("build-tmux", help="setup only: download, verify and build one pinned release")
@@ -613,7 +634,9 @@ def main():
         execution.add_argument(f"--expected-{option}")
     args = parser.parse_args()
     try:
-        if args.command == "matrix":
+        if args.command == "matrix" and args.rejection:
+            print(json.dumps({"include": rejection_cells()}))
+        elif args.command == "matrix":
             cells = qa_cells()
             if args.split:
                 cells = [dict(cell, suite=suite, job_label=f"{cell['label']}-{suite}")
