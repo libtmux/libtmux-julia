@@ -112,6 +112,7 @@ end
 
             # A daemon that no longer matches the version it reported runs nothing.
             write(script * ".probe", "9.9")
+            LibTmux._clear_version_cache!()
             rm(script * ".calls")
             failure = try
                 run_command(server, "new-session", "-d", "-s", "replaced")
@@ -148,6 +149,7 @@ end
 
             # A replacement that claims an old release is refused at the probe.
             write(script * ".probe", "3.2a")
+            LibTmux._clear_version_cache!()
             rm(script * ".calls")
             @test_throws UnsupportedTmuxVersion run_command(
                 server,
@@ -162,6 +164,7 @@ end
 
             # The probe's output must name the version; anything else fails loudly.
             write(script * ".probe", "")
+            LibTmux._clear_version_cache!()
             @test_throws UnsupportedTmuxVersion run_command(server, "list-sessions")
             rm(script * ".probe")
         end
@@ -174,6 +177,7 @@ end
         socket = joinpath(directory, "s")
         script = scripted_client(directory, tmux)
         write(script * ".probe", "9.9")
+        LibTmux._clear_version_cache!()
         server = Server(socket_path=socket, tmux=script)
         environment = Dict(
             "PATH" => get(ENV, "PATH", "/usr/bin:/bin"),
@@ -211,6 +215,7 @@ end
         )
 
         # Cleanup of an absent endpoint is a no-op after its probe.
+        LibTmux._clear_version_cache!()
         @test run_command(server, "kill-server"; env=environment).exitcode == 0
         calls = recorded_calls(script)
         @test length(calls) == 1 && contains(calls[1], "run-shell -C")
@@ -218,6 +223,7 @@ end
         # Executables below the floor, or silent about it, never start a daemon.
         for banner in ("tmux 3.2a", "tmux 3.3", "tmux next-3.3a", "tmux master", "3.3a", "")
             write(script * ".banner", banner * "\n")
+            LibTmux._clear_version_cache!()
             rm(script * ".calls")
             @test_throws UnsupportedTmuxVersion run_command(
                 server,
@@ -246,6 +252,7 @@ end
             server = Server(socket_path=socket, tmux=script)
             write(script * ".banner", "$banner $released\n")
             rm(script * ".calls"; force=true)
+            LibTmux._clear_version_cache!()
             try
                 result = run_command(
                     server,
@@ -303,6 +310,7 @@ end
             script = scripted_client(directory, fixture.tmux)
             scripted = Server(socket_path=fixture.socket, tmux=script)
             write(script * ".probe", "3.2a")
+            LibTmux._clear_version_cache!()
             @test_throws UnsupportedTmuxVersion open_control(scripted, session) do _
                 error("control attached to an unsupported daemon")
             end
@@ -341,6 +349,45 @@ end
         )
         @test_throws StaleReference open_control(server, stale) do _
             error("attached to a stale session")
+        end
+    end
+end
+
+@testset "a checked endpoint skips the probe until the fence says otherwise" begin
+    mktempdir(; prefix="ltj-adm-") do directory
+        OwnedTmux.with_tmux() do fixture
+            server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
+            session = new_session(server; name="cached", command=["/bin/cat"])
+            script = scripted_client(directory, fixture.tmux)
+            scripted = Server(socket_path=fixture.socket, tmux=script)
+            sessions() = readlines(
+                ignorestatus(
+                    OwnedTmux.tmuxcmd(fixture, "list-sessions", "-F", "#{session_name}"),
+                ),
+            )
+            LibTmux._clear_version_cache!()
+            rm(script * ".calls"; force=true)
+            run_command(scripted, "list-sessions")
+            run_command(scripted, "list-sessions")
+            run_command(scripted, "list-sessions")
+            calls = recorded_calls(script)
+            # One probe, then fenced commands only.
+            @test count(contains("run-shell -C"), calls) == 1
+            @test count(contains("if-shell -F"), calls) == 3
+
+            # A cached release the daemon no longer reports: the fence fails, the
+            # entry is dropped and the probe runs again, here reporting 3.2a.
+            LibTmux._remember_release!(scripted, "9.9")
+            write(script * ".probe", "3.2a")
+            failure = try
+                run_command(scripted, "new-session", "-d", "-s", "stale")
+            catch error
+                error
+            end
+            @test failure isa UnsupportedTmuxVersion && failure.observed == "3.2a"
+            @test sessions() == ["cached"]
+            @test LibTmux._cached_release(scripted) === nothing
+            rm(script * ".probe")
         end
     end
 end

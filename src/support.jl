@@ -222,14 +222,42 @@ function _fenced_argv(server::Server, args, checked, marker)
     append!(argv, _argument.(args))
 end
 
-function _check_fence(result::CommandResult, marker)
+function _fence_failed(result::CommandResult, marker)
     needle = "unknown command: " * marker
-    any(==(needle), _stderr_lines(result)) && throw(
-        UnsupportedTmuxVersion(
-            "",
-            "the daemon changed after the version check; the command did not run",
-        ),
-    )
+    any(==(needle), _stderr_lines(result))
+end
+
+_throw_fence() = throw(
+    UnsupportedTmuxVersion(
+        "",
+        "the daemon changed after the version check; the command did not run",
+    ),
+)
+
+# Releases of daemons whose version this client checked, by executable and
+# endpoint. An entry only skips the probe; the fence still checks it on every
+# command.
+const _VERSION_CACHE = Dict{Tuple{String,String},String}()
+const _VERSION_LOCK = ReentrantLock()
+
+_endpoint_key(server::Server) = (server.tmux, join(_selector(server), '\0'))
+
+_cached_release(server::Server) =
+    lock(() -> get(_VERSION_CACHE, _endpoint_key(server), nothing), _VERSION_LOCK)
+
+function _remember_release!(server::Server, version)
+    lock(() -> _VERSION_CACHE[_endpoint_key(server)] = String(version), _VERSION_LOCK)
+    nothing
+end
+
+function _forget_release!(server::Server)
+    lock(() -> delete!(_VERSION_CACHE, _endpoint_key(server)), _VERSION_LOCK)
+    nothing
+end
+
+"Forget every cached endpoint, so the next command probes its daemon again."
+function _clear_version_cache!()
+    lock(() -> empty!(_VERSION_CACHE), _VERSION_LOCK)
     nothing
 end
 

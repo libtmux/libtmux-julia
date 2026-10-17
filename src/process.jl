@@ -496,25 +496,51 @@ function run_command(
     )
     environment = _client_environment(env)
     cleanup = first(args) == "kill-server"
-    # An operation checks the version once; the fence below still checks every command.
-    admitted =
-        cleanup || _checked === nothing || _checked[] === nothing ?
-        _check_version(
-            server,
-            environment;
-            cleanup,
-            cancel=get(kwargs, :cancel, nothing),
-            timeout=get(kwargs, :timeout, nothing),
-            started,
-        ) : _checked[]
-    # An absent endpoint has nothing to stop, so cleanup is already complete.
-    checked.version === nothing && return CommandResult(UInt8[], UInt8[], 0, 0)
-    marker = _version_marker()
-    argv = _fenced_argv(server, args, checked, marker)
-    result = _run_process(setenv(Cmd(argv), environment); _started=started, kwargs...)
-    _check_fence(result, marker)
-    if _checked !== nothing && !cleanup && result.exitcode == 0 && result.termsignal == 0
-        _checked[] = (; checked.version, live=true)
+    result = checked = nothing
+    for attempt = 1:2
+        # A known live endpoint skips the probe. The fence below still checks
+        # every command and drops a stale entry, so a replaced or vanished
+        # daemon costs one retry before any effect.
+        known =
+            _checked !== nothing && _checked[] !== nothing ? _checked[].version :
+            _cached_release(server)
+        reused = attempt == 1 && known !== nothing
+        checked =
+            reused ? (; version=known, live=true) :
+            _check_version(
+                server,
+                environment;
+                cleanup,
+                cancel=get(kwargs, :cancel, nothing),
+                timeout=get(kwargs, :timeout, nothing),
+                started,
+            )
+        # An absent endpoint has nothing to stop, so cleanup is already complete.
+        checked.version === nothing && return CommandResult(UInt8[], UInt8[], 0, 0)
+        marker = _version_marker()
+        argv = _fenced_argv(server, args, checked, marker)
+        result = _run_process(setenv(Cmd(argv), environment); _started=started, kwargs...)
+        mismatch = _fence_failed(result, marker)
+        vanished =
+            reused &&
+            result.exitcode != 0 &&
+            _endpoint_absent(decode_text(result.stderr; invalid=:replace))
+        if (mismatch || vanished) && reused
+            _forget_release!(server)
+            _checked === nothing || (_checked[] = nothing)
+            continue
+        end
+        mismatch && _throw_fence()
+        break
+    end
+    if result.exitcode == 0 && result.termsignal == 0
+        if cleanup
+            _forget_release!(server)
+            _checked === nothing || (_checked[] = nothing)
+        else
+            _remember_release!(server, checked.version)
+            _checked === nothing || (_checked[] = (; checked.version, live=true))
+        end
     end
     if check && (result.exitcode != 0 || result.termsignal != 0)
         throw(CommandError(result, String(first(args))))
