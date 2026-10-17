@@ -1,21 +1,8 @@
 using SHA
 using TOML
 
-const OPTION_RELEASES = (
-    "3.2a",
-    "3.3",
-    "3.3a",
-    "3.4",
-    "3.5",
-    "3.5a",
-    "3.6",
-    "3.6a",
-    "3.6b",
-    "3.7",
-    "3.7a",
-    "3.7b",
-    "3.7c",
-)
+const OPTION_RELEASES =
+    ("3.3a", "3.4", "3.5", "3.5a", "3.6", "3.6a", "3.6b", "3.7", "3.7a", "3.7b", "3.7c")
 const OPTION_KINDS = ("string", "number", "key", "colour", "flag", "choice", "command")
 const OPTION_SCOPES = Dict("SERVER" => 1, "SESSION" => 2, "WINDOW" => 4, "PANE" => 8)
 const OPTION_FLAGS = ("ARRAY", "HOOK", "STYLE")
