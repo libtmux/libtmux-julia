@@ -403,9 +403,9 @@ Both must pass at the same source revision to complete a split cell. Use
 `--suite runtime` or `--suite delivery` to run one partition locally; omitting
 the option runs both.
 
-Pull requests run four combined QA cells: Linux floor (tmux 3.3a) at one
-thread, current Linux at four threads, and current macOS on each architecture
-at one thread. Rejection cells run tmux 3.2a and the unpatched 3.3 release
+Pull requests run combined QA cells: Linux floor (tmux 3.3a) at one thread,
+current Linux at four threads, Linux on tmux 3.8 at one thread, and current
+macOS on each architecture at one thread. Rejection cells run tmux 3.2a and the unpatched 3.3 release
 against `test/runtests.jl rejection`; they assert that operations are refused
 without effect and sit outside the supported matrix. Intermediate releases and
 macOS floor evidence remain explicit compatibility work; an unrun release is

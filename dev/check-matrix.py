@@ -44,6 +44,7 @@ TMUX_SHA256 = {
     "3.5a": "16216bd0877170dfcc64157085ba9013610b12b082548c7c9542cc0103198951",
     "3.6b": "390759d25fdba016887ec982b808927e637070fd7d03a8021f8ef3102b9ae3c7",
     "3.7c": "7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf",
+    "3.8": "e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e",
 }
 
 
@@ -98,6 +99,7 @@ def qa_cells():
 
     add("Linux", "ubuntu-24.04", "x86_64", "1.10.0", MINIMUM_TMUX, suites=("all",))
     add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.7c", 4, ("all",))
+    add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.8", 1, ("all",))
     for runner, arch in (("macos-15", "arm64"), ("macos-15-intel", "x86_64")):
         add("Darwin", runner, arch, "1.13.1", "3.7c", suites=("all",))
     return cells
@@ -546,10 +548,11 @@ println("PASS admitted version arguments construct real Pkg specifications")
         ] == [
             ("Linux", "x86_64", "1.10.0", "3.3a", 1),
             ("Linux", "x86_64", "1.13.1", "3.7c", 4),
+            ("Linux", "x86_64", "1.13.1", "3.8", 1),
             ("Darwin", "arm64", "1.13.1", "3.7c", 1),
             ("Darwin", "x86_64", "1.13.1", "3.7c", 1),
         ]
-        assert sum(len(cell["suites"]) for cell in cells) == 4
+        assert sum(len(cell["suites"]) for cell in cells) == len(cells)
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
         rejected = rejection_cells()
