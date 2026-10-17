@@ -112,10 +112,20 @@ end
 # The real tmux 3.0a and 3.1c builds, when present, as the old client and as the
 # old daemon behind a current client.
 @testset "real tmux 3.0a and 3.1c builds are refused" begin
-    current = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
+    # `LIBTMUX_TEST_CLIENT_TMUX` names the current client when the cell's own
+    # `LIBTMUX_TEST_TMUX` is the old release. Where the builds are named, a
+    # listed release that is missing fails instead of skipping.
+    current = get(ENV, "LIBTMUX_TEST_CLIENT_TMUX", get(ENV, "LIBTMUX_TEST_TMUX", "tmux"))
     builds = get(ENV, "LIBTMUX_TEST_OLD_TMUX_BUILDS", "")
-    for release in ("3.0a", "3.1c")
+    required = !isempty(builds)
+    releases = split(get(ENV, "LIBTMUX_TEST_OLD_TMUX_RELEASES", "3.0a 3.1c"))
+    if required
+        client = last(split(readchomp(`$current -V`)))
+        @test LibTmux._version_at_least(client, LibTmux.MINIMUM_TMUX_VERSION)
+    end
+    for release in releases
         old = joinpath(builds, release, "bin", "tmux")
+        required && @test isfile(old)
         isfile(old) ||
             (@info "no real tmux $release under LIBTMUX_TEST_OLD_TMUX_BUILDS"; continue)
         mktempdir(; prefix="ltj-real-old-") do directory
