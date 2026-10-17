@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+#### Gate optional tmux features by release
+
+Refuse control acquisition below tmux 3.7 and loading or deleting a named
+buffer below 3.4 with `UnsupportedCapability`, before the operation has any
+effect, and reject `:` and `.` in session and window names on tmux 3.7.
+Pasting and workspace commands keep working on 3.3a: before 3.4 the paste
+deletes its own staging buffer. Subprocess operations stay available on 3.3a.
+Mirrored layouts now accept pre-release builds. (#14)
+
 #### Require tmux 3.3a for core operations
 
 Raise the minimum tmux release for ordinary operations to 3.3a. Every
