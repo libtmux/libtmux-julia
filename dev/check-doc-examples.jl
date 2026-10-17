@@ -576,6 +576,13 @@ function run_contextual_snippets(entries)
     end
     bind(name, value) = Core.eval(workspace, Expr(:(=), name, QuoteNode(value)))
     endpoint = Ref{String}()
+    tmux_executable = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
+    # Control acquisition needs tmux 3.7; the README snippet that uses it is
+    # reported as skipped below it.
+    control = LibTmux._version_at_least(
+        last(split(readchomp(`$tmux_executable -V`))),
+        LibTmux.CONTROL_MINIMUM_TMUX,
+    )
     # Only checked-in example source is executed; no caller data becomes code.
     Base.invokelatest() do
         mktempdir(; prefix="ltj-doc-readme-") do directory
@@ -591,12 +598,16 @@ function run_contextual_snippets(entries)
                 execute(("README.md", 2))
                 ids = execute(("README.md", 3))
                 @assert ids == [only(filter(p -> p.active, LibTmux.panes(captured))).id]
-                execute(("README.md", 5))
-                echoed = Base.invokelatest(getproperty, workspace, :echoed)
-                @assert echoed == "hello from Julia"
-                screens = execute(("README.md", 6))
-                @assert length(screens) == 2 &&
-                        all(screen -> isempty(strip(screen)), screens)
+                if control
+                    execute(("README.md", 5))
+                    echoed = Base.invokelatest(getproperty, workspace, :echoed)
+                    @assert echoed == "hello from Julia"
+                    screens = execute(("README.md", 6))
+                    @assert length(screens) == 2 &&
+                            all(screen -> isempty(strip(screen)), screens)
+                else
+                    println("SKIPPED README.md fences 5, 6: control acquisition needs tmux 3.7")
+                end
                 execute(("README.md", 9))
                 columns = Base.invokelatest(getproperty, workspace, :columns)
                 @assert columns.current_command == ["cat", "cat"]
@@ -662,13 +673,20 @@ windows:
         end
     end
     @assert !ispath(endpoint[])
-    @assert executed == Set(keys(selected))
+    @assert executed == Set(
+        k for k in keys(selected) if control || !(k in (("README.md", 5), ("README.md", 6)))
+    )
     for key in sort!(collect(executed))
         problem =
             output_difference(selected[key], documented_output(selected[key]), printed[key])
         problem === nothing || error(problem)
     end
-    println("PASS ", length(executed), " exact contextual fences and owned cleanup")
+    println(
+        "PASS ",
+        length(executed),
+        " exact contextual fences and owned cleanup",
+        control ? "" : " (control fences skipped)",
+    )
 end
 
 function doc_example_self_test()
