@@ -17,6 +17,21 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
         end
     end
 
+    @testset "MCP reports an unsupported tmux release without effects" begin
+        failure = LibTmux.UnsupportedTmuxVersion("3.2a", "3.3a", "")
+        for name in ("capture_pane", "send_keys", "kill_pane")
+            error = LibTmuxMCP._tool_error(failure, name)
+            @test error["code"] == "unsupported_tmux" && error["effects"] == "none"
+            @test occursin("3.3a", error["message"])
+            @test occursin("Upgrade tmux", error["message"])
+        end
+        probe = LibTmux.CommandError(
+            LibTmux.CommandResult(UInt8[], UInt8[], 1, 0),
+            "version probe",
+        )
+        @test LibTmuxMCP._tool_error(probe, "kill_pane")["effects"] == "none"
+    end
+
     @testset "MCP application catalog is pure and policy is copied" begin
         permitted = ["list_panes", "capture_pane", "send_keys", "run_operations"]
         app = LibTmuxMCP.Application(
@@ -211,6 +226,57 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
                 @test isempty(run_command(server, "list-buffers").stdout)
                 resized = tool_result(app, "resize_pane", Dict("height"=>5))
                 @test !resized.is_error
+                # A daemon below the floor is refused by every tool before it acts.
+                mktempdir(; prefix="ltj-mcp-adm-") do directory
+                    script = joinpath(directory, "tmux")
+                    write(
+                        script,
+                        raw"""#!/bin/sh
+previous=
+for argument in "$@"; do
+    if [ "$previous" = -C ]; then
+        printf 'unknown command: %s3.2a\n' "${argument%\#\{version\}}" >&2
+        exit 1
+    fi
+    previous=$argument
+done
+exit 99
+""",
+                    )
+                    chmod(script, 0o700)
+                    refused = Server(socket_path=server.socket_path, tmux=script)
+                    old_app = Application(
+                        refused;
+                        caller,
+                        allowed_tools=(
+                            "list_panes",
+                            "send_keys",
+                            "paste_text",
+                            "kill_pane",
+                        ),
+                    )
+                    try
+                        before_keys =
+                            tool_result(app, "capture_pane").structured_content["text"]
+                        for (name, arguments) in (
+                            ("list_panes", Dict()),
+                            ("send_keys", Dict("keys"=>["must-not-arrive"])),
+                            ("paste_text", Dict("text"=>"must-not-arrive")),
+                            ("kill_pane", Dict()),
+                        )
+                            refusal = tool_result(old_app, name, arguments)
+                            @test refusal.is_error
+                            error = refusal.structured_content["error"]
+                            @test error["code"] == "unsupported_tmux" &&
+                                  error["effects"] == "none"
+                        end
+                        @test tool_result(app, "capture_pane").structured_content["text"] ==
+                              before_keys
+                        @test length(panes(snapshot(server))) == 2
+                    finally
+                        close(old_app)
+                    end
+                end
                 no_caller = Application(server)
                 try
                     missing = tool_result(no_caller, "capture_pane")

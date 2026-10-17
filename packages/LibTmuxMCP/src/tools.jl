@@ -997,10 +997,13 @@ function _tool_error(error, name)
         error isa LibTmux.RequestCancelled ? "cancelled" :
         error isa LibTmux.DeadlineExceeded ? "deadline" :
         error isa LibTmux.OutputLimitExceeded ? "output_limit" :
+        error isa LibTmux.UnsupportedTmuxVersion ? "unsupported_tmux" :
         error isa LibTmux.ObservationLost ? "observation_lost" : "operation_failed"
     mutating = _tool_can_mutate(name)
     uncertain =
-        mutating && (
+        mutating &&
+        !LibTmux._not_dispatched(error) &&
+        (
             error isa
             Union{LibTmux.CommandError,LibTmux.CreationResponseError,CompositeException} ||
             error isa Union{LibTmux.ProcessIOError,LibTmux.OutputLimitExceeded} &&
