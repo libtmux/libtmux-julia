@@ -71,7 +71,7 @@ returned nodes. Errors close the parser and discard retained bytes. Output
 notification bytes are octal-decoded without UTF-8 conversion. Other
 notifications retain the complete record bytes, excluding LF.
 
-Known 3.2a/current notifications can occur inside a reply. Unknown records
+Known 3.3a/current notifications can occur inside a reply. Unknown records
 fail; this parser does not silently discard future notification dialects.
 Consumers must defer operation success until their completion fence: frame
 closure alone does not establish completion of commands returning WAIT.

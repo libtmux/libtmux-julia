@@ -9,6 +9,11 @@ $ julia \
     -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxMCP")])'
 ```
 
+The server needs tmux 3.3a or newer. A tool called against an older or
+unreadable tmux fails with code `unsupported_tmux` and `effects: none`, and
+`libtmux-mcp` exits at startup with the same remedy when its server is below
+the floor.
+
 Create the launcher after dependency preparation:
 
 ```console

@@ -456,14 +456,18 @@ Both must pass at the same source revision to complete a split cell. Use
 `--suite runtime` or `--suite delivery` to run one partition locally; omitting
 the option runs both.
 
-Pull requests run four combined QA cells: Linux floor (tmux 3.3a) at one
-thread, current Linux at four threads, and current macOS on each architecture
-at one thread. Rejection cells run tmux 3.2a and the unpatched 3.3 release
+Pull requests run four combined QA cells: Linux floor (tmux 3.3a) at one thread,
+current Linux at four threads, and current macOS on each architecture at one
+thread. Rejection cells run tmux 3.0a, 3.1c, 3.2a and the unpatched 3.3 release
 against `test/runtests.jl rejection`, with the release as its own client and
-behind a 3.3a client; they assert that operations are refused without effect
-and sit outside the supported matrix. Intermediate releases and
-macOS floor evidence remain explicit compatibility work; an unrun release is
-not support.
+behind a 3.3a client; they assert that operations are refused without effect and
+sit outside the supported matrix. The 3.0a and 3.1c cells run `test/runtests.jl
+old-daemon` instead: the real old daemon behind a 3.3a client. Every rejection
+cell also runs the workspace CLI against a real daemon of the rejected release,
+and the 3.0a and 3.1c cells run the MCP tools against a daemon that replaces a
+checked one. Both package suites are `runtests.jl old-daemon` and fail instead
+of skipping when the builds are absent. Intermediate releases and macOS floor
+evidence remain explicit compatibility work; an unrun release is not support.
 
 The driver saves structured results before and after each phase. Interrupted
 runs retain completed failures and identify the unfinished phase; they never
