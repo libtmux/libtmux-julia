@@ -4,13 +4,16 @@ status = "unregistered prerelease"
 [support]
 julia_development = "1.13.1"
 julia_proposed_floor = "1.10"
-tmux_proposed_floor = "3.2a"
+tmux_proposed_floor = "3.3a"
 platforms_proposed = ["Linux x86_64", "macOS arm64", "macOS x86_64"]
 # These complete-suite results apply only to the exact cells below. They do not
-# establish broader platform or version support.
+# establish broader platform or version support. A cell joins the list after
+# its CI run passes; the Linux cells below passed in Julia workflow run
+# 39157326487 on libtmux/libtmux-julia.
 verified_product_cells = [
-  "Linux x86_64 / Julia 1.10.0 / tmux 3.2a / 1 thread",
-  "Linux x86_64 / Julia 1.13.0 / tmux 3.7c / 4 threads",
+  "Linux x86_64 / Julia 1.10.0 / tmux 3.3a / 1 thread",
+  "Linux x86_64 / Julia 1.13.1 / tmux 3.7c / 4 threads",
+  "Linux x86_64 / Julia 1.13.1 / tmux 3.8 / 1 thread",
   "macOS arm64 / Julia 1.13.0 / tmux 3.7c / 1 thread",
   "macOS x86_64 / Julia 1.13.0 / tmux 3.7c / 1 thread",
 ]

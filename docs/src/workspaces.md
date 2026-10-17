@@ -5,6 +5,10 @@ expansion and planning are pure. Applying a plan creates tmux resources and
 can execute shell input. Keep those stages explicit when reviewing an
 untrusted configuration.
 
+Loading and freezing need tmux 3.3a or newer. The workspace CLI reports an
+older or unreadable tmux as error code `tmux_unsupported` with exit status 3,
+in every output mode, and applies nothing.
+
 From a consumer project directory, add the core and workspace package from the
 same public Git tag:
 
