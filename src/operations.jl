@@ -190,6 +190,7 @@ function new_session(
 )
     isempty(name) && throw(ArgumentError("session name cannot be empty"))
     context = _operation_context(server; kwargs...)
+    _check_name(context, name, :new_session)
     fields = ["pid", "start_time", "socket_path", "session_id"]
     args = [
         "new-session",
@@ -240,6 +241,7 @@ function new_window(
     name === nothing || append!(args, ["-n", _literal_format(name)])
     append!(args, _creation_args(command, shell_command, start_directory, environment))
     context = _target_context(server, target; kwargs...)
+    name === nothing || _check_name(context, name, :new_window)
     result = _operation_command(context, args...)
     _creation_reference(WindowRef, result; expected=target.server)
 end
@@ -336,11 +338,7 @@ function _layout_argument(layout::Union{Symbol,AbstractString})
 end
 
 function _check_layout_version(layout, version)
-    parsed = match(r"\A([0-9]+)\.([0-9]+)[a-z]?\z", version)
-    if parsed !== nothing
-        major, minor = tryparse.(Int, parsed.captures)
-        major !== nothing && minor !== nothing && (major, minor) >= (3, 5) && return
-    end
+    _version_at_least(version, "3.5") && return
     throw(
         UnsupportedCapability(
             :select_layout,

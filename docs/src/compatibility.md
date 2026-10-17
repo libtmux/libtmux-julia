@@ -31,6 +31,33 @@ The repository capability manifest records implemented, deferred, excluded
 and untested surfaces. tmux letter suffixes are meaningful; `3.3a` is not
 silently normalized to `3.3`.
 
+## Optional features above the floor
+
+Some operations need a newer daemon than the 3.3a floor. Each requirement
+belongs to its operation, is decided from the connected daemon before the
+operation has an effect, and raises `UnsupportedCapability` naming the release.
+Ordinary subprocess operations stay available on 3.3a.
+
+| Feature | Requirement | Below it | State |
+| --- | --- | --- | --- |
+| Control acquisition: `open_control`, control batches, output streams, format subscriptions and the MCP waiting tools | tmux 3.7 | Refused before any attach client starts | The refusal is qualified; concurrent acquisition on 3.7 and later is unverified |
+| Named-buffer deletion: `load_buffer` and `delete_buffer` | tmux 3.4 | Refused before any buffer exists | The refusal is qualified |
+| `:` or `.` in session and window names | Not tmux 3.7 | Refused for that exact release before dispatch | The refusal is qualified |
+| Mirrored layouts | tmux 3.5 | Refused before dispatch | Qualified |
+
+Short control attaches crash tmux servers before 3.7, which is why acquisition
+is decided first. Exact-name buffer deletion can act on an unrelated buffer
+before 3.4 when the name is missing. Layout strings are validated before
+dispatch on every release, because 3.3a crashes on an invalid one.
+
+`paste_bytes`, `paste_text` and workspace commands that paste work on 3.3a.
+Before 3.4 the paste itself deletes its staging buffer (`paste-buffer -d`),
+because deleting by a missing name can take an unrelated buffer; a paste that
+fails after the buffer was loaded leaves that one named buffer behind. The
+library does not capture `run-shell` output or call `break-pane`, so those
+release restrictions do not apply, and it keeps no short socket alias because
+it does not attach to sockets outside its owned directories.
+
 Local POSIX tmux is the initial transport scope. SSH, native Windows tmux,
 private tmux imsg access and Python workspace plugins are excluded. Query
 pushdown, portable regex/Unicode folding, general execution DAGs and remote

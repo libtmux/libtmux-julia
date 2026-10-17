@@ -389,7 +389,7 @@ function _tool_output_schema(app, name)
                 "target"=>_target_schema(),
                 "matched"=>boolean,
                 "text"=>text,
-                "source"=>Dict("enum"=>["baseline", "output"]),
+                "source"=>Dict("enum"=>["baseline", "output", "screen"]),
                 "evidence"=>Dict("const"=>"literal_text"),
                 "continuity"=>Dict("const"=>"reset"),
                 "keysSent"=>boolean,
@@ -756,6 +756,46 @@ function _capture(app, ref, args, context)
     )
 end
 
+# Polling counterpart of the control wait: capture the screen until the literal
+# text appears. A send_keys_and_wait match needs more occurrences than the
+# screen held before the keys; a polled screen cannot tell new output from old.
+function _poll_text(app, ref, plan, context, matched, mark_keys_sent)
+    needle = plan.args["text"]
+    function screen()
+        bytes = LibTmux.capture_bytes(
+            app.server,
+            ref;
+            max_bytes=app.max_capture_bytes,
+            _tool_kwargs(context)...,
+        )
+        LibTmux.decode_text(bytes; invalid=:replace)
+    end
+    occurrences(text) = count(needle, text)
+    baseline = occurrences(screen())
+    if plan.name == "wait_for_text"
+        baseline > 0 && return matched("screen")
+    else
+        LibTmux.send_keys(
+            app.server,
+            ref,
+            plan.args["keys"]...;
+            literal=plan.args["literal"],
+            _tool_kwargs(context)...,
+        )
+        mark_keys_sent()
+    end
+    context.progress("waiting")
+    try
+        while true
+            sleep(0.1)
+            occurrences(screen()) > baseline && return matched("screen")
+        end
+    catch error
+        plan.name == "send_keys_and_wait" && throw(_ToolEffectsError(error))
+        rethrow()
+    end
+end
+
 function _wait_text(app, ref, plan, context)
     captured = LibTmux.snapshot(app.server; _tool_kwargs(context)...)
     captured.identity == ref.server || throw(LibTmux.StaleReference(string(ref.id)))
@@ -778,6 +818,12 @@ function _wait_text(app, ref, plan, context)
             "terminalContent"=>"data",
             "generationGuarantee"=>"best_effort",
         )
+    end
+    # Control clients need tmux 3.7; below it, poll the screen instead.
+    release = LibTmux._daemon_version(app.server, LibTmux._client_environment(ENV))
+    if release !== nothing &&
+       !LibTmux._version_at_least(release, LibTmux.CONTROL_MINIMUM_TMUX)
+        return _poll_text(app, ref, plan, context, matched, () -> keys_sent = true)
     end
     try
         LibTmux.open_control(app.server, session; _tool_kwargs(context)...) do connection
@@ -998,6 +1044,7 @@ function _tool_error(error, name)
         error isa LibTmux.DeadlineExceeded ? "deadline" :
         error isa LibTmux.OutputLimitExceeded ? "output_limit" :
         error isa LibTmux.UnsupportedTmuxVersion ? "unsupported_tmux" :
+        error isa LibTmux.UnsupportedCapability ? "unsupported_capability" :
         error isa LibTmux.ObservationLost ? "observation_lost" : "operation_failed"
     mutating = _tool_can_mutate(name)
     uncertain =

@@ -34,6 +34,7 @@ function new_session(
 )
     context = _control_operation_context(connection; kwargs...)
     isempty(name) && throw(ArgumentError("session name cannot be empty"))
+    _check_name(connection, name, :new_session)
     args = [
         "new-session",
         "-d",
@@ -150,6 +151,7 @@ for (operation, command, Ref) in (
         isempty(name) && throw(ArgumentError("name cannot be empty"))
         text = _control_creation_name(name, $(QuoteNode(operation)))
         context = _control_topology_context(connection, target; kwargs...)
+        _check_name(connection, name, $(QuoteNode(operation)))
         _control_topology_effect(context, [$command, "-t", string(target.id), "--", text])
     end
     @eval @doc $("""

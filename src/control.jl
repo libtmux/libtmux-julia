@@ -624,6 +624,8 @@ function _open_control_lane(
         timeout=_snapshot_remaining(started, budget),
         started,
     )
+    # Short-lived control attaches crash servers before 3.7, so decide first.
+    _require_release(release, CONTROL_MINIMUM_TMUX, :open_control, "control acquisition")
     selector =
         server.socket_path === nothing ? ["-L", something(server.socket_name)] :
         ["-S", server.socket_path]
