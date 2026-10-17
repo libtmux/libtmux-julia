@@ -249,13 +249,20 @@ struct _ProcessDrain{F}
     io::Base.PipeEndpoint
     stream::Symbol
     limit::Int
+    activity::Threads.Atomic{UInt64}
+    abandoned::Threads.Atomic{Bool}
 end
+
+# How long the pipes of an exited client may stay silent before a descendant
+# that inherited them is presumed to be holding them open.
+const _PIPE_QUIET_NS = UInt64(250_000_000)
 
 Base.@noinline function (worker::_ProcessDrain)()
     captured = UInt8[]
     try
         while !eof(worker.io)
             chunk = readavailable(worker.io)
+            worker.activity[] = time_ns()
             available = worker.limit - length(captured)
             count = min(length(chunk), available)
             offset = length(captured)
@@ -267,9 +274,40 @@ Base.@noinline function (worker::_ProcessDrain)()
             end
         end
     catch cause
-        worker.stop(ProcessIOError(worker.stream, cause))
+        worker.abandoned[] || worker.stop(ProcessIOError(worker.stream, cause))
     end
     captured
+end
+
+# Wait for both drains once the client has exited. A descendant, such as the
+# server of a tmux that cannot close its descriptors, may keep a pipe open
+# forever: when no output arrived for `_PIPE_QUIET_NS`, close our read ends so
+# the drains finish with what was written.
+function _await_drains(tasks, activity, abandoned, close_pipes)
+    done = Base.Event()
+    joiner = Threads.@spawn begin
+        foreach(wait, tasks)
+        notify(done)
+    end
+    # The client's exit counts as activity, so the interval starts there.
+    activity[] = max(activity[], time_ns())
+    while !istaskdone(joiner)
+        deadline = activity[] + _PIPE_QUIET_NS
+        remaining = (Int64(deadline) - Int64(time_ns())) / 1e9
+        remaining > 0 || begin
+            abandoned[] = true
+            close_pipes()
+            break
+        end
+        tick = Timer(_ -> notify(done), remaining)
+        try
+            wait(done)
+        finally
+            close(tick)
+        end
+    end
+    wait(joiner)
+    nothing
 end
 
 struct _ProcessInput{F}
@@ -383,16 +421,38 @@ function _run_process(
                 _DeadlineCallback(stop, delay),
                 max(0.0, delay - (time_ns() - started) / 1e9),
             )
-        output_worker = _ProcessDrain(stop, output_pipe.out, :stdout, max_output_bytes)
+        activity = Threads.Atomic{UInt64}(time_ns())
+        abandoned = Threads.Atomic{Bool}(false)
+        output_worker = _ProcessDrain(
+            stop,
+            output_pipe.out,
+            :stdout,
+            max_output_bytes,
+            activity,
+            abandoned,
+        )
         output_task = Threads.@spawn output_worker()
         push!(workers, output_task)
-        error_worker = _ProcessDrain(stop, error_pipe.out, :stderr, max_error_bytes)
+        error_worker = _ProcessDrain(
+            stop,
+            error_pipe.out,
+            :stderr,
+            max_error_bytes,
+            activity,
+            abandoned,
+        )
         error_task = Threads.@spawn error_worker()
         push!(workers, error_task)
         input_worker = _ProcessInput(stop, input_pipe.in, payload)
         writer_task = Threads.@spawn input_worker()
         push!(workers, writer_task)
         wait(proc)
+        _await_drains(
+            (output_task, error_task),
+            activity,
+            abandoned,
+            _ProcessDrainClose(output_pipe.out, error_pipe.out),
+        )
         stdout_bytes, stderr_bytes = fetch(output_task), fetch(error_task)
         write_error = fetch(writer_task)
         failure = lock(state_lock) do
@@ -465,8 +525,10 @@ The first cancellation, deadline, output overflow or pipe error wins. Its
 `result` retains bounded output and observed exit/signal evidence after client
 retirement; it is `nothing` before submission. Failed input delivery is an
 I/O error even with `check=false`. Cleanup allows at most 900 ms for inherited
-output pipes after stopping the owned client, then closes them. Return or
-failure joins I/O tasks, timer tasks and any running cancellation callback.
+output pipes after stopping the owned client, then closes them. After a client
+exits by itself, a pipe that stays open and silent for 250 ms is closed and the
+output read so far is returned. Return or failure joins I/O tasks, timer tasks
+and any running cancellation callback.
 If cleanup also fails, `CompositeException` preserves the primary error first.
 
 Arguments and individual environment entries are limited to a conservative
