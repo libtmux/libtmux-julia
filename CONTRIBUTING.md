@@ -65,6 +65,12 @@ $ LIBTMUX_TEST_TMUX=/path/to/tmux-3.2a julia \
     test/runtests.jl rejection
 ```
 
+Below tmux 3.7 the control suites are skipped, and below 3.4 the named-buffer
+load, save and delete cases are skipped; `test/features.jl` asserts those
+refusals instead. Skips are warned in the log, and the matrix runner collects
+them into its result file and the job summary. A skipped check is not a
+passing one.
+
 Run both suites before handoff, and repeat with `--threads=4` when changing
 process ownership, cancellation, or concurrent I/O:
 
