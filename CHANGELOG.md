@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+#### Capabilities live in one registry and manifest
+
+Every optional tmux check reads its release from one table: control mode,
+named-buffer deletion and rename, the clipboard query that `refresh-client -l`
+makes, layouts without a checksum, mirrored and JSON layouts, and the tmux 3.7
+name and `break-pane` workarounds. `capabilities.json` at the repository root
+is emitted from that table for the documentation site's capability pages. Run
+`julia --project=. dev/emit-capabilities.jl` to rewrite it. Unit tests fail
+when the file differs from the table, when a gate refuses at a release other
+than its entry's, or when `docs/capabilities.toml` names a different
+release. (#18)
+
 #### Restore the tmux 3.3a minimum
 
 The minimum tmux release is 3.3a again; 0.1.0 required 3.7c. Control
