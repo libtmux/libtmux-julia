@@ -135,7 +135,7 @@ function _new_buffer_ref(context, identity)
 end
 
 function _cleanup_owned_buffer(server, buffer)
-    context = _target_context(server, buffer; timeout=0.9)
+    context = _target_context(server, buffer; timeout=5.0)
     result = _operation_command(
         context,
         "delete-buffer",
@@ -182,8 +182,20 @@ remote I/O. Empty input errors because tmux does not create empty buffers.
 function load_buffer(server::Server, bytes::AbstractVector{UInt8}; kwargs...)
     isempty(bytes) && throw(ArgumentError("tmux does not create empty buffers"))
     context = _operation_context(server; kwargs...)
-    _verify_row_codec(server, context.started, context.budget, context.cancel)
-    identity = _snapshot_metadata(server, context.started, context.budget, context.cancel)
+    _verify_row_codec(
+        server,
+        context.started,
+        context.budget,
+        context.cancel,
+        context.checked,
+    )
+    identity = _snapshot_metadata(
+        server,
+        context.started,
+        context.budget,
+        context.cancel,
+        context.checked,
+    )
     buffer = _new_buffer_ref(context, identity)
     _load_owned_buffer(context, buffer, bytes)
 end

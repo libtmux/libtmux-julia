@@ -40,7 +40,7 @@ function _operation_context(server; timeout::Real=5.0, cancel=nothing, strict::B
     budget = Float64(timeout)
     isfinite(budget) && 0 < budget < 1e15 ||
         throw(ArgumentError("invalid operation timeout"))
-    (; server, budget, started=time_ns(), cancel)
+    (; server, budget, started=time_ns(), cancel, checked=Ref{Any}(nothing))
 end
 
 function _target_context(server::Server, ref::EntityRef; kwargs...)
@@ -48,8 +48,20 @@ function _target_context(server::Server, ref::EntityRef; kwargs...)
     if server.socket_path !== nothing && server.socket_path != ref.server.socket_path
         throw(CrossServerReference(string(ref.id)))
     end
-    _verify_row_codec(server, context.started, context.budget, context.cancel)
-    current = _snapshot_metadata(server, context.started, context.budget, context.cancel)
+    _verify_row_codec(
+        server,
+        context.started,
+        context.budget,
+        context.cancel,
+        context.checked,
+    )
+    current = _snapshot_metadata(
+        server,
+        context.started,
+        context.budget,
+        context.cancel,
+        context.checked,
+    )
     current.socket_path == ref.server.socket_path ||
         throw(CrossServerReference(string(ref.id)))
     current == ref.server || throw(StaleReference(string(ref.id)))
@@ -62,6 +74,7 @@ function _operation_command(context, args...; kwargs...)
         args...;
         timeout=_snapshot_remaining(context.started, context.budget),
         cancel=context.cancel,
+        _checked=context.checked,
         kwargs...,
     )
 end
@@ -323,11 +336,7 @@ function _layout_argument(layout::Union{Symbol,AbstractString})
 end
 
 function _check_layout_version(layout, version)
-    parsed = match(r"\A([0-9]+)\.([0-9]+)[a-z]?\z", version)
-    if parsed !== nothing
-        major, minor = tryparse.(Int, parsed.captures)
-        major !== nothing && minor !== nothing && (major, minor) >= (3, 5) && return
-    end
+    _version_at_least(version, "3.5") && return
     throw(
         UnsupportedCapability(
             :select_layout,
@@ -351,13 +360,7 @@ function select_layout(
     text = _layout_argument(layout)
     context = _target_context(server, target; kwargs...)
     if endswith(text, "-mirrored")
-        result = _operation_command(
-            context,
-            "display-message",
-            "-p",
-            _format_template(["version"]),
-        )
-        _check_layout_version(text, only(only(_decode_format_rows(result.stdout, 1))))
+        _check_layout_version(text, _context_release(context))
     end
     _operation_command(context, "select-layout", "-t", string(target.id), "--", text)
 end
