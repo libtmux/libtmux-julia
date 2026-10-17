@@ -113,7 +113,44 @@ function load_fixture(path, mapped)
     module_
 end
 
+function source_error(path, mapped)
+    parent = nothing
+    try
+        @testset "source mapping" begin
+            parent = Test.get_testset()
+            load_fixture(path, mapped)
+        end
+    catch error
+        error isa Test.TestSetException || rethrow()
+    end
+    child = only(parent.results)
+    child = child isa D.ObservedTestSet ? child.delegate : child
+    result = only(child.results)
+    @assert result isa Test.Error
+    result
+end
+
+function check_source_locations(directory)
+    path = joinpath(directory, "source-fixture.jl")
+    write(
+        path,
+        "using Test\nboom() = error(\"source control\")\n@testset \"failure\" begin\n    boom()\nend\n",
+    )
+    baseline, observed = source_error(path, false), source_error(path, true)
+    @assert baseline.value == observed.value
+    @assert baseline.source == observed.source
+    for result in (baseline, observed)
+        lines = [
+            parse(Int, m.captures[1]) for
+            m in eachmatch(r"source-fixture\.jl:(\d+)", result.backtrace)
+        ]
+        @assert 4 in lines
+        @assert all(line -> 1 <= line <= 5, lines) "Invented test-file source line"
+    end
+end
+
 function check_controls(directory)
+    check_source_locations(directory)
     path = joinpath(directory, "fixture.jl")
     write(path, FIXTURE)
     baseline = load_fixture(path, false)

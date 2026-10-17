@@ -525,15 +525,16 @@ function body_finish(ts)
     nothing
 end
 
-function instrument_body(body)
+function instrument_body(body, source)
     token, error, answer, cause = gensym(:diagnostic_ts),
     gensym(:diagnostic_error),
     gensym(:answer),
     gensym(:stop_cause)
-    quote
+    slot = Expr(:block)
+    wrapped = quote
         local $token = $(GlobalRef(LibTmuxTestDiagnostics, :body_start))()
         try
-            local $answer = $body
+            local $answer = $slot
             $(GlobalRef(LibTmuxTestDiagnostics, :body_outcome))($token, "returned")
             $answer
         catch $error
@@ -542,7 +543,8 @@ function instrument_body(body)
                 $(GlobalRef(LibTmuxTestDiagnostics, :stop_admission))(
                     $cause,
                     $token isa $(GlobalRef(LibTmuxTestDiagnostics, :ObservedTestSet)) &&
-                    $token.source !== nothing ? $token.source : LineNumberNode(0, :unknown),
+                    $token.source !== nothing ? $token.source :
+                    LineNumberNode(0, :unknown),
                 )
             end
             $(GlobalRef(LibTmuxTestDiagnostics, :body_outcome))(
@@ -554,6 +556,11 @@ function instrument_body(body)
             $(GlobalRef(LibTmuxTestDiagnostics, :body_finish))($token)
         end
     end
+    # Remove injected locations before inserting the original body.
+    Base.remove_linenums!(wrapped)
+    pushfirst!(wrapped.args, source)
+    push!(slot.args, body)
+    wrapped
 end
 
 function resolve_binding(module_::Module, name)
@@ -642,9 +649,9 @@ function mapped_testset(module_, ex, inherited_supported)
     body = map_owned(module_, body, true)
     if body isa Expr && body.head == :for
         body = deepcopy(body)
-        body.args[2] = instrument_body(body.args[2])
+        body.args[2] = instrument_body(body.args[2], source)
     else
-        body = instrument_body(body)
+        body = instrument_body(body, source)
     end
     Expr(:macrocall, ex.args[1], source, options..., body)
 end
