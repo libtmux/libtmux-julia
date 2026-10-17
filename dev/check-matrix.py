@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import signal
 import subprocess
@@ -35,7 +36,6 @@ TOOL_PREFERENCES = "[JuliaFormatter]\nprecompile_workload = false\n"
 DELIVERY_PHASES = frozenset(("extensions", "docs", "doc-snippets", "doc-contextual",
                             "imports", "external-examples", "external-launchers"))
 SUITES = ("runtime", "delivery")
-
 TMUX_SHA256 = {
     "3.2a": "551553a4f82beaa8dadc9256800bcc284d7c000081e47aa6ecbb6ff36eacd05f",
     "3.3": "b2382ac391f6a1c5b93293016cdc9488337d9a04b9d611ae05eac164740351dc",
@@ -86,6 +86,32 @@ def build_tmux(args):
     if observed != f"tmux {args.version}":
         raise ValueError("built tmux version differs from the requested release")
     print(binary)
+
+
+SKIPPED_PATTERN = re.compile(r"(?:^|\s)SKIPPED\b.*|Warning: .*\bskipped\b.*")
+
+
+def skipped_checks(log):
+    """Lines in a phase log that report a check skipped on this tmux release."""
+    if not log.is_file():
+        return []
+    found = []
+    for line in log.read_text(errors="replace").splitlines():
+        matched = SKIPPED_PATTERN.search(line)
+        if matched and matched.group(0).strip() not in found:
+            found.append(matched.group(0).strip())
+    return found
+
+
+def report_skipped(result):
+    """Surface skipped checks in the result and the job summary; a skip is not a pass."""
+    skipped = [(item["name"], line) for item in result["phases"] for line in item.get("skipped", [])]
+    result["skipped_checks"] = [dict(phase=name, detail=line) for name, line in skipped]
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if skipped and summary:
+        with open(summary, "a", encoding="utf-8") as output:
+            output.write("### Skipped checks\n\n")
+            output.writelines(f"- `{name}`: {line}\n" for name, line in skipped)
 
 
 def qa_cells():
@@ -428,10 +454,14 @@ def run(args):
                     result["active_phase"] = name
                     save()
                     item = phase(name, argv, cwd=ROOT, env=env, log=stage / "logs" / f"{name}.log", budget=budget)
+                    item["skipped"] = skipped_checks(stage / "logs" / f"{name}.log")
                     result["phases"].append(item)
                     result["active_phase"] = None
                     save()
                     print(f"{item['status']} {name} {item['seconds']:.3f}s", flush=True)
+                    for line in item["skipped"]:
+                        print(f"::warning title=Skipped in {name}::{line}", flush=True)
+                report_skipped(result)
                 result["status"] = "PASS" if result["phases"] and all(p["status"] == "PASS" for p in result["phases"]) else "FAIL"
                 if metadata["source_digest"] != source_digest():
                     result.update(status="STALE", reason="source changed during checks")
@@ -541,6 +571,13 @@ println("PASS admitted version arguments construct real Pkg specifications")
         timed = phase("deadline", [sys.executable, "-c", "import threading; threading.Event().wait()"],
                       cwd=base, env=os.environ.copy(), log=base / "deadline.log", budget=0.05)
         assert timed["status"] == "TIMEOUT" and timed["direct_child_reaped"]
+        log = base / "skipped.log"
+        log.write_text("PASS core\n\u250c Warning: control suites skipped: below 3.7\n"
+                       "SKIPPED README.md fence 3: control acquisition needs tmux 3.7\nPASS x\n")
+        assert skipped_checks(log) == [
+            "Warning: control suites skipped: below 3.7",
+            "SKIPPED README.md fence 3: control acquisition needs tmux 3.7"]
+        assert skipped_checks(base / "absent.log") == []
         cells = qa_cells()
         assert [
             (cell["os"], cell["arch"], cell["julia"], cell["tmux"], cell["threads"])
