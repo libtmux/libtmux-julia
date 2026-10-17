@@ -4,8 +4,13 @@
     if admitted
         with_tmux() do fixture
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-            session = new_session(server; name="control-config", command=["/bin/cat"])
-            open_control(server, session) do connection
+            session = new_session(
+                server;
+                name="control-config",
+                command=["/bin/cat"],
+                timeout=HANG_GUARD,
+            )
+            open_control(server, session; timeout=HANG_GUARD) do connection
                 value = "雪\tline\n%end 1 2 1\n#{literal};"
                 @test set_environment(connection, :global, "LIBTMUX_CONFIG", value) isa
                       ControlResult

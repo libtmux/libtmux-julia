@@ -4,14 +4,19 @@
     if admitted
         with_tmux() do fixture
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-            session = new_session(server; name="control-buffer", command=["/bin/cat"])
+            session = new_session(
+                server;
+                name="control-buffer",
+                command=["/bin/cat"],
+                timeout=HANG_GUARD,
+            )
             pane = only(panes(snapshot(server))).ref
             borrowed_name = " leading #{literal};雪"
             run_command(server, "set-buffer", "-b", borrowed_name, "keep")
             names() = run_command(server, "list-buffers", "-F", "#{buffer_name}").stdout
             before_names = names()
             withenv("TMPDIR"=>fixture.directory) do
-                open_control(server, session) do connection
+                open_control(server, session; timeout=HANG_GUARD) do connection
                     payload = repeat(collect(UInt8(0):UInt8(255)), 16)
                     buffer = load_buffer(connection, payload)
                     @test buffer.server == connection.identity
@@ -68,16 +73,20 @@
                     )
                     output = joinpath(fixture.directory, "pasted")
                     raw = "stty raw -echo; $(signal("raw-ready")); dd bs=1 count=$(length(payload)+1) of=$(quote_shell(output)) 2>/dev/null; $(signal("raw-done")); exec cat"
-                    raw_window =
-                        new_window(connection, session; command=["/bin/sh", "-c", raw])
+                    raw_window = new_window(
+                        connection,
+                        session;
+                        command=["/bin/sh", "-c", raw],
+                        timeout=HANG_GUARD,
+                    )
                     raw_pane = PaneRef(
                         connection.identity,
                         only(read_formats(connection, raw_window, FormatField("pane_id"))).value,
                     )
-                    run_command(server, "wait-for", "raw-ready"; timeout=0.9)
+                    run_command(server, "wait-for", "raw-ready"; timeout=HANG_GUARD)
                     @test paste_bytes(connection, raw_pane, payload) isa ControlResult
                     send_keys(connection, raw_pane, "Z"; literal=true)
-                    run_command(server, "wait-for", "raw-done"; timeout=0.9)
+                    run_command(server, "wait-for", "raw-done"; timeout=HANG_GUARD)
                     @test read(output) == vcat(payload, codeunits("Z"))
                     missing = PaneRef(connection.identity, "%999999")
                     @test_throws ControlCommandError paste_bytes(
@@ -114,7 +123,7 @@
                     end
                     outcome = nothing
                     try
-                        run_command(server, "wait-for", "buffer-loaded"; timeout=0.9)
+                        run_command(server, "wait-for", "buffer-loaded"; timeout=HANG_GUARD)
                     finally
                         cancel!(active)
                         try
@@ -123,7 +132,7 @@
                                 "wait-for",
                                 "-S",
                                 "buffer-release";
-                                timeout=0.9,
+                                timeout=HANG_GUARD,
                             )
                         finally
                             outcome = fetch(task)

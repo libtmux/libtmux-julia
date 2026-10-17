@@ -221,6 +221,29 @@ function (stop::_OwnedReadyStop)(error)
     end
 end
 
+# An FSEvents directory watch, which libuv uses on macOS, never reports a Unix
+# socket: bind() creates the node through a path that emits no FSEvent. Socket
+# readiness is therefore found by the poll tick; the watch only speeds up
+# regular-file and exit events.
+# Callers re-check the filesystem after every wake.
+function _watch_wake(monitor::FileWatching.FolderMonitor; interval=0.05)
+    wake = Base.Event(true)
+    task = Threads.@spawn begin
+        try
+            while true
+                wait(monitor)
+                notify(wake)
+            end
+        catch error
+            error isa EOFError || rethrow()
+        finally
+            notify(wake)
+        end
+    end
+    tick = Timer(_ -> notify(wake), interval; interval)
+    wake, () -> (close(tick); close(monitor); wait(task))
+end
+
 function _owned_ready(owned, env, cancel, started, budget; _cancel_subscribe=on_cancel)
     state_lock = ReentrantLock()
     reason = Ref{Union{Nothing,Exception}}(nothing)
@@ -237,16 +260,15 @@ function _owned_ready(owned, env, cancel, started, budget; _cancel_subscribe=on_
         cancel === nothing ? nothing :
         _cancel_subscribe(() -> stop(RequestCancelled(true)), cancel)
     primary = nothing
+    wake, release_wake = _watch_wake(monitor)
     try
         while true
             check_reason()
             process_running(process) || throw(_OwnedStartupFailure(:daemon_exit))
             socket = owned.server.socket_path
             ispath(socket) && !ispath(socket * ".lock") && break
-            try
-                wait(monitor)
-            catch error
-                error isa EOFError || rethrow()
+            wait(wake)
+            if !isopen(monitor)
                 check_reason()
                 throw(_OwnedStartupFailure(:daemon_exit))
             end
@@ -297,7 +319,7 @@ function _owned_ready(owned, env, cancel, started, budget; _cancel_subscribe=on_
         for cleanup in (
             () -> close(timer),
             () -> wait(timer_task),
-            () -> close(monitor),
+            release_wake,
             () -> registration === nothing || close(registration),
         )
             try

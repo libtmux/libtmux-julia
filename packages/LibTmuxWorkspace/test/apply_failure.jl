@@ -6,7 +6,12 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
 @testset "known creation remains visible after observation failure" begin
     with_workspace_server() do fixture
         server = LibTmux.Server(socket_path=fixture.socket, tmux=fixture.tmux)
-        borrowed = LibTmux.new_session(server; name="borrowed", command=["/bin/cat"])
+        borrowed = LibTmux.new_session(
+            server;
+            name="borrowed",
+            command=["/bin/cat"],
+            timeout=HANG_GUARD,
+        )
         flag, wrapper = joinpath(fixture.directory, "fail-observation"),
         joinpath(fixture.directory, "tmux-fault")
         word = LibTmuxWorkspace._shell_word
@@ -55,7 +60,12 @@ end
 @testset "borrowed session survives partial apply cleanup" begin
     with_workspace_server() do fixture
         server = LibTmux.Server(socket_path=fixture.socket, tmux=fixture.tmux)
-        session = LibTmux.new_session(server; name="workspace", command=["/bin/cat"])
+        session = LibTmux.new_session(
+            server;
+            name="workspace",
+            command=["/bin/cat"],
+            timeout=HANG_GUARD,
+        )
         failed_doc = Dict(
             "session_name" => "workspace",
             "windows" => [

@@ -8,7 +8,7 @@ function observation_parameters(arguments)
         "samples"=>"3",
         "bytes"=>"4096",
         "capacity"=>"4",
-        "timeout"=>"0.9",
+        "timeout"=>"30",
         "budget"=>"480",
         "seed"=>"2026",
         "output"=>joinpath(@__DIR__, "results", "observations.json"),
@@ -28,7 +28,7 @@ function observation_parameters(arguments)
     1 <= samples <= 12 || error("samples must be in 1:12")
     256 <= bytes <= 16384 || error("bytes must be in 256:16384")
     2 <= capacity <= 32 || error("capacity must be in 2:32")
-    isfinite(timeout) && 0 < timeout <= 0.9 || error("timeout must be in (0,0.9]")
+    isfinite(timeout) && 0 < timeout <= 30 || error("timeout must be in (0,30]")
     isfinite(budget) && 0 < budget <= 540 || error("budget must be in (0,540]")
     (;
         samples,

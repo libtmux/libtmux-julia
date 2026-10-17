@@ -11,6 +11,11 @@ import threading
 import time
 
 
+# Upper bound on waits for events that are expected to happen; the launcher
+# caps --timeout at 30 s.
+HANG_GUARD = 30
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("julia")
@@ -98,7 +103,7 @@ def main():
                     assert len(diagnostics) <= 1024 * 1024
                 else:
                     selector.unregister(key.fileobj)
-        watcher.join(0.9)
+        watcher.join(HANG_GUARD)
         assert not watcher.is_alive(), "process reaper did not join"
         elapsed = time.monotonic() - retired
         assert child.returncode == 0, diagnostics.decode(errors="replace")
@@ -113,7 +118,7 @@ def main():
     finally:
         if watcher.is_alive():
             child.kill()
-        watcher.join(0.9)
+        watcher.join(HANG_GUARD)
         assert not watcher.is_alive(), "forced process reaper did not join"
         selector.close()
         ready.close()

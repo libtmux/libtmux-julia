@@ -16,11 +16,12 @@
                 name="control-formats",
                 command=["/bin/cat"],
                 start_directory=text,
+                timeout=HANG_GUARD,
             )
             captured = snapshot(server)
             pane = only(panes(captured)).ref
             window = only(windows(captured)).ref
-            open_control(server, session) do connection
+            open_control(server, session; timeout=HANG_GUARD) do connection
                 fields = [
                     FormatField("pane_current_path"),
                     FormatField("pane_current_path"),
@@ -61,7 +62,8 @@
                     max_output_bytes=1,
                 )
                 @test isopen(connection)
-                other = split_window(connection, pane; command=["/bin/cat"])
+                other =
+                    split_window(connection, pane; command=["/bin/cat"], timeout=HANG_GUARD)
                 for target in (pane, other)
                     @test only(read_formats(connection, target, FormatField("pane_id"))).value ==
                           string(target.id)

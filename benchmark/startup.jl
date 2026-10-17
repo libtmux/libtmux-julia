@@ -1,5 +1,7 @@
 const STARTUP_ENTRY_NS = time_ns()
 const STARTUP_SELF_TEST = ARGS == ["--self-test"]
+# Upper bound on a step that starts a process and is expected to finish.
+const HANG_GUARD = 30.0
 isempty(ARGS) || STARTUP_SELF_TEST || error("usage: startup.jl [--self-test]")
 
 function startup_emit(io, name, status, elapsed, rss)
@@ -131,7 +133,11 @@ function startup_workload!(report)
         realpath(joinpath(dirname(@__DIR__), "src")) ||
             error("benchmark project loaded a different LibTmux source")
         owned = startup_phase!(phases, "owned_daemon_ready") do
-            LibTmux.open_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment)
+            LibTmux.open_server(;
+                tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
+                env=environment,
+                timeout=HANG_GUARD,
+            )
         end
         server = owned.server
         directory = dirname(server.socket_path)

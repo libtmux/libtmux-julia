@@ -31,14 +31,14 @@
         )
 
         # Compile both timed paths before the one-thread live cancellation race.
-        run_command(server, "display-message", "-p", "ready"; timeout=0.9)
+        run_command(server, "display-message", "-p", "ready"; timeout=HANG_GUARD)
         run_command(
             server,
             "display-message",
             "-p",
             "ready";
             cancel=CancellationToken(),
-            timeout=0.9,
+            timeout=HANG_GUARD,
         )
 
         token = CancellationToken()
@@ -52,12 +52,12 @@
                 "wait-for",
                 "blocked";
                 cancel=token,
-                timeout=0.9,
+                timeout=HANG_GUARD,
             )
         catch error
             error
         end
-        run_command(server, "wait-for", "started"; timeout=0.9)
+        run_command(server, "wait-for", "started"; timeout=HANG_GUARD)
         cancel!(token)
         outcome = fetch(task)
         @test outcome isa RequestCancelled

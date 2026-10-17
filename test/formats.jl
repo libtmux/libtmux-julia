@@ -8,8 +8,13 @@
         path = joinpath(alias, "é 雪\tline\nlibtmux_invented_hint=\n#{pane_id}\\;")
         mkpath(path)
         expected_path = realpath(path)
-        session_ref =
-            new_session(server; name="formats", command=["/bin/cat"], start_directory=path)
+        session_ref = new_session(
+            server;
+            name="formats",
+            command=["/bin/cat"],
+            start_directory=path,
+            timeout=HANG_GUARD,
+        )
         captured = snapshot(server)
         pane_ref = only(panes(captured)).ref
         window_ref = only(windows(captured)).ref
@@ -26,7 +31,7 @@
         @test observed[3].value === true
         @test observed[4].value === false
         @test all(o -> o.availability === :present, observed)
-        other = split_window(server, pane_ref; command=["/bin/cat"])
+        other = split_window(server, pane_ref; command=["/bin/cat"], timeout=HANG_GUARD)
         for target in (pane_ref, other)
             @test only(
                 LibTmux.read_formats(server, target, LibTmux.FormatField("pane_id")),

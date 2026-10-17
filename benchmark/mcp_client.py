@@ -13,6 +13,8 @@ import threading
 import time
 
 PROTOCOL = "2026-07-28"
+# Upper bound on a step that starts a process and is expected to answer.
+HANG_GUARD = 30.0
 FRAME_LIMIT = 8 * 1024 * 1024
 DIAGNOSTIC_LIMIT = 1024 * 1024
 TOOLS = ("list_panes", "capture_pane", "send_keys", "paste_text", "resize_pane",
@@ -417,9 +419,9 @@ def self_test():
                  "for line in sys.stdin:\n"
                  " request=json.loads(line)\n"
                  " print(json.dumps({'id':request['id'],'result':{'ok':True}}),flush=True)\n")
-    child = Client([sys.executable, "-u", "-c", responder], time.perf_counter() + 0.9)
+    child = Client([sys.executable, "-u", "-c", responder], time.perf_counter() + HANG_GUARD)
     try:
-        response, _ = child.request("test", "ping", timeout=0.9)
+        response, _ = child.request("test", "ping", timeout=HANG_GUARD)
         assert checked_result(response)["ok"]
         child.eof_and_join()
         assert child.report()["exit_code"] == 0 and child.stderr_bytes == 0

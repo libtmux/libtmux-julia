@@ -14,6 +14,7 @@ import LibTmux
                 "./argv '' 'a b' '; touch " * marker * "' \"\\\$VALUE\"";
                 base_directory=directory,
                 env=Dict("PATH" => "/usr/bin:/bin"),
+                timeout=HANG_GUARD,
             )
             @test String(result.stdout) == "\na b\n; touch " * marker * "\n\\\$VALUE\n"
             @test result.stderr == UInt8[0xff]
@@ -29,6 +30,7 @@ import LibTmux
                     "/bin/echo too-much-output";
                     base_directory=directory,
                     max_output_bytes=3,
+                    timeout=HANG_GUARD,
                 )
             catch error
                 error
@@ -46,6 +48,7 @@ import LibTmux
                     base_directory=directory,
                     cancel=token,
                     on_output=(stream, bytes) -> LibTmux.cancel!(token),
+                    timeout=HANG_GUARD,
                 )
             catch error
                 error
@@ -95,6 +98,7 @@ end
             "/bin/echo ready";
             base_directory=tempdir(),
             on_output=(stream, bytes) -> throw(InterruptException()),
+            timeout=HANG_GUARD,
         )
     catch error
         error

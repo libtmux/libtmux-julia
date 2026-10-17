@@ -1,5 +1,8 @@
 using Test, LibTmux, LibTmuxMCP
 
+isdefined(@__MODULE__, :HANG_GUARD) ||
+    include(joinpath(@__DIR__, "support", "hang_guard.jl"))
+
 isdefined(@__MODULE__, :NamedTmux) ||
     include(joinpath(@__DIR__, "support", "named_tmux.jl"))
 
@@ -10,8 +13,13 @@ isdefined(@__MODULE__, :NamedTmux) ||
         "TERM"=>"xterm-256color",
         "SHELL"=>"/bin/sh",
     )
-    with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do server
-        borrowed = new_session(server; name="borrowed", command=["/bin/cat"])
+    with_server(;
+        tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
+        env=environment,
+        timeout=HANG_GUARD,
+    ) do server
+        borrowed =
+            new_session(server; name="borrowed", command=["/bin/cat"], timeout=HANG_GUARD)
         pane = only(panes(snapshot(server))).ref
         mktempdir(; prefix="libtmux-julia-mcp-product-") do directory
             julia_flags =
@@ -41,7 +49,12 @@ end
 
 @testset "installed MCP launcher uses a named owned socket" begin
     NamedTmux.with_named_tmux() do fixture
-        borrowed = new_session(fixture.server; name="borrowed", command=["/bin/cat"])
+        borrowed = new_session(
+            fixture.server;
+            name="borrowed",
+            command=["/bin/cat"],
+            timeout=HANG_GUARD,
+        )
         pane = only(panes(snapshot(fixture.server))).ref
         mktempdir(; prefix="libtmux-julia-mcp-named-product-") do directory
             julia_flags =

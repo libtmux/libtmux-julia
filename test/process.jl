@@ -116,7 +116,7 @@ end
             execute(
                 `sh -c "exec 0<&-; printf 'stdin closed\n' >&2; while :; do :; done"`;
                 input=fill(UInt8(1), 131072),
-                timeout=0.9,
+                timeout=HANG_GUARD,
                 _make_timer=stdin_timer,
             )
         catch error

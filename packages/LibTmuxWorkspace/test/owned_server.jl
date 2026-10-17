@@ -9,7 +9,7 @@ function with_workspace_server(f)
         "SHELL" => "/bin/sh",
         "TERM" => "xterm-256color",
     )
-    LibTmux.with_server(; tmux, env) do server
+    LibTmux.with_server(; tmux, env, timeout=HANG_GUARD) do server
         f((
             tmux=server.tmux,
             socket=server.socket_path,

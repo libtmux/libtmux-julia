@@ -7,6 +7,11 @@ import sys
 import time
 
 
+# Upper bound on waits for events that are expected to happen; the launcher
+# caps --timeout at 30 s.
+HANG_GUARD = 30
+
+
 def main():
     launcher, selector, socket, tmux, pane, profile = sys.argv[1:]
     assert selector in ('--socket', '--socket-name')
@@ -16,7 +21,8 @@ def main():
         [launcher, selector, socket, '--tmux', tmux, '--caller-pane', pane,
          '--allow-pane', pane, '--tool', 'list_panes', '--tool', 'capture_pane',
          '--tool', 'send_keys', '--tool', 'create_session', '--tool', 'teardown_session',
-         '--tool', 'run_operations', '--tool', 'wait_for_text', '--tool', 'send_keys_and_wait', '--allow-create'],
+         '--tool', 'run_operations', '--tool', 'wait_for_text', '--tool', 'send_keys_and_wait', '--allow-create',
+         '--timeout', str(HANG_GUARD)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
     selector = selectors.DefaultSelector()
     selector.register(child.stdout, selectors.EVENT_READ, 'stdout')
@@ -166,7 +172,7 @@ def main():
         if profile == '2026-07-28':
             assert alive['result']['supportedVersions'] == ['2026-07-28', '2025-11-25']
         child.stdin.close()
-        child.wait(timeout=10)
+        child.wait(timeout=HANG_GUARD)
         assert child.returncode == 0, diagnostics.decode(errors='replace')
         assert not pending and not child.stdout.read(), 'unexpected late protocol output'
         diagnostics.extend(child.stderr.read())

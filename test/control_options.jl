@@ -6,12 +6,17 @@
     if admitted
         with_tmux() do fixture
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-            session = new_session(server; name="control-options", command=["/bin/cat"])
+            session = new_session(
+                server;
+                name="control-options",
+                command=["/bin/cat"],
+                timeout=HANG_GUARD,
+            )
             graph = snapshot(server)
             window = only(windows(graph)).ref
             pane = only(panes(graph)).ref
             run_command(server, "set-option", "-g", "--", "@unsafe\n%end 1 2 1", "ignored")
-            open_control(server, session) do connection
+            open_control(server, session; timeout=HANG_GUARD) do connection
                 before = connection.submitted
                 @test_throws ArgumentError set_option(
                     connection,
@@ -203,7 +208,7 @@
                 @test all(h -> h.inherited, inherited)
                 @test occursin("@hook-first", first(inherited).command)
                 @test get_option(connection, :global_session, "@hook-first") === nothing
-                new_window(connection, session; command=["/bin/cat"])
+                new_window(connection, session; command=["/bin/cat"], timeout=HANG_GUARD)
                 @test get_option(connection, :global_session, "@hook-first") ==
                       "literal #{pane_id};"
                 set_hook(connection, session, "after-new-window", "")

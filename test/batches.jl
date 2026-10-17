@@ -18,11 +18,12 @@
         isdefined(Main, :OwnedTmux) || include("support/owned_tmux.jl")
         OwnedTmux.with_tmux() do fixture
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-            session = new_session(server; name="batches", command=["cat"])
+            session =
+                new_session(server; name="batches", command=["cat"], timeout=HANG_GUARD)
             anchor = only(panes(snapshot(server))).ref
-            open_control(server, session; capacity=2) do connection
-                left = split_window(server, anchor; command=["cat"])
-                right = split_window(server, anchor; command=["cat"])
+            open_control(server, session; capacity=2, timeout=HANG_GUARD) do connection
+                left = split_window(server, anchor; command=["cat"], timeout=HANG_GUARD)
+                right = split_window(server, anchor; command=["cat"], timeout=HANG_GUARD)
                 commands = [
                     command("kill-pane", "-t", "%999999"),
                     command("kill-pane", "-t", string(left.id)),
@@ -36,8 +37,8 @@
                 @test only(LibTmux._control_rows(connection, "list-panes", ["pane_id"])) ==
                       [string(anchor.id)]
 
-                left = split_window(server, anchor; command=["cat"])
-                right = split_window(server, anchor; command=["cat"])
+                left = split_window(server, anchor; command=["cat"], timeout=HANG_GUARD)
+                right = split_window(server, anchor; command=["cat"], timeout=HANG_GUARD)
                 commands = [
                     command("kill-pane", "-t", string(left.id)),
                     command("kill-pane", "-t", "%999999"),
@@ -102,9 +103,9 @@
                       only(ordinary).result.stdout == codeunits("value\n")
                 @test !only(ordinary).completed && only(ordinary).acknowledged
 
-                victim = split_window(server, anchor; command=["cat"])
+                victim = split_window(server, anchor; command=["cat"], timeout=HANG_GUARD)
                 signal = control_signal(connection)
-                waiting = Threads.@spawn wait(signal)
+                waiting = Threads.@spawn wait(signal; timeout=HANG_GUARD)
                 lock(connection.lock) do
                     while signal.request === nothing || signal.request.frame === nothing
                         wait(connection.changed)
@@ -137,7 +138,7 @@
                 @test only(uncertain).status === :unknown
             end
 
-            terminal = open_control(server, session)
+            terminal = open_control(server, session; timeout=HANG_GUARD)
             kill(terminal.process, Base.SIGKILL)
             wait(terminal.supervisor)
             lost =
