@@ -96,7 +96,9 @@ end
             @test success(sentinel)
             environment = LibTmux._client_environment(ENV)
             sessions() = readlines(
-                ignorestatus(OwnedTmux.tmuxcmd(fixture, "list-sessions", "-F", "#{session_name}")),
+                ignorestatus(
+                    OwnedTmux.tmuxcmd(fixture, "list-sessions", "-F", "#{session_name}"),
+                ),
             )
 
             # A live endpoint is checked against the daemon and keeps -N.
@@ -141,8 +143,7 @@ end
                 [LibTmux.TmuxCommand("new-session", "-d", "-s", "replaced")];
                 timeout=60,
             )
-            @test only(group).status === :skipped &&
-                  group.error isa UnsupportedTmuxVersion
+            @test only(group).status === :skipped && group.error isa UnsupportedTmuxVersion
             @test sessions() == ["sentinel"]
             rm(script * ".probe")
 
@@ -255,6 +256,79 @@ end
                     sleep(0.05)
                 end
             end
+        end
+    end
+end
+
+@testset "owned servers check the executable before creating state" begin
+    tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
+    mktempdir(; prefix="ltj-adm-") do parent
+        withenv("TMPDIR" => parent) do
+            script = scripted_client(parent, tmux)
+            write(script * ".banner", "tmux 3.2a\n")
+            @test_throws UnsupportedTmuxVersion LibTmux.open_server(tmux=script)
+            @test sort(readdir(parent)) == ["tmux", "tmux.banner", "tmux.calls"]
+            @test recorded_calls(script) == ["-V"]
+            rm(script * ".banner")
+            owned = LibTmux.open_server(tmux=script)
+            try
+                @test isopen(owned)
+            finally
+                close(owned)
+            end
+        end
+    end
+end
+
+@testset "control connections check the daemon's version before attaching" begin
+    tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
+    mktempdir(; prefix="ltj-adm-") do directory
+        OwnedTmux.with_tmux() do fixture
+            server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
+            session =
+                new_session(server; name="control-version-check", command=["/bin/cat"])
+            script = scripted_client(directory, fixture.tmux)
+            scripted = Server(socket_path=fixture.socket, tmux=script)
+            write(script * ".probe", "3.2a")
+            LibTmux._clear_version_cache!()
+            @test_throws UnsupportedTmuxVersion open_control(scripted, session) do _
+                error("control attached to an unsupported daemon")
+            end
+            @test recorded_calls(script) |> length == 1
+            rm(script * ".probe")
+        end
+    end
+end
+
+@testset "control attach reads identity without firing hooks" begin
+    OwnedTmux.with_tmux() do fixture
+        server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
+        session = new_session(server; name="identity", command=["/bin/cat"])
+        hook = OwnedTmux.tmuxcmd(
+            fixture,
+            "set-hook",
+            "-g",
+            "after-display-message",
+            "set-option -g @hook_identity fired",
+        )
+        @test success(hook)
+        open_control(server, session) do connection
+            @test isopen(connection)
+            @test connection.identity == session.server
+        end
+        @test option_value(fixture, "@hook_identity") == ""
+
+        # Control: the hook is armed and an ordinary display-message fires it.
+        run_command(server, "display-message", "-p", "control")
+        @test await_option(fixture, "@hook_identity") == "fired"
+
+        # A stale reference is refused by the same hook-free comparison.
+        stale = SessionRef(
+            ServerIdentity(socket_path=fixture.socket, generation="1:2"),
+            string(session.id),
+        )
+        @test_throws StaleReference open_control(server, stale) do _
+            error("attached to a stale session")
         end
     end
 end
