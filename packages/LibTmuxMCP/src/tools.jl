@@ -12,11 +12,13 @@ const _TOOL_NAMES = (
     "send_keys_and_wait",
 )
 const _ROUTINE_TOOLS = ("list_panes", "capture_pane", "send_keys")
-const _READ_ONLY_TOOLS = ("list_panes", "capture_pane", "wait_for_text")
 const _TOOL_ARGUMENTS = Dict(
-    "wait_for_text"=>(("target", "text"), ("text",)),
-    "send_keys_and_wait"=>(("target", "text", "keys", "literal"), ("text", "keys")),
-    "list_panes"=>(("limit", "offset"), ()),
+    "wait_for_text"=>(("target", "text", "timeoutSeconds"), ("text",)),
+    "send_keys_and_wait"=>(
+        ("target", "text", "keys", "literal", "timeoutSeconds"),
+        ("text", "keys"),
+    ),
+    "list_panes"=>(("limit", "offset", "scope", "where", "columns", "pageToken"), ()),
     "capture_pane"=>(("target", "lines", "maxBytes"), ()),
     "send_keys"=>(("target", "keys", "literal"), ("keys",)),
     "paste_text"=>(("target", "text"), ("text",)),
@@ -27,22 +29,23 @@ const _TOOL_ARGUMENTS = Dict(
     "teardown_session"=>(("sessionId", "generation"), ("sessionId", "generation")),
 )
 
-_tool_can_mutate(name) = !(name in _READ_ONLY_TOOLS)
-
 struct _ToolFailure <: Exception
     code::String
     message::String
 end
 Base.showerror(io::IO, error::_ToolFailure) = print(io, error.message)
 
-struct _ToolEffectsError <: Exception
-    cause::Exception
-end
-Base.showerror(io::IO, error::_ToolEffectsError) = showerror(io, error.cause)
-
 struct _ApplicationCall
     token::LibTmux.CancellationToken
     finished::Base.Event
+end
+
+struct _ToolContext
+    started::UInt64
+    budget::Float64
+    cancel::LibTmux.CancellationToken
+    progress::Function
+    effects::Base.RefValue{Bool}
 end
 
 """
@@ -170,11 +173,20 @@ function _application_call(f, app, upstream)
 end
 
 function _tool_remaining(context)
+    context.cancel === nothing ||
+        !LibTmux.iscancelled(context.cancel) ||
+        throw(LibTmux.RequestCancelled(false))
     remaining = context.budget - (time_ns() - context.started) / 1e9
     remaining > 0 || throw(LibTmux.DeadlineExceeded(context.budget, false, nothing))
     remaining
 end
-_tool_kwargs(context) = (; timeout=_tool_remaining(context), cancel=context.cancel)
+function _tool_kwargs(context)
+    timeout = _tool_remaining(context)
+    # Hooks, aliases and client attachment can mutate even observation calls.
+    # Keep admission monotonic across every stage and sequential batch item.
+    hasproperty(context, :effects) && (context.effects[] = true)
+    (; timeout, cancel=context.cancel)
+end
 
 "Cancel and join active calls, then tear down only application-owned sessions."
 function Base.close(app::Application)
@@ -254,6 +266,22 @@ function _tool_schema(app, name)
     if name == "list_panes"
         properties["limit"] = _integer_schema(1, 128; default=32)
         properties["offset"] = _integer_schema(0, 1000000; default=0)
+        properties["scope"] = _scope_schema()
+        properties["where"] = first(_where_schema())
+        properties["columns"] = Dict(
+            "type"=>"array",
+            "minItems"=>1,
+            "maxItems"=>16,
+            "uniqueItems"=>true,
+            "items"=>Dict("enum"=>_discovery_columns()),
+        )
+        properties["pageToken"] = merge(
+            _string_schema(80),
+            Dict(
+                "pattern"=>raw"^v1\.(0|[1-9][0-9]{0,6})\.[0-9a-f]{64}$",
+                "description"=>"Continue nextPageToken; changed discovery facets or query refuse with observation_changed.",
+            ),
+        )
     elseif name == "run_operations"
         properties["operations"] = Dict(
             "type"=>"array",
@@ -316,11 +344,19 @@ function _tool_schema(app, name)
         end
     end
     if name in ("wait_for_text", "send_keys_and_wait")
+        properties["timeoutSeconds"] = Dict(
+            "type"=>"number",
+            "exclusiveMinimum"=>0,
+            "maximum"=>app.timeout,
+            "default"=>app.timeout,
+            "description"=>"Total wait budget in seconds, capped by the remaining application call deadline",
+        )
         properties["text"] =
             merge(_string_schema(min(1024, app.max_capture_bytes)), Dict("minLength"=>1))
         push!(required, "text")
     end
     schema = _json_object(properties; required)
+    name in ("list_panes", "run_operations") && (schema["\$defs"] = last(_where_schema()))
     name == "resize_pane" &&
         (schema["anyOf"] = [Dict("required"=>["width"]), Dict("required"=>["height"])])
     schema
@@ -370,12 +406,50 @@ function _tool_output_schema(app, name)
                 "fieldsTruncated",
             ],
         )
+        projection_fields = Dict{String,Any}()
+        for column in _discovery_columns()
+            spec = LibTmux._CRITERIA_FIELDS[(:pane, Symbol(column))]
+            type =
+                spec.type === :Bool ? "boolean" :
+                spec.type === :Integer ? "integer" : "string"
+            projection_fields[column] = Dict("type"=>spec.nullable ? [type, "null"] : type)
+        end
+        projected = _json_object(
+            Dict(
+                "target"=>_target_schema(),
+                "caller"=>boolean,
+                "contexts"=>Dict("type"=>"array", "items"=>context, "maxItems"=>8),
+                "contextsTruncated"=>boolean,
+                "fieldsTruncated"=>boolean,
+                "values"=>merge(
+                    _json_object(projection_fields),
+                    Dict("minProperties"=>1, "maxProperties"=>16),
+                ),
+            );
+            required=[
+                "target",
+                "caller",
+                "contexts",
+                "contextsTruncated",
+                "fieldsTruncated",
+                "values",
+            ],
+        )
         merge!(
             fields,
             Dict(
-                "panes"=>Dict("type"=>"array", "items"=>row, "maxItems"=>128),
+                "panes"=>Dict(
+                    "type"=>"array",
+                    "items"=>Dict("oneOf"=>[row, projected]),
+                    "maxItems"=>128,
+                ),
                 "total"=>integer,
                 "nextOffset"=>Dict("type"=>["integer", "null"]),
+                "nextPageToken"=>Dict("type"=>["string", "null"]),
+                "contextsCoverage"=>Dict(
+                    "enum"=>["selected_session", "all_observed_links"],
+                ),
+                "pagination"=>Dict("const"=>"verified_discovery_facets"),
                 "truncated"=>boolean,
                 "coverage"=>text,
                 "generationGuarantee"=>text,
@@ -391,7 +465,7 @@ function _tool_output_schema(app, name)
                 "text"=>text,
                 "source"=>Dict("enum"=>["baseline", "output"]),
                 "evidence"=>Dict("const"=>"literal_text"),
-                "continuity"=>Dict("const"=>"reset"),
+                "continuity"=>Dict("enum"=>["reset", "stream"]),
                 "keysSent"=>boolean,
                 "terminalContent"=>Dict("const"=>"data"),
                 "generationGuarantee"=>text,
@@ -558,8 +632,7 @@ function _plan_tool(app, name, input)
     _check_object(input, fields, required)
     args = Dict{String,Any}()
     if name == "list_panes"
-        args["limit"] = _integer(get(input, "limit", 32), 1, 128)
-        args["offset"] = _integer(get(input, "offset", 0), 0, 1000000)
+        _discovery_plan!(args, input)
     elseif name == "run_operations"
         operations = input["operations"]
         operations isa AbstractVector && 1 <= length(operations) <= 8 ||
@@ -629,17 +702,46 @@ function _plan_tool(app, name, input)
     if name in ("wait_for_text", "send_keys_and_wait")
         args["text"] = _text(input["text"], min(1024, app.max_capture_bytes))
         isempty(args["text"]) && throw(ArgumentError("text cannot be empty"))
+        budget = get(input, "timeoutSeconds", app.timeout)
+        budget isa Real &&
+        !(budget isa Bool) &&
+        isfinite(budget) &&
+        0 < budget <= app.timeout || throw(
+            ArgumentError(
+                "timeoutSeconds must be positive and at most the application timeout",
+            ),
+        )
+        args["timeoutSeconds"] = Float64(budget)
     end
     (; name, args)
+end
+
+function _tool_socket_path(app, context)
+    app.server.socket_path === nothing || return app.server.socket_path
+    app.caller === nothing || return app.caller.server.socket_path
+    result = LibTmux.run_command(
+        app.server,
+        "display-message",
+        "-p",
+        "-F",
+        LibTmux._format_template(["socket_path"]);
+        max_output_bytes=4096,
+        max_error_bytes=4096,
+        _tool_kwargs(context)...,
+    )
+    rows = LibTmux._decode_format_rows(result.stdout, 1)
+    length(rows) == 1 ||
+        throw(_ToolFailure("observation_inconsistent", "expected one endpoint observation"))
+    path = only(only(rows))
+    isempty(path) &&
+        throw(_ToolFailure("observation_inconsistent", "missing endpoint path"))
+    path
 end
 
 function _resolve_target(app, target, context)
     _pane_permitted(app, target) ||
         throw(_ToolFailure("target_denied", "pane is no longer allowed"))
-    path = app.server.socket_path
-    if path === nothing
-        path = LibTmux.snapshot(app.server; _tool_kwargs(context)...).identity.socket_path
-    end
+    path = _tool_socket_path(app, context)
     identity = LibTmux.ServerIdentity(; socket_path=path, generation=target.generation)
     LibTmux.PaneRef(identity, target.paneId)
 end
@@ -655,67 +757,6 @@ function _clip(text::AbstractString, limit)
     stop == 0 ? "" : String(SubString(text, 1, prevind(text, stop + 1)))
 end
 
-function _list_panes(app, args, context)
-    snapshot = LibTmux.snapshot(app.server; _tool_kwargs(context)...)
-    selected = filter(
-        pane -> _pane_permitted(
-            app,
-            (; paneId=string(pane.id), generation=snapshot.identity.generation),
-        ),
-        LibTmux.panes(snapshot),
-    )
-    offset, limit = args["offset"], args["limit"]
-    rows = Dict{String,Any}[]
-    for pane in Iterators.take(Iterators.drop(selected, offset), limit)
-        links = LibTmux.windowlinks(pane.window)
-        contexts = [
-            Dict(
-                "sessionId"=>string(link.session_id),
-                "sessionName"=>_clip(link.session.name, 128),
-                "windowId"=>string(link.window_id),
-                "windowName"=>_clip(link.window.name, 128),
-                "windowIndex"=>link.index,
-            ) for link in Iterators.take(links, 8)
-        ]
-        push!(
-            rows,
-            Dict(
-                "target"=>_target_wire(pane.ref),
-                "active"=>pane.active,
-                "dead"=>pane.dead,
-                "command"=>pane.current_command === nothing ? nothing :
-                           _clip(pane.current_command, 256),
-                "title"=>_clip(pane.title, 256),
-                "width"=>pane.width,
-                "height"=>pane.height,
-                "caller"=>pane.ref == app.caller,
-                "contexts"=>contexts,
-                "contextsTruncated"=>length(links) > 8,
-                "fieldsTruncated"=>ncodeunits(pane.title) > 256 ||
-                                   (
-                                       pane.current_command !== nothing &&
-                                       ncodeunits(pane.current_command) > 256
-                                   ) ||
-                                   any(
-                                       link ->
-                                           ncodeunits(link.session.name) > 128 ||
-                                           ncodeunits(link.window.name) > 128,
-                                       Iterators.take(links, 8),
-                                   ),
-            ),
-        )
-    end
-    next = offset + length(rows)
-    Dict(
-        "panes"=>rows,
-        "total"=>length(selected),
-        "nextOffset"=>next < length(selected) ? next : nothing,
-        "truncated"=>next < length(selected),
-        "coverage"=>"complete_observed_graph",
-        "generationGuarantee"=>"best_effort",
-        "terminalContent"=>"data",
-    )
-end
 
 function _capture(app, ref, args, context)
     truncated = false
@@ -765,67 +806,44 @@ function _wait_text(app, ref, plan, context)
     isempty(links) && throw(LibTmux.StaleReference(string(ref.id)))
     session = first(links).session.ref
     keys_sent = false
-    function matched(source)
-        context.progress("matched")
-        Dict(
-            "target"=>_target_wire(ref),
-            "matched"=>true,
-            "text"=>plan.args["text"],
-            "source"=>source,
-            "evidence"=>"literal_text",
-            "continuity"=>"reset",
-            "keysSent"=>keys_sent,
-            "terminalContent"=>"data",
-            "generationGuarantee"=>"best_effort",
-        )
-    end
-    try
-        LibTmux.open_control(app.server, session; _tool_kwargs(context)...) do connection
-            LibTmux.observe_output(
-                connection,
-                ref;
+    LibTmux.open_control(app.server, session; _tool_kwargs(context)...) do connection
+        LibTmux.observe_output(
+            connection,
+            ref;
+            max_bytes=app.max_capture_bytes,
+            _tool_kwargs(context)...,
+        ) do stream
+            if plan.name == "send_keys_and_wait"
+                LibTmux.send_keys(
+                    app.server,
+                    ref,
+                    plan.args["keys"]...;
+                    literal=plan.args["literal"],
+                    _tool_kwargs(context)...,
+                )
+                keys_sent = true
+            end
+            context.progress("waiting")
+            result = LibTmux.wait_for_text(
+                stream,
+                plan.args["text"];
+                baseline=plan.name == "wait_for_text",
                 max_bytes=app.max_capture_bytes,
                 _tool_kwargs(context)...,
-            ) do stream
-                if plan.name == "wait_for_text"
-                    baseline = LibTmux.capture_baseline(
-                        stream;
-                        max_bytes=app.max_capture_bytes,
-                        _tool_kwargs(context)...,
-                    )
-                    text =
-                        LibTmux.decode!(LibTmux.TextDecoder(), baseline.bytes; final=true)
-                    occursin(plan.args["text"], text) && return matched("baseline")
-                else
-                    LibTmux.send_keys(
-                        app.server,
-                        ref,
-                        plan.args["keys"]...;
-                        literal=plan.args["literal"],
-                        _tool_kwargs(context)...,
-                    )
-                    keys_sent = true
-                end
-                context.progress("waiting")
-                decoder = LibTmux.TextDecoder()
-                tail = ""
-                while true
-                    event = take!(stream; _tool_kwargs(context)...)
-                    text = tail * LibTmux.decode!(decoder, event.bytes)
-                    occursin(plan.args["text"], text) && return matched("output")
-                    # Only a pattern-sized suffix can participate in a future
-                    # match. Never join the independent screen baseline here.
-                    first_byte =
-                        max(1, ncodeunits(text) - ncodeunits(plan.args["text"]) + 1)
-                    tail =
-                        isempty(text) ? "" :
-                        String(SubString(text, nextind(text, first_byte - 1)))
-                end
-            end
+            )
+            context.progress("matched")
+            Dict(
+                "target"=>_target_wire(ref),
+                "matched"=>true,
+                "text"=>plan.args["text"],
+                "source"=>String(result.source),
+                "evidence"=>String(result.evidence),
+                "continuity"=>String(result.continuity),
+                "keysSent"=>keys_sent,
+                "terminalContent"=>"data",
+                "generationGuarantee"=>"best_effort",
+            )
         end
-    catch error
-        keys_sent && throw(_ToolEffectsError(error))
-        rethrow()
     end
 end
 
@@ -838,9 +856,7 @@ function _execute_tool(app, plan, context)
             result = try
                 _execute_tool(app, operation, context)
             catch error
-                detail = _tool_error(error, operation.name)
-                any(result -> _tool_can_mutate(result["tool"]), results) &&
-                    (detail["effects"] = "possible")
+                detail = _tool_error(error, context.effects[])
                 return Dict(
                     "completed"=>results,
                     "failedIndex"=>index,
@@ -853,6 +869,16 @@ function _execute_tool(app, plan, context)
         return Dict("completed"=>results, "failedIndex"=>nothing, "atomic"=>false)
     elseif name == "create_session" || name == "teardown_session"
         return _session_operation(app, plan, context)
+    end
+    if name in ("wait_for_text", "send_keys_and_wait")
+        elapsed = (time_ns() - context.started) / 1e9
+        context = _ToolContext(
+            context.started,
+            min(context.budget, elapsed + args["timeoutSeconds"]),
+            context.cancel,
+            context.progress,
+            context.effects,
+        )
     end
     ref = _resolve_target(app, args["target"], context)
     name == "capture_pane" && return _capture(app, ref, args, context)
@@ -926,7 +952,7 @@ function _session_operation(app, plan, context)
             )
         catch original
             if ref !== nothing
-                cleanup = (; started=time_ns(), budget=0.9, cancel=nothing)
+                cleanup = (; started=time_ns(), budget=0.9, cancel=nothing, context.effects)
                 try
                     _remove_owned_session(app, ref, cleanup)
                 catch error
@@ -983,54 +1009,33 @@ function _remove_owned_session(app, ref, context; captured=nothing)
     nothing
 end
 
-function _tool_error(error, name)
-    if error isa _ToolEffectsError
-        result = _tool_error(error.cause, name)
-        result["effects"] = "possible"
-        return result
-    end
+function _tool_error(error, effects::Bool=false)
     code =
         error isa _ToolFailure ? error.code :
-        error isa ArgumentError ? "invalid_arguments" :
+        error isa Union{ArgumentError,LibTmux.WireCriteriaError} ? "invalid_arguments" :
+        error isa LibTmux.SnapshotCoverageError ? "incomplete_observation" :
+        error isa LibTmux.InconsistentSnapshot ? "observation_inconsistent" :
         error isa LibTmux.StaleReference ? "stale_target" :
         error isa LibTmux.CrossServerReference ? "wrong_server" :
         error isa LibTmux.RequestCancelled ? "cancelled" :
         error isa LibTmux.DeadlineExceeded ? "deadline" :
         error isa LibTmux.OutputLimitExceeded ? "output_limit" :
         error isa LibTmux.ObservationLost ? "observation_lost" : "operation_failed"
-    mutating = _tool_can_mutate(name)
-    uncertain =
-        mutating && (
-            error isa
-            Union{LibTmux.CommandError,LibTmux.CreationResponseError,CompositeException} ||
-            error isa Union{LibTmux.ProcessIOError,LibTmux.OutputLimitExceeded} &&
-            error.result !== nothing ||
-            error isa Union{LibTmux.RequestCancelled,LibTmux.DeadlineExceeded} && error.sent
-        )
     Dict(
         "code"=>code,
         "message"=>_clip(sprint(showerror, error), 512),
-        "effects"=>uncertain ? "possible" : "none",
+        "effects"=>effects ? "possible" : "none",
         "retryable"=>false,
     )
 end
 
-function _result_limit_payload(name, payload)
+function _result_limit_payload(name, payload, effects)
     completed = get(payload, "completed", nothing)
     original = get(payload, "error", nothing)
-    previous_mutation =
-        name == "run_operations" &&
-        completed isa AbstractVector &&
-        any(result -> _tool_can_mutate(result["tool"]), completed)
-    original_effects = original isa AbstractDict ? get(original, "effects", "none") : "none"
-    effects =
-        previous_mutation ||
-        original_effects == "possible" ||
-        (name != "run_operations" && _tool_can_mutate(name)) ? "possible" : "none"
     error = Dict(
         "code"=>"result_limit",
         "message"=>"result exceeds the configured byte limit; request fewer rows, lines or operations",
-        "effects"=>effects,
+        "effects"=>effects ? "possible" : "none",
         "retryable"=>false,
     )
     name == "run_operations" && completed isa AbstractVector || return Dict("error"=>error)
@@ -1049,6 +1054,30 @@ function _result_limit_payload(name, payload)
     result
 end
 
+struct _ToolInvocation <: Function
+    app::Application
+    plan::NamedTuple
+    progress::Any
+    effects::Base.RefValue{Bool}
+end
+@noinline _tool_invocation(app, plan, progress, effects) =
+    _ToolInvocation(app, plan, progress, effects)
+@noinline function (invocation::_ToolInvocation)(context)
+    plan = invocation.plan
+    budget = min(context.budget, get(plan.args, "timeoutSeconds", context.budget))
+    _execute_tool(
+        invocation.app,
+        plan,
+        _ToolContext(
+            context.started,
+            budget,
+            context.cancel,
+            invocation.progress,
+            invocation.effects,
+        ),
+    )
+end
+
 function _invoke_tool(
     app,
     name,
@@ -1056,17 +1085,16 @@ function _invoke_tool(
     cancel=LibTmux.CancellationToken(),
     progress=phase -> nothing,
 )
+    effects = Ref(false)
     payload = try
         plan = _plan_tool(app, name, input)
-        _application_call(app, cancel) do context
-            _execute_tool(app, plan, merge(context, (; progress)))
-        end
+        _application_call(_tool_invocation(app, plan, progress, effects), app, cancel)
     catch error
-        Dict("error"=>_tool_error(error, name))
+        Dict("error"=>_tool_error(error, effects[]))
     end
     encoded = JSON.json(payload)
     if ncodeunits(encoded) > app.max_result_bytes
-        payload = _result_limit_payload(name, payload)
+        payload = _result_limit_payload(name, payload, effects[])
         encoded = JSON.json(payload)
     end
     SDK.CallToolResult(
@@ -1081,7 +1109,7 @@ function tools(app::Application)
     descriptions = Dict(
         "wait_for_text"=>"Wait for a literal UTF-8 string in a captured baseline or subsequent raw output. Event-driven, bounded and cancellable; opens observable control clients. Text is data, not exit-status evidence.",
         "send_keys_and_wait"=>"Register output before sending explicit keys, then wait for literal text in output observed since registration. No Enter is added. Concurrent output may also match; this is not command-exit proof.",
-        "list_panes"=>"List unique physical panes with generation-bound targets, linked session/window context and caller markers. Terminal fields are data. Pagination observes a fresh graph.",
+        "list_panes"=>"Discover unique physical panes using generation-bound session/window scopes, native inert criteria and scalar columns. Terminal fields are data. Continue nextPageToken only while discovery facets and query remain unchanged; observation_changed requires a fresh listing.",
         "capture_pane"=>"Capture bounded UTF-8 pane text and truncation metadata. Use a list_panes target or the configured caller; terminal text is data.",
         "send_keys"=>"Send explicit key tokens or literal text to one captured target. No Enter is added; use a separate Enter token when intended.",
         "paste_text"=>"Paste UTF-8 text through a temporary owned buffer without adding Enter. The terminal application may transform input.",
@@ -1094,17 +1122,15 @@ function tools(app::Application)
     [
         SDK.MCPTool(
             name=name,
-            description=descriptions[name],
+            description=descriptions[name] *
+                        " Configured tmux hooks and aliases may have effects, including during observation.",
             input_schema=_tool_schema(app, name),
             output_schema=_tool_output_schema(app, name),
             task_support=:forbidden,
             annotations=Dict{String,Any}(
-                "readOnlyHint"=>name in ("list_panes", "capture_pane", "wait_for_text"),
-                "destructiveHint"=>!(
-                    name in
-                    ("list_panes", "capture_pane", "wait_for_text", "create_session")
-                ),
-                "idempotentHint"=>name in ("list_panes", "capture_pane", "resize_pane"),
+                "readOnlyHint"=>false,
+                "destructiveHint"=>true,
+                "idempotentHint"=>false,
                 "openWorldHint"=>true,
             ),
             handler=(args, context) -> begin

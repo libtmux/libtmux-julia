@@ -48,10 +48,7 @@ function _control_option_arguments(
         hook ? _hook_arguments(scope, name, index) : _option_arguments(scope, name, index)
     context = _control_configuration_context(connection, scope; kwargs...)
     metadata = _control_option_metadata(context, scope, args.name, operation)
-    bit =
-        scope === :server ? 1 :
-        scope === :global_session || scope isa SessionRef ? 2 :
-        scope === :global_window || scope isa WindowRef ? 4 : 8
+    bit = _configuration_scope_bit(scope)
     metadata.scope & bit != 0 ||
         throw(ArgumentError("option $(args.name) is not defined in the requested scope"))
     hook && !metadata.hook && throw(ArgumentError("option $(args.name) is not a hook"))

@@ -19,13 +19,16 @@ export select_pane, select_window
 export kill_session, kill_window, kill_pane, CrossServerReference, StaleReference
 export CreationResponseError, CaptureDecodeError, BufferID, BufferRef
 export capture_bytes, capture_pane, send_keys, load_buffer, save_buffer, delete_buffer
+export BufferInfo, list_buffers
 export paste_bytes, paste_text
 export WindowLinkRef, resize_pane, resize_window, link_window, unlink_window
 export move_pane, move_window, swap_pane, swap_window, respawn_pane, respawn_window
+export clear_history, pipe_pane, break_pane, set_title, set_zoom, rotate_panes, cycle_layout
 export rename_session, rename_window, switch_client, detach_client
 export EnvironmentValue, HookCommand, get_option, set_option, unset_option
 export get_environment, set_environment, unset_environment, remove_environment
 export get_hook, set_hook, unset_hook
+export OptionEntry, HookEntry, list_options, list_hooks, list_environment
 export FormatField, FormatObservation, FormatValueError, read_formats
 export RawFormat, render_format, FormatHints, format_hints
 export ControlConnection, ControlResult, ControlCommandError, ControlConnectionError
@@ -35,6 +38,7 @@ export TmuxCommand, OperationResult, BatchResult, GroupResult, run_batch, run_gr
 export ObservationEvent, NotificationEvent, PaneOutput, FormatUpdate, ObservationLost
 export ObservationCursor, ObservationStream, notifications, observe_output, subscribe_format
 export observation_cursor, ObservationBaseline, capture_baseline
+export OutputWaitResult, wait_for, wait_for_text, wait_for_quiet
 export format_value
 export Criterion,
     Filters, PaneWhere, WindowWhere, SessionWhere, ClientWhere, WindowLinkWhere
@@ -62,6 +66,7 @@ include("control.jl")
 include("batches.jl")
 include("observation.jl")
 include("control_io.jl")
+include("waits.jl")
 include("control_operations.jl")
 include("control_topology.jl")
 include("control_clients.jl")

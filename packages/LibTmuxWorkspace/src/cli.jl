@@ -184,6 +184,8 @@ function _cli_emit(writer::_CLIOutput, destination, text)
         flush(stream)
     else
         _cli_output_enqueue(writer.owner, destination, text)
+        # Finish this record before the producer compiles the next workspace step.
+        _cli_output_wait(writer.owner)
     end
     nothing
 end

@@ -1,20 +1,30 @@
 # Compatibility
 
-| Boundary | Current evidence |
+Compatibility evidence belongs to an exact source revision. Complete development
+gates remain open; focused correctness checks do not establish full support.
+
+| Evidence | Scope and result |
 | --- | --- |
-| Julia / tmux | 1.10.0 / 3.2a and 1.13.0 / 3.7c in the listed CI cells |
-| Linux x86_64 | 1.10.0 / 3.2a / 1 thread and 1.13.0 / 3.7c / 4 threads passed |
-| macOS arm64 | 1.13.0 / 3.7c / 1 thread passed |
-| macOS x86_64 | 1.13.0 / 3.7c / 1 thread passed |
-| Full package suite | Core, MCP, workspace, extensions, documentation, external imports, examples and launchers passed in all listed cells |
+| Baseline correctness | Revision `9e3776d07798174a3590a728d28029efcbb52780`: core, MCP, workspace, extensions, docs, external examples and launchers passed in the original four cells |
+| Baseline cells | Linux x86_64: Julia 1.10.0 / tmux 3.2a / 1 thread and Julia 1.13.0 / tmux 3.7c / 4 threads; macOS arm64 and x86_64: Julia 1.13.0 / tmux 3.7c / 1 thread |
+| Whole-command limits | The baseline and subsequent development run exceed the complete mid/outer budgets; they provide no timing acceptance |
+| Required development cells | Linux floor and current versions, each at one and four threads; macOS supplements these checks |
+| Remaining acceptance | Final-source full gates, installed task workflows, benchmark limits and independent adoption review |
 
-These are exact CI cells, not a promise for other Julia, tmux, platform,
-architecture or thread combinations. An independent guide walkthrough and
-benchmark baselines remain open.
+[Baseline CI](https://github.com/libtmux/libtmux-julia/actions/runs/37125764548)
+and [development CI](https://github.com/libtmux/libtmux-julia/actions/runs/37141349711)
+retain their individual results. An unrun version or platform is not support;
+resolver compatibility declarations are not test evidence.
 
-The repository capability manifest records implemented, deferred, excluded
-and untested surfaces. tmux letter suffixes are meaningful; `3.2a` is not
-silently normalized to `3.2`.
+```@raw html
+<p><a href="../source/CONTRIBUTING.md.html">Contributing</a> defines the complete
+checks and budgets. The
+<a href="../source/docs/capabilities.toml.html">capability manifest</a> records
+implemented, deferred, excluded and untested surfaces. Both files belong to this
+documentation build.</p>
+```
+
+tmux letter suffixes are meaningful; `3.2a` is not silently normalized to `3.2`.
 
 Local POSIX tmux is the initial transport scope. SSH, native Windows tmux,
 private tmux imsg access and Python workspace plugins are excluded. Query
@@ -23,4 +33,3 @@ MCP HTTP remain deferred. Native Julia regex works in ordinary local predicates.
 
 The core uses standard libraries. JSON/Tables integrations are package
 extensions; MCP and workspace dependencies remain in their separate packages.
-Julia compatibility declarations are resolver constraints, not test evidence.

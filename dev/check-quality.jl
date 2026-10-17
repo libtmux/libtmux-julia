@@ -2,13 +2,25 @@ using Test
 
 const QUALITY_PHASE = isempty(ARGS) ? "quality" : only(ARGS)
 if QUALITY_PHASE == "quality"
+    cache = get(ENV, "LIBTMUX_QUALITY_COMPILER_CACHE", "0")
+    cache in ("0", "1") || error("quality compiler cache control must be 0 or 1")
+    if cache == "1"
+        import LibTmuxQualityCheckCompiler
+    else
+        include(joinpath(@__DIR__, "quality-checks.jl"))
+    end
     import Aqua, LibTmux, LibTmuxWorkspace, LibTmuxMCP, JSON, Tables
 elseif QUALITY_PHASE == "format"
     import JuliaFormatter
+    if Base.find_package("LibTmuxCheckCompiler") !== nothing
+        import LibTmuxCheckCompiler
+    end
 end
 
 const QUALITY_ROOT = dirname(@__DIR__)
-include(joinpath(@__DIR__, "generate-options.jl"))
+if !isdefined(@__MODULE__, :LibTmuxQualityCheckCompiler)
+    include(joinpath(@__DIR__, "generate-options.jl"))
+end
 const QUALITY_PACKAGES = ("LibTmux", "LibTmuxWorkspace", "LibTmuxMCP")
 const GENERATED_JULIA = Set(["src/criteria_generated.jl", "src/options_generated.jl"])
 
@@ -35,20 +47,10 @@ function quality()
     packages = [getproperty(@__MODULE__, Symbol(name)) for name in QUALITY_PACKAGES]
     extensions =
         [Base.get_extension(LibTmux, name) for name in (:LibTmuxJSONExt, :LibTmuxTablesExt)]
-    @testset "native package quality" begin
-        @test all(extension -> extension !== nothing, extensions)
-        ambiguities = Test.detect_ambiguities(packages..., extensions...; recursive=true)
-        isempty(ambiguities) || foreach(item -> println(stderr, item), ambiguities)
-        @test isempty(ambiguities)
-        for package in packages
-            @testset "$(nameof(package))" begin
-                Aqua.test_unbound_args(package)
-                Aqua.test_undefined_exports(package)
-                Aqua.test_project_extras(package)
-                Aqua.test_deps_compat(package)
-                Aqua.test_piracies(package)
-            end
-        end
+    if isdefined(@__MODULE__, :LibTmuxQualityCheckCompiler)
+        LibTmuxQualityCheckCompiler.run_quality(packages, extensions)
+    else
+        quality_checks(packages, extensions)
     end
 end
 
@@ -80,11 +82,19 @@ function format_check()
     )
 end
 
+function options_check()
+    if isdefined(@__MODULE__, :LibTmuxQualityCheckCompiler)
+        LibTmuxQualityCheckCompiler.run_options(["--check"])
+    else
+        options_main(["--check"])
+    end
+end
+
 function main(args)
     phase = isempty(args) ? "quality" : only(args)
     phase in ("quality", "format", "list") ||
         error("usage: check-quality.jl [quality|format|list]")
-    phase == "list" || options_main(["--check"])
+    phase == "list" || options_check()
     if phase == "list"
         foreach(path -> println(relpath(path, QUALITY_ROOT)), source_files())
     elseif phase == "quality"
@@ -95,3 +105,13 @@ function main(args)
 end
 
 abspath(PROGRAM_FILE) == (@__FILE__) && main(ARGS)
+
+if abspath(PROGRAM_FILE) == (@__FILE__) &&
+   isdefined(@__MODULE__, :LibTmuxQualityCheckCompiler)
+    println(
+        "TIMED QA entries: quality=",
+        LibTmuxQualityCheckCompiler.QUALITY_ENTRIES[],
+        "; options=",
+        LibTmuxQualityCheckCompiler.OPTIONS_ENTRIES[],
+    )
+end

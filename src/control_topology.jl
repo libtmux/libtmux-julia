@@ -13,6 +13,11 @@ function _control_topology_effect(context, args)
     )
 end
 
+_maintenance_context(connection::ControlConnection, target::EntityRef; kwargs...) =
+    _control_topology_context(connection, target; kwargs...)
+_maintenance_literal(::ControlConnection, text, operation) =
+    _control_creation_name(text, operation)
+
 """
     new_session(connection::ControlConnection; name, kwargs...)
 
