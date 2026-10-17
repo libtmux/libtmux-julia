@@ -274,6 +274,7 @@ for (operation, command, Ref) in (
         isempty(name) && throw(ArgumentError("name cannot be empty"))
         literal = _literal_format(name)
         context = _target_context(server, target; kwargs...)
+        _check_name(context, name, $(QuoteNode(operation)))
         _operation_command(context, $command, "-t", string(target.id), "--", literal)
     end
     @eval @doc $("""

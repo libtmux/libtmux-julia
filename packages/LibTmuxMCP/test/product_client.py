@@ -1,10 +1,22 @@
 """Outer test of the installed launcher against an already-owned tmux server."""
 import json
 import os
+import re
 import selectors
 import subprocess
 import sys
 import time
+
+
+def control_supported(tmux):
+    """Whether tmux allows control acquisition: 3.7 or newer, not a 3.7 prerelease."""
+    report = subprocess.check_output([tmux, '-V'], text=True).split()[-1]
+    parsed = re.fullmatch(r'(?:next-(\d+)\.(\d+)|(\d+)\.(\d+)(?:[a-z]|-rc\d*)?)', report)
+    if parsed is None:
+        return False
+    release = (int(parsed[1] or parsed[3]), int(parsed[2] or parsed[4]))
+    prerelease = report.startswith('next-') or '-rc' in report
+    return release > (3, 7) or (release == (3, 7) and not prerelease)
 
 
 def main():
@@ -117,18 +129,29 @@ def main():
         assert not sent.get('isError', False), sent
         denied = call(6, 'capture_pane', {'target': {'paneId': '%999999', 'generation': row['target']['generation']}})
         assert denied['isError'] and denied['structuredContent']['error']['code'] == 'target_denied', denied
-        sent_and_observed = call('echo', 'send_keys_and_wait',
-                                 {'keys': ['observed-marker'], 'literal': True, 'text': 'observed-marker'})
-        assert not sent_and_observed.get('isError', False), sent_and_observed
-        assert sent_and_observed['structuredContent']['source'] == 'output'
-        send('waiting', 'tools/call', {'name': 'wait_for_text',
-             'arguments': {'text': 'never-produced-marker'},
-             '_meta': {'progressToken': 'waiting'}})
-        progress = receive()
-        assert progress['method'] == 'notifications/progress', progress
-        send('concurrent', 'tools/list')
-        assert receive()['id'] == 'concurrent'
-        send(None, 'notifications/cancelled', {'requestId': 'waiting'})
+        if control_supported(tmux):
+            sent_and_observed = call('echo', 'send_keys_and_wait',
+                                     {'keys': ['observed-marker'], 'literal': True, 'text': 'observed-marker'})
+            assert not sent_and_observed.get('isError', False), sent_and_observed
+            assert sent_and_observed['structuredContent']['source'] == 'output'
+            send('waiting', 'tools/call', {'name': 'wait_for_text',
+                 'arguments': {'text': 'never-produced-marker'},
+                 '_meta': {'progressToken': 'waiting'}})
+            progress = receive()
+            assert progress['method'] == 'notifications/progress', progress
+            send('concurrent', 'tools/list')
+            assert receive()['id'] == 'concurrent'
+            send(None, 'notifications/cancelled', {'requestId': 'waiting'})
+        else:
+            # Waiting tools acquire control clients, which need tmux 3.7.
+            for identity, name, arguments in (
+                    ('echo', 'send_keys_and_wait',
+                     {'keys': ['observed-marker'], 'literal': True, 'text': 'observed-marker'}),
+                    ('waiting', 'wait_for_text', {'text': 'never-produced-marker'})):
+                refused = call(identity, name, arguments)
+                assert refused['isError'], refused
+                error = refused['structuredContent']['error']
+                assert error['code'] == 'unsupported_capability' and error['effects'] == 'none', error
         batch = call(7, 'run_operations', {'operations': [
             {'tool': 'create_session',
              'arguments': {'name': 'client-owned', 'command': ['/bin/cat']}},

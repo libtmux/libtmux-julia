@@ -32,6 +32,18 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
         @test LibTmuxMCP._tool_error(probe, "kill_pane")["effects"] == "none"
     end
 
+    @testset "MCP names the operation that a tmux release cannot support" begin
+        failure = LibTmux.UnsupportedCapability(
+            :open_control,
+            "control acquisition requires tmux 3.7",
+        )
+        for name in ("capture_pane", "send_keys")
+            error = LibTmuxMCP._tool_error(failure, name)
+            @test error["code"] == "unsupported_capability" && error["effects"] == "none"
+            @test occursin("3.7", error["message"])
+        end
+    end
+
     @testset "MCP application catalog is pure and policy is copied" begin
         permitted = ["list_panes", "capture_pane", "send_keys", "run_operations"]
         app = LibTmuxMCP.Application(
@@ -136,6 +148,15 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
     end
 
 end
+
+# The waiting tools acquire control clients, which need tmux 3.7; the refusal
+# below it is tested on its own.
+mcp_real_tmux_supported = LibTmux._version_at_least(
+    last(split(readchomp(`$(get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) -V`))),
+    LibTmux.CONTROL_MINIMUM_TMUX,
+)
+mcp_real_tmux_supported ||
+    @warn "MCP literal-wait tests skipped: the test tmux is below $(LibTmux.CONTROL_MINIMUM_TMUX)"
 
 if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
     @testset "MCP tools use exact authorized real-tmux targets" begin
@@ -535,7 +556,7 @@ exit 99
 end
 
 # Outer integration: three fresh dual-client control connections exercise real cancellation cleanup.
-if any(arg -> arg in ("observation", "all"), ARGS)
+if any(arg -> arg in ("observation", "all"), ARGS) && mcp_real_tmux_supported
     @testset "MCP literal waits use observations and own cancellation" begin
         environment = Dict(
             "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
