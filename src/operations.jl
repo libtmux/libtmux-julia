@@ -40,7 +40,7 @@ function _operation_context(server; timeout::Real=5.0, cancel=nothing, strict::B
     budget = Float64(timeout)
     isfinite(budget) && 0 < budget < 1e15 ||
         throw(ArgumentError("invalid operation timeout"))
-    (; server, budget, started=time_ns(), cancel)
+    (; server, budget, started=time_ns(), cancel, checked=Ref{Any}(nothing))
 end
 
 function _target_context(server::Server, ref::EntityRef; kwargs...)
@@ -48,8 +48,20 @@ function _target_context(server::Server, ref::EntityRef; kwargs...)
     if server.socket_path !== nothing && server.socket_path != ref.server.socket_path
         throw(CrossServerReference(string(ref.id)))
     end
-    _verify_row_codec(server, context.started, context.budget, context.cancel)
-    current = _snapshot_metadata(server, context.started, context.budget, context.cancel)
+    _verify_row_codec(
+        server,
+        context.started,
+        context.budget,
+        context.cancel,
+        context.checked,
+    )
+    current = _snapshot_metadata(
+        server,
+        context.started,
+        context.budget,
+        context.cancel,
+        context.checked,
+    )
     current.socket_path == ref.server.socket_path ||
         throw(CrossServerReference(string(ref.id)))
     current == ref.server || throw(StaleReference(string(ref.id)))
@@ -62,6 +74,7 @@ function _operation_command(context, args...; kwargs...)
         args...;
         timeout=_snapshot_remaining(context.started, context.budget),
         cancel=context.cancel,
+        _checked=context.checked,
         kwargs...,
     )
 end
