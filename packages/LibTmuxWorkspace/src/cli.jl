@@ -239,6 +239,9 @@ function _attach_cli(server, target)
         string(target.id),
     ]
     environment = Dict(k => v for (k, v) in ENV if !(k in ("TMUX", "TMUX_PANE")))
+    # An interactive client is not fenced; check the version of the daemon it
+    # will attach to.
+    LibTmux._check_daemon(server, environment; timeout=5.0)
     result = try
         run(setenv(ignorestatus(Cmd(argv)), environment))
     catch error

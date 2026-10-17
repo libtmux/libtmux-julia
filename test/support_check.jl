@@ -244,3 +244,42 @@ end
         end
     end
 end
+
+@testset "owned servers check the executable before creating state" begin
+    tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
+    mktempdir(; prefix="ltj-adm-") do parent
+        withenv("TMPDIR" => parent) do
+            script = scripted_client(parent, tmux)
+            write(script * ".banner", "tmux 3.2a\n")
+            @test_throws UnsupportedTmuxVersion LibTmux.open_server(tmux=script)
+            @test sort(readdir(parent)) == ["tmux", "tmux.banner", "tmux.calls"]
+            @test recorded_calls(script) == ["-V"]
+            rm(script * ".banner")
+            owned = LibTmux.open_server(tmux=script)
+            try
+                @test isopen(owned)
+            finally
+                close(owned)
+            end
+        end
+    end
+end
+
+@testset "control connections check the daemon's version before attaching" begin
+    tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
+    mktempdir(; prefix="ltj-adm-") do directory
+        OwnedTmux.with_tmux() do fixture
+            server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
+            session =
+                new_session(server; name="control-version-check", command=["/bin/cat"])
+            script = scripted_client(directory, fixture.tmux)
+            scripted = Server(socket_path=fixture.socket, tmux=script)
+            write(script * ".probe", "3.2a")
+            @test_throws UnsupportedTmuxVersion open_control(scripted, session) do _
+                error("control attached to an unsupported daemon")
+            end
+            @test recorded_calls(script) |> length == 1
+            rm(script * ".probe")
+        end
+    end
+end

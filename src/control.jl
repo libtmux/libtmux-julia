@@ -615,6 +615,15 @@ function _open_control_lane(
     server.socket_path === nothing ||
         server.socket_path == session.server.socket_path ||
         throw(CrossServerReference(string(session.id)))
+    # The attach cannot start a daemon, so only a live endpoint needs a release
+    # check; the handshake below binds the connection to the captured daemon.
+    _check_daemon(
+        server,
+        _client_environment(ENV);
+        cancel,
+        timeout=_snapshot_remaining(started, budget),
+        started,
+    )
     selector =
         server.socket_path === nothing ? ["-L", something(server.socket_name)] :
         ["-S", server.socket_path]
