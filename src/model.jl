@@ -294,17 +294,107 @@ for (accessor, View) in (
     end
 end
 
+"""
+    sessions(snapshot::Snapshot)
+
+Return the sessions in `snapshot` as a [`Selection`](@ref) of `SessionSnapshot`
+values. This reads the capture and never contacts tmux. Raises
+[`SnapshotCoverageError`](@ref) when the capture does not include sessions.
+"""
+sessions(snapshot::Snapshot)
+
+"""
+    windows(snapshot::Snapshot)
+
+Return the physical windows in `snapshot` as a [`Selection`](@ref) of
+`WindowSnapshot` values. A window linked into several sessions appears once;
+[`windowlinks`](@ref) lists each link. This reads the capture and never
+contacts tmux. Raises [`SnapshotCoverageError`](@ref) when the capture does not
+include windows.
+"""
+windows(snapshot::Snapshot)
+
+"""
+    panes(snapshot::Snapshot)
+
+Return the physical panes in `snapshot` as a [`Selection`](@ref) of
+`PaneSnapshot` values. A pane in a window linked into several sessions appears
+once; [`paneoccurrences`](@ref) lists each appearance. This reads the capture
+and never contacts tmux. Raises [`SnapshotCoverageError`](@ref) when the
+capture does not include panes.
+"""
+panes(snapshot::Snapshot)
+
+"""
+    clients(snapshot::Snapshot)
+
+Return the attached clients in `snapshot` as a [`Selection`](@ref) of
+`ClientSnapshot` values. Transient unattached command clients are not
+captured. This reads the capture and never contacts tmux. Raises
+[`SnapshotCoverageError`](@ref) when the capture does not include clients.
+"""
+clients(snapshot::Snapshot)
+
+"""
+    windowlinks(snapshot::Snapshot)
+
+Return every session-to-window link in `snapshot` as a [`Selection`](@ref) of
+`WindowLink` values, one for each window index in each session. This reads the
+capture and never contacts tmux. Raises [`SnapshotCoverageError`](@ref) when
+the capture does not include links.
+"""
+windowlinks(snapshot::Snapshot)
+
+"""
+    window(pane::PaneSnapshot)
+
+Return the `WindowSnapshot` that holds `pane`. This reads the capture and never
+contacts tmux. Raises [`SnapshotCoverageError`](@ref) when the capture does not
+include the pane's window.
+"""
 function window(pane::PaneSnapshot)
     _lookup(snapshotof(pane), :window, _captured(pane, :window_id), WindowSnapshot)
 end
+
+"""
+    window(link::WindowLink)
+
+Return the `WindowSnapshot` that `link` points to. This reads the capture and
+never contacts tmux.
+"""
 window(link::WindowLink) =
     _lookup(snapshotof(link), :window, link.window_id, WindowSnapshot)
+
+"""
+    session(link::WindowLink)
+
+Return the `SessionSnapshot` that holds `link`. This reads the capture and
+never contacts tmux.
+"""
 session(link::WindowLink) =
     _lookup(snapshotof(link), :session, link.session_id, SessionSnapshot)
+
+"""
+    session(client::ClientSnapshot)
+
+Return the `SessionSnapshot` that `client` is attached to, or `nothing` when
+the client reports no session. This reads the capture and never contacts tmux.
+Raises [`SnapshotCoverageError`](@ref) when the capture does not include the
+client's session.
+"""
 function session(client::ClientSnapshot)
     id = _captured(client, :session_id)
     id === nothing ? nothing : _lookup(snapshotof(client), :session, id, SessionSnapshot)
 end
+
+"""
+    panes(window::WindowSnapshot)
+
+Return the panes of `window` as a [`Selection`](@ref) of `PaneSnapshot`
+values. This reads the capture and never contacts tmux. Raises
+[`SnapshotCoverageError`](@ref) when the capture does not include the window's
+panes.
+"""
 function panes(win::WindowSnapshot)
     snap = snapshotof(win)
     _require_coverage(snap, (:window, win.id, :panes))
@@ -316,6 +406,17 @@ function panes(win::WindowSnapshot)
     end
     Selection{PaneSnapshot}(items, snap)
 end
+
+"""
+    windowlinks(session::SessionSnapshot)
+    windowlinks(window::WindowSnapshot)
+
+Return the window links of a session, or of a window, as a [`Selection`](@ref)
+of `WindowLink` values. A session has one link for each window index it holds;
+a window has one for each session that holds it. This reads the capture and
+never contacts tmux. Raises [`SnapshotCoverageError`](@ref) when the capture
+does not include those links.
+"""
 function windowlinks(parent::Union{SessionSnapshot,WindowSnapshot})
     snap = snapshotof(parent)
     _require_coverage(snap, (_kind(parent), parent.id, :windowlinks))
@@ -326,6 +427,15 @@ function windowlinks(parent::Union{SessionSnapshot,WindowSnapshot})
     end
     Selection{WindowLink}(items, snap)
 end
+
+"""
+    windows(session::SessionSnapshot)
+
+Return the windows linked into `session` as a [`Selection`](@ref) of
+`WindowSnapshot` values, each once. This reads the capture and never contacts
+tmux. Raises [`SnapshotCoverageError`](@ref) when the capture does not include
+the session's links.
+"""
 function windows(parent::SessionSnapshot)
     items, seen = WindowSnapshot[], Set{WindowID}()
     for link in windowlinks(parent)
@@ -335,6 +445,15 @@ function windows(parent::SessionSnapshot)
     end
     Selection{WindowSnapshot}(items, snapshotof(parent))
 end
+
+"""
+    paneoccurrences(snapshot::Snapshot)
+
+Return a `PaneOccurrence` for each pane in each window link of `snapshot`, as a
+[`Selection`](@ref). A pane in a window linked into several sessions appears
+once for each link. This reads the capture and never contacts tmux. Raises
+[`SnapshotCoverageError`](@ref) when the capture does not include occurrences.
+"""
 function paneoccurrences(snap::Snapshot)
     _require_coverage(snap, :paneoccurrences)
     items = PaneOccurrence[]
