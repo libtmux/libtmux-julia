@@ -84,4 +84,15 @@
         sprint(showerror, UnsupportedTmuxVersion("", "could not be read")),
     )
     @test LibTmux._batch_sent(error) === false
+
+    # Mirrored layouts need 3.5; pre-release builds rank by the release they name.
+    for version in ("3.5", "3.7d", "3.8-rc2", "next-3.9")
+        @test LibTmux._check_layout_version("main-vertical-mirrored", version) === nothing
+    end
+    for version in ("3.3a", "3.4", "next-3.5", "3.5-rc1", "master")
+        @test_throws UnsupportedCapability LibTmux._check_layout_version(
+            "main-vertical-mirrored",
+            version,
+        )
+    end
 end

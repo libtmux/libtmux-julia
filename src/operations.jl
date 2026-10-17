@@ -336,11 +336,7 @@ function _layout_argument(layout::Union{Symbol,AbstractString})
 end
 
 function _check_layout_version(layout, version)
-    parsed = match(r"\A([0-9]+)\.([0-9]+)[a-z]?\z", version)
-    if parsed !== nothing
-        major, minor = tryparse.(Int, parsed.captures)
-        major !== nothing && minor !== nothing && (major, minor) >= (3, 5) && return
-    end
+    _version_at_least(version, "3.5") && return
     throw(
         UnsupportedCapability(
             :select_layout,
