@@ -80,8 +80,9 @@ _selector(server::Server) =
 
 _version_marker() = "libtmux-version-" * replace(string(uuid4()), "-" => "")
 
-_stderr_lines(result::CommandResult) =
-    [rstrip(line, '\r') for line in split(decode_text(result.stderr; invalid=:replace), '\n')]
+_stderr_lines(result::CommandResult) = [
+    rstrip(line, '\r') for line in split(decode_text(result.stderr; invalid=:replace), '\n')
+]
 
 # A refusal, or a failed probe, happens before the command is sent.
 _not_dispatched(error) =
@@ -115,8 +116,10 @@ _pre_probe_diagnostic(line) =
 
 function _endpoint_absent(stderr::AbstractString)
     occursin("no server running", stderr) ||
-        occursin("error connecting to", stderr) &&
-        (occursin("No such file or directory", stderr) || occursin("Connection refused", stderr))
+        occursin("error connecting to", stderr) && (
+            occursin("No such file or directory", stderr) ||
+            occursin("Connection refused", stderr)
+        )
 end
 
 """
@@ -127,20 +130,24 @@ after the command returned, so the version arrives as an unknown-command error
 without firing `after-*` or `command-error` hooks. `-N` keeps a client from
 starting a daemon.
 """
-function _daemon_version(server::Server, env; cancel=nothing, timeout=nothing, started=time_ns())
+function _daemon_version(
+    server::Server,
+    env;
+    cancel=nothing,
+    timeout=nothing,
+    started=time_ns(),
+)
     marker = _version_marker()
     argv = String[server.tmux, "-u"]
     append!(argv, _selector(server))
     append!(argv, ["-N", "--", "run-shell", "-C", marker * "#{version}"])
     # Absence is recognized by tmux's English diagnostics.
-    result = _version_process(
-        argv,
-        merge(env, Dict("LC_ALL" => "C")); cancel, timeout, started,
-    )
+    result =
+        _version_process(argv, merge(env, Dict("LC_ALL" => "C")); cancel, timeout, started)
     prefix = "unknown command: " * marker
     if result.exitcode == 1 && result.termsignal == 0
         for line in _stderr_lines(result)
-            startswith(line, prefix) && return String(line[(ncodeunits(prefix) + 1):end])
+            startswith(line, prefix) && return String(line[(ncodeunits(prefix)+1):end])
         end
         _endpoint_absent(decode_text(result.stderr; invalid=:replace)) && return nothing
     end
@@ -160,14 +167,20 @@ end
 
 # Standalone `-V` is a diagnostic for a daemon that does not exist yet. Release
 # 3.3a prints the executable's basename in place of `tmux`.
-function _executable_version(server::Server, env; cancel=nothing, timeout=nothing, started=time_ns())
+function _executable_version(
+    server::Server,
+    env;
+    cancel=nothing,
+    timeout=nothing,
+    started=time_ns(),
+)
     result = _version_process([server.tmux, "-V"], env; cancel, timeout, started)
     text = String(copy(result.stdout))
     name = basename(server.tmux) * " "
     prefix = startswith(text, name) ? name : startswith(text, "tmux ") ? "tmux " : nothing
     result.exitcode == 0 && result.termsignal == 0 && prefix !== nothing ||
         throw(UnsupportedTmuxVersion("", "the executable did not report a release"))
-    String(strip(text[(ncodeunits(prefix) + 1):end]))
+    String(strip(text[(ncodeunits(prefix)+1):end]))
 end
 
 """
@@ -196,7 +209,15 @@ function _fenced_argv(server::Server, args, checked, marker)
     append!(argv, _selector(server))
     append!(
         argv,
-        ["--", "if-shell", "-F", "#{==:#{version}," * checked.version * "}", "", marker, ";"],
+        [
+            "--",
+            "if-shell",
+            "-F",
+            "#{==:#{version}," * checked.version * "}",
+            "",
+            marker,
+            ";",
+        ],
     )
     append!(argv, _argument.(args))
 end
@@ -219,3 +240,32 @@ function _check_daemon(server::Server, env; kwargs...)
     version === nothing || _require_supported(version)
     version
 end
+
+# Read the daemon release without running a user hook, or the release of the
+# executable that would create an absent daemon.
+function _context_release(context)
+    environment = _client_environment(ENV)
+    options = (;
+        cancel=context.cancel,
+        timeout=_snapshot_remaining(context.started, context.budget),
+        started=context.started,
+    )
+    version = _daemon_version(context.server, environment; options...)
+    version === nothing ? _executable_version(context.server, environment; options...) :
+    version
+end
+
+# The subprocess probe checked the daemon's version before a control attach. A
+# control reply cannot carry the probe, and a display-message read would fire
+# the user's hook, so the connection keeps the checked release.
+const _CONTROL_RELEASES = WeakKeyDict{Any,String}()
+const _CONTROL_RELEASES_LOCK = ReentrantLock()
+
+function _remember_control_release!(connection, release)
+    release === nothing ||
+        lock(() -> _CONTROL_RELEASES[connection] = release, _CONTROL_RELEASES_LOCK)
+    nothing
+end
+
+_control_release(connection) =
+    lock(() -> get(_CONTROL_RELEASES, connection, nothing), _CONTROL_RELEASES_LOCK)

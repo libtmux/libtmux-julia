@@ -364,13 +364,7 @@ function select_layout(
     text = _layout_argument(layout)
     context = _target_context(server, target; kwargs...)
     if endswith(text, "-mirrored")
-        result = _operation_command(
-            context,
-            "display-message",
-            "-p",
-            _format_template(["version"]),
-        )
-        _check_layout_version(text, only(only(_decode_format_rows(result.stdout, 1))))
+        _check_layout_version(text, _context_release(context))
     end
     _operation_command(context, "select-layout", "-t", string(target.id), "--", text)
 end
