@@ -75,10 +75,49 @@ struct EntityRef{I<:EntityID}
 
     EntityRef{I}(server::ServerIdentity, id) where {I<:EntityID} = new{I}(server, I(id))
 end
+
 const SessionRef = EntityRef{SessionID}
+@doc """
+    SessionRef
+
+Identify one tmux session on the daemon generation it was captured from.
+[`new_session`](@ref) returns one, and a `SessionSnapshot` carries its own as
+`.ref`. Operations check a reference against the running daemon before acting
+and raise `StaleReference` or `CrossServerReference` when it no longer matches.
+""" SessionRef
+
 const WindowRef = EntityRef{WindowID}
+@doc """
+    WindowRef
+
+Identify one physical window on the daemon generation it was captured from,
+whichever sessions link it; [`WindowLinkRef`](@ref) names one session's link.
+[`new_window`](@ref) returns one, and a `WindowSnapshot` carries its own as
+`.ref`. Operations check a reference against the running daemon before acting
+and raise `StaleReference` or `CrossServerReference` when it no longer matches.
+""" WindowRef
+
 const PaneRef = EntityRef{PaneID}
+@doc """
+    PaneRef
+
+Identify one physical pane on the daemon generation it was captured from.
+[`split_window`](@ref) returns one, and a `PaneSnapshot` carries its own as
+`.ref`. Operations check a reference against the running daemon before acting
+and raise `StaleReference` or `CrossServerReference` when it no longer matches.
+""" PaneRef
+
 const ClientRef = EntityRef{ClientID}
+@doc """
+    ClientRef
+
+Identify one attached tmux client by its name and observed connection
+incarnation, because tmux can reuse client names. A `ClientSnapshot` carries
+its own as `.ref`, and [`switch_client`](@ref) and [`detach_client`](@ref) take
+one. Operations check a reference against the running daemon before acting and
+raise `StaleReference` or `CrossServerReference` when it no longer matches.
+""" ClientRef
+
 Base.:(==)(a::EntityRef, b::EntityRef) = a.server == b.server && a.id == b.id
 Base.isequal(a::EntityRef, b::EntityRef) = a == b
 Base.hash(ref::EntityRef, h::UInt) = hash((ref.server, ref.id), h)
