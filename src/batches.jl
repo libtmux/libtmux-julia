@@ -37,6 +37,11 @@ struct OperationResult
     completed::Bool
 end
 
+"""
+The read-only vector of [`OperationResult`](@ref) values that
+[`BatchResult`](@ref) and [`GroupResult`](@ref) share: index, iterate and
+measure either one like a `Vector{OperationResult}`.
+"""
 abstract type _FiniteCommandResult <: AbstractVector{OperationResult} end
 
 "An ordered, read-only finite collection of independently executed command outcomes."
