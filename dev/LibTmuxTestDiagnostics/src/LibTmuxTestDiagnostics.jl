@@ -34,6 +34,8 @@ const CONSOLE_EVENTS = Set((
     "assertion_problem",
     "profile_checkpoint",
     "coverage_incomplete",
+    "child_admitted",
+    "child_exit_observed",
 ))
 
 function start_profiles end

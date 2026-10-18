@@ -487,12 +487,14 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
         request = phase_profile_request(name, inventory, configuration)
         mode = request["mode"]
         child_env["LIBTMUX_CI_PROFILE"] = mode
-        if selected is not None:
+        consumer = name in PROFILE_CONSUMER_PHASES and mode != "off"
+        if selected is not None or consumer:
             child_env["LIBTMUX_CI_TEST_CONSOLE"] = "1"
+        if selected is not None:
             child_env["LIBTMUX_CI_TEST_CONTINUE"] = "1"
         answer.update(invocation=invocation, source_digest=digest,
-                      diagnostics_directory=str(directory), diagnostics_status="PARTIAL" if selected is not None else "UNAVAILABLE",
-                      diagnostics_scope="native_runner" if selected is not None else "process_receipt_only",
+                      diagnostics_directory=str(directory), diagnostics_status="PARTIAL" if selected is not None or consumer else "UNAVAILABLE",
+                      diagnostics_scope="native_runner" if selected is not None else "consumer_driver" if consumer else "process_receipt_only",
                       process_token=token, expected_test_file_inventory=selected,
                       profile_request=request,
                       profile_request_status="NOT_REQUESTED" if mode == "off" else "UNVERIFIED",
@@ -550,20 +552,22 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
                           owned_identity=owned_group.identities.get(process, dict(
                               pid=process.pid, parent=os.getpid(), group=process.pid,
                               reservation="direct child retained until WNOWAIT reap")))
-            if answer.get("expected_test_file_inventory") is not None:
-                answer["test_process_birth_ids"] = [f"{answer['process_token']}-{process.pid}"]
+            native = answer.get("expected_test_file_inventory") is not None
+            consumer = name in PROFILE_CONSUMER_PHASES and answer["profile_request"]["mode"] != "off"
+            birth = f"{answer['process_token']}-{process.pid}" if native or consumer else None
+            if native:
+                answer["test_process_birth_ids"] = [birth]
             save_progress()
             streams = diagnostic_module("ci_streams")
             decoder = None
-            native = answer.get("expected_test_file_inventory") is not None
-            if native or live_phases:
+            if native or consumer or live_phases:
                 decoder = streams.ProgressDecoder(
                     artifacts=diagnostic_module("ci_artifacts"), source_roots=[(ROOT.resolve(), "repository")],
                     invocation=answer.get("invocation"), source_digest=answer.get("source_digest"),
-                    phases=(name,) if native else live_phases,
-                    direct_pid=process.pid if native else None,
-                    direct_birth=answer["test_process_birth_ids"][0] if native else None)
-            if native:
+                    phases=(name,) if native or consumer else live_phases,
+                    direct_pid=process.pid if native or consumer else None,
+                    direct_birth=birth)
+            if native or consumer:
                 checkpoint_publisher = CheckpointPublisher(answer, env=env, deadline=deadline)
             output_pump = streams.PhaseLogPump(process.stdout, output.fileno(), started=start, decoder=decoder,
                 on_progress=checkpoint_publisher.notify if checkpoint_publisher is not None else None)
@@ -740,7 +744,8 @@ spec = importlib.util.spec_from_file_location("libtmux_checkpoint_artifacts", he
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
-module.assemble_checkpoint([directory / f"events-{direct_birth}.jsonl"],
+direct = directory / f"events-{direct_birth}.jsonl"
+module.assemble_checkpoint([direct, *sorted(path for path in directory.glob("events-*.jsonl") if path != direct)],
     invocation=invocation, expected_source_digest=digest,
     source_roots=[(Path(helper).resolve().parent.parent, "repository"),
                   (Path(stage), "stage"), (directory, "diagnostics")],
@@ -752,7 +757,7 @@ module.assemble_checkpoint([directory / f"events-{direct_birth}.jsonl"],
 
 
 class CheckpointPublisher:
-    """Coalesce flushed native prefixes without blocking test-output admission."""
+    """Coalesce admitted prefixes without blocking command-output admission."""
 
     def __init__(self, answer, *, env, deadline):
         self.directory = Path(answer["diagnostics_directory"])
@@ -760,7 +765,7 @@ class CheckpointPublisher:
         self.digest = answer["source_digest"]
         self.name = answer["name"]
         self.pid = answer["pid"]
-        self.birth = answer["test_process_birth_ids"][0]
+        self.birth = f"{answer['process_token']}-{self.pid}"
         self.stage = env.get("LIBTMUX_CI_STAGE", str(self.directory))
         self.env = env.copy()
         for key in DIAGNOSTIC_BINDINGS:
@@ -786,7 +791,8 @@ class CheckpointPublisher:
         self.thread.start()
 
     def notify(self, record):
-        if (record["event"] not in ("process_start", "profile_checkpoint", "assertion_problem")
+        if (record["event"] not in ("process_start", "profile_checkpoint", "assertion_problem",
+                                   "child_admitted", "child_exit_observed")
                 and not (record["event"] == "coverage_incomplete"
                          and record.get("reason") == "test_file_aborted"
                          and isinstance(record.get("file_exception"), dict))):
@@ -931,7 +937,7 @@ class CheckpointPublisher:
                     profile_reuse=self.profile_reuse,
                     coalesced_markers=self.coalesced, dropped_markers=self.dropped,
                     reserved_exporters=reserved, reserved_exporter_snapshot="OBSERVED" if captured else "UNAVAILABLE_LOCK",
-                    error_type=self.error_type, admission_scope="admitted_direct_native_process_only",
+                    error_type=self.error_type, admission_scope="admitted_direct_process_and_bound_child_prefixes",
                     child_sampling_coverage="UNPROVED", completion_verdict="UNPROVED")
 
 
@@ -2488,6 +2494,45 @@ with (directory / f"events-{birth}.jsonl").open("w") as journal:
                 assert report["test_status"] != "PASS"
             failure = next(report for report in partial_reports if report["test_status"] == "FAIL")
             assert failure["processes"][0]["assertion_problems"][0]["detail"] == "expected 1; observed 2"
+        consumer_program = r'''
+import json, os, pathlib, subprocess, sys
+directory = pathlib.Path(os.environ["LIBTMUX_CI_DIAGNOSTICS_DIR"])
+birth = f"{os.environ['LIBTMUX_CI_PROCESS_TOKEN']}-{os.getpid()}"
+with (directory / f"events-{birth}.jsonl").open("w") as journal:
+    sequence = 0
+    def emit(name, **fields):
+        global sequence
+        sequence += 1
+        record = dict(schema=2, event=name, seq=sequence, pid=os.getpid(), thread=1,
+            elapsed_ns=sequence, invocation=os.environ["LIBTMUX_CI_INVOCATION"],
+            source_digest=os.environ["LIBTMUX_CI_SOURCE_DIGEST"], process_birth_id=birth, **fields)
+        journal.write(json.dumps(record) + "\n"); journal.flush()
+        if os.environ.get("LIBTMUX_CI_TEST_CONSOLE") == "1":
+            print("LIBTMUX_TEST_PROGRESS " + json.dumps(record | dict(ci_phase="imports")), flush=True)
+    emit("process_start", phase="imports", julia="1.13.1", threads=1,
+         tool_identity_scope="synthetic Python consumer transport; no sampling claim")
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    emit("child_admitted", child_pid=child.pid, child_token="control-child",
+         child_process_birth_id=f"control-child-{child.pid}", profile_injected=False)
+    child.wait()
+    emit("child_exit_observed", child_pid=child.pid, child_process_birth_id=f"control-child-{child.pid}",
+         exit_observed=True, wait_returned=True, exit_code=0, signal=0)
+    emit("process_finish", outcome="exit_nonzero", coverage_complete=False)
+raise SystemExit(7)
+'''
+        consumer = phase("imports", [sys.executable, "-c", consumer_program], cwd=base,
+            env=diagnostic_env | dict(LIBTMUX_CI_PROFILE="cpu", LIBTMUX_CI_TEST_FILE_INVENTORY="{}",
+                                     LIBTMUX_CI_DIAGNOSTICS_ROOT=str(base / "consumer-diagnostics")),
+            log=base / "consumer-prefix.log", budget=0.9)
+        assert consumer["status"] == consumer["semantic_status"] == "FAIL" and consumer["exit_code"] == 7
+        assert consumer["checkpoint_publication"]["publisher_retired"] and consumer["direct_child_reaped"]
+        consumer_reports = [json.loads((Path(item["artifact_directory"]) / "diagnostics.json").read_text())
+                            for item in consumer["checkpoint_publication"]["snapshots"] if item["artifact_directory"]]
+        assert any(report["snapshot_binding"]["marker"] == "child_exit_observed" for report in consumer_reports)
+        assert all(report["test_status"] == "UNKNOWN" and report["coverage_status"] == "PARTIAL"
+                   and report["assertion_counts"] == dict(passed=0, failed=0, errored=0, broken=0)
+                   for report in consumer_reports)
+        assert consumer["expected_test_file_inventory"] is None and not consumer["test_inventory_complete"]
         missing_directory = base / "missing-checkpoint"
         missing_directory.mkdir()
         missing_answer = dict(diagnostics_directory=str(missing_directory), invocation="control",

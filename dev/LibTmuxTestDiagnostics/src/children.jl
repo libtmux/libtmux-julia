@@ -33,6 +33,7 @@ function observer()
         phase=required("LIBTMUX_CI_PHASE"),
         profile_mode=required("LIBTMUX_CI_PROFILE"),
         profile_symbolization="deferred",
+        console=get(ENV, "LIBTMUX_CI_TEST_CONSOLE", "0") == "1",
     )
     owner.coverage_complete = false
     Diagnostics.emit(

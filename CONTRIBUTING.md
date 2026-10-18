@@ -549,8 +549,8 @@ test inventories.
 The matrix enables flushed `LIBTMUX_TEST_PROGRESS` JSON records for admitted
 native runners. Records identify the invocation, process, file and nested
 testset, with outcomes and assertion/error details. The observer's console
-output defaults off; the matrix explicitly enables it for native suites.
-Consumer observers and the private child bootstrap keep console markers off
+output defaults off; the matrix explicitly enables it for native suites and
+CI consumer drivers. The private child bootstrap keeps console markers off
 to preserve installed stdout and stderr.
 
 The phase output observer saves combined stdout/stderr bytes in the owned log
@@ -613,6 +613,11 @@ returns. It preserves command flags, inherited stdio and consumer projects.
 A returned Julia wait does not measure the kernel's earlier reap time or prove
 descendant retirement.
 
+CI consumer drivers publish their own bound progress and retain prefixes from
+admitted child journals. Child prefixes contain complete records observed
+during assembly; they do not describe one shared instant. These artifacts keep
+partial coverage and do not add diagnostic records to application streams.
+
 Consumer profiles default to deferred symbol lookup to preserve application
 stderr. Raw samples retain unresolved addresses; decoding after exit cannot
 recover every process-local JIT label. First-output-byte timing remains
@@ -641,7 +646,8 @@ and nonzero/ignored exits with the separate outer control:
 $ python3 \
     dev/LibTmuxTestDiagnostics/test/children.py \
     julia \
-    --threads 4
+    --threads 4 \
+    --console
 ```
 
 The runner records process launch, positive exit observation and reap times.

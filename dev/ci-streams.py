@@ -18,6 +18,7 @@ EVENTS = frozenset((
     "process_start", "process_finish", "span_start", "span_finish",
     "testset_start", "testset_body_end", "testset_finalize", "assertion_problem",
     "profile_checkpoint", "coverage_incomplete",
+    "child_admitted", "child_exit_observed",
 ))
 MAX_CONSOLE_BYTES = 4 * 1024 * 1024
 MAX_CONSOLE_RECORDS = 256

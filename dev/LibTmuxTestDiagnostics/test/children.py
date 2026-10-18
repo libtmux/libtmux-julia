@@ -6,6 +6,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -105,6 +106,7 @@ def main():
     parser.add_argument("--evidence", type=Path)
     parser.add_argument("--tool-project", type=Path)
     parser.add_argument("--tool-depot", type=Path)
+    parser.add_argument("--console", action="store_true", help="also verify bound CI driver progress")
     args = parser.parse_args()
     if (args.tool_project is None) != (args.tool_depot is None):
         parser.error("--tool-project and --tool-depot must be supplied together")
@@ -151,6 +153,7 @@ def main():
                    LIBTMUX_CI_PHASE="consumer-control",
                    LIBTMUX_CI_SOURCE_ROOT=str(root),
                    LIBTMUX_CI_DIAGNOSTICS_DIR=directory,
+                   LIBTMUX_CI_TEST_CONSOLE="1" if args.console else "0",
                    LTJ_CONTROL_PARENT_SECRET="must-not-inherit")
         env.pop("TMUX", None)
         env.pop("TMUX_PANE", None)
@@ -171,6 +174,26 @@ def main():
         assert code == 0, stderr.decode(errors="replace")
         assert not cleanup["hard_limit_exceeded"] and not cleanup["errors"], cleanup
         assert all(cleanup[name] for name in ("direct_child_reaped", "exit_observer_retired", "escalation_timer_retired")), cleanup
+        records = [json.loads(line) for path in Path(directory).glob("events-*.jsonl")
+                   for line in path.read_text().splitlines()]
+        if args.console:
+            parent, = [record for record in records if record["event"] == "process_start"
+                       and record["process_birth_id"].startswith("control-parent-")]
+            packets, application, position = [], bytearray(), 0
+            for match in re.finditer(rb"\nLIBTMUX_TEST_PROGRESS ([^\n]+)\n", stdout):
+                record = driver.diagnostic_module("ci_artifacts").parse_json(match[1])
+                assert (record["pid"] == parent["pid"]
+                        and record["process_birth_id"] == parent["process_birth_id"]
+                        and record["invocation"] == "child-control" and record["source_digest"] == digest), \
+                    "application or child diagnostic bytes leaked onto stdout"
+                packets.append(record)
+                application.extend(stdout[position:match.start()])
+                position = match.end()
+            application.extend(stdout[position:])
+            assert packets, "CI consumer driver did not emit bound progress"
+            assert sum(record["event"] == "child_admitted" for record in packets) == 7
+            assert sum(record["event"] == "child_exit_observed" for record in packets) == 7
+            stdout = bytes(application)
         assert stdout.startswith(b"\x00\x7f\xff"), "consumer stdout bytes changed"
         pid_bytes, _, trailing = stdout[3:].partition(b"\n")
         child_pid = int(pid_bytes)
@@ -179,8 +202,6 @@ def main():
         restricted_pid = int(restricted_bytes.removeprefix(b"restricted-child "))
         assert trailing == b"failed-child\nignored-status\n", stdout
         assert stderr == b"child-diagnostic\n", "consumer stderr bytes changed"
-        records = [json.loads(line) for path in Path(directory).glob("events-*.jsonl")
-                   for line in path.read_text().splitlines()]
         admitted = [record for record in records if record["event"] == "child_admitted"]
         assert len(admitted) == 7, "actual consumer children were not independently admitted"
         assert len({record["child_token"] for record in admitted}) == 7
@@ -219,6 +240,7 @@ def main():
                        parent_randomness_preserved=True,
                        restricted_environment_preserved=True,
                        positive_cache_requested=args.tool_project is not None,
+                       parent_console_progress=args.console,
                        cleanup=cleanup,
                        source_scope="consumer_driver_control_only",
                        julia_command_seconds=command_seconds,
