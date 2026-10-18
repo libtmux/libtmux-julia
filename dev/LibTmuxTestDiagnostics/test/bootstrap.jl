@@ -1,7 +1,7 @@
 # Outer: separate Julia children verify preload, stdout and exit behavior.
 const CHILD_BOOTSTRAP = normpath(joinpath(@__DIR__, "..", "src", "bootstrap.jl"))
 
-function bootstrap_child(directory, mode, code; token="bootstrap-child")
+function bootstrap_child(directory, mode, code; token="bootstrap-child", diagnostics=true)
     error_output =
         code == 0 ? "" :
         "write(stderr, UInt8[0, 255]); " *
@@ -33,6 +33,7 @@ function bootstrap_child(directory, mode, code; token="bootstrap-child")
             "LIBTMUX_CI_SOURCE_ROOT"=>normpath(joinpath(@__DIR__, "..", "..", "..")),
         ),
     )
+    diagnostics || pop!(environment, "LIBTMUX_CI_DIAGNOSTICS_DIR", nothing)
     output, errors = IOBuffer(), IOBuffer()
     process = run(
         pipeline(setenv(command, environment); stdout=output, stderr=errors);
@@ -51,20 +52,25 @@ end
 
 function check_bootstrap_controls(directory)
     disabled = mkpath(joinpath(directory, "off"))
+    observed = mkpath(joinpath(directory, "observed"))
     zero = mkpath(joinpath(directory, "zero"))
     failed = mkpath(joinpath(directory, "failed"))
     rejected = mkpath(joinpath(directory, "rejected"))
-    plain = bootstrap_child(disabled, "off", 0)
+    plain = bootstrap_child(disabled, "off", 0; diagnostics=false)
+    unprofiled = bootstrap_child(observed, "off", 0)
     profiled = bootstrap_child(zero, "cpu", 0)
     nonzero = bootstrap_child(failed, "cpu", 7)
     inherited = bootstrap_child(rejected, "cpu", 0; token="bootstrap-parent")
-    @assert plain.exitcode == profiled.exitcode == 0
+    @assert plain.exitcode == unprofiled.exitcode == profiled.exitcode == 0
     @assert nonzero.exitcode == 7
-    @assert plain.output == profiled.output == nonzero.output
-    @assert isempty(plain.errors) && isempty(profiled.errors)
+    @assert plain.output == unprofiled.output == profiled.output == nonzero.output
+    @assert isempty(plain.errors) && isempty(unprofiled.errors) && isempty(profiled.errors)
     @assert codeunits(nonzero.errors) ==
             UInt8[0, 255, codeunits("intentional application error")...]
     @assert isempty(plain.events)
+    @assert occursin("\"event\":\"child_bootstrap_start\"", unprofiled.events)
+    @assert occursin("\"event\":\"process_finish\"", unprofiled.events)
+    @assert !occursin("\"event\":\"profile_start\"", unprofiled.events)
     @assert occursin("\"event\":\"child_bootstrap_start\"", profiled.events)
     @assert occursin("\"outcome\":\"exit_zero\"", profiled.events)
     @assert occursin("\"application_completion\":\"unproved\"", profiled.events)

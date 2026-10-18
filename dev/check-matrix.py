@@ -58,6 +58,7 @@ DIAGNOSTIC_BINDINGS = ("LIBTMUX_CI_DIAGNOSTICS_DIR", "LIBTMUX_CI_DIAGNOSTICS_ROO
                        "LIBTMUX_CI_PROCESS_TOKEN", "LIBTMUX_CI_TEST_FILE_INVENTORY", "LIBTMUX_CI_STAGE",
                        "LIBTMUX_CI_SOURCE_ROOT", "LIBTMUX_CI_CHILD_TOKEN", "LIBTMUX_CI_PARENT_PROCESS_BIRTH_ID",
                        "LIBTMUX_CI_CHILD_HELPER_PROJECT", "LIBTMUX_CI_CHILD_HELPER_DEPOT",
+                       "LIBTMUX_CI_CONSUMER_DIAGNOSTICS",
                        "LIBTMUX_CI_TEST_CONSOLE", "LIBTMUX_CI_TEST_CONTINUE")
 
 
@@ -456,6 +457,7 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
         nonlocal diagnostic_receipt
         child_env = env.copy()
         child_env.update(LIBTMUX_CI_PROFILE="off", LIBTMUX_CI_PROFILE_SYMBOLIZATION=symbolization)
+        child_env.pop("LIBTMUX_CI_CONSUMER_DIAGNOSTICS", None)
         child_env.pop("LIBTMUX_CI_TEST_CONTINUE", None)
         root = child_env.get("LIBTMUX_CI_DIAGNOSTICS_ROOT")
         if root is None:
@@ -482,9 +484,11 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
         request = phase_profile_request(name, inventory, configuration)
         mode = request["mode"]
         child_env["LIBTMUX_CI_PROFILE"] = mode
-        consumer = name in PROFILE_CONSUMER_PHASES and mode != "off"
+        consumer = name in PROFILE_CONSUMER_PHASES
         if selected is not None or consumer:
             child_env["LIBTMUX_CI_TEST_CONSOLE"] = "1"
+        if consumer:
+            child_env["LIBTMUX_CI_CONSUMER_DIAGNOSTICS"] = "1"
         if selected is not None:
             child_env["LIBTMUX_CI_TEST_CONTINUE"] = "1"
         answer.update(invocation=invocation, source_digest=digest,
@@ -548,7 +552,7 @@ def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, de
                               pid=process.pid, parent=os.getpid(), group=process.pid,
                               reservation="direct child retained until WNOWAIT reap")))
             native = answer.get("expected_test_file_inventory") is not None
-            consumer = name in PROFILE_CONSUMER_PHASES and answer["profile_request"]["mode"] != "off"
+            consumer = answer.get("diagnostics_scope") == "consumer_driver"
             birth = f"{answer['process_token']}-{process.pid}" if native or consumer else None
             if native:
                 answer["test_process_birth_ids"] = [birth]
@@ -2536,19 +2540,20 @@ with (directory / f"events-{birth}.jsonl").open("w") as journal:
     emit("process_finish", outcome="exit_nonzero", coverage_complete=False)
 raise SystemExit(7)
 '''
-        consumer = phase("imports", [sys.executable, "-c", consumer_program], cwd=base,
-            env=diagnostic_env | dict(LIBTMUX_CI_PROFILE="cpu", LIBTMUX_CI_TEST_FILE_INVENTORY="{}",
-                                     LIBTMUX_CI_DIAGNOSTICS_ROOT=str(base / "consumer-diagnostics")),
-            log=base / "consumer-prefix.log", budget=0.9)
-        assert consumer["status"] == consumer["semantic_status"] == "FAIL" and consumer["exit_code"] == 7
-        assert consumer["checkpoint_publication"]["publisher_retired"] and consumer["direct_child_reaped"]
-        consumer_reports = [json.loads((Path(item["artifact_directory"]) / "diagnostics.json").read_text())
-                            for item in consumer["checkpoint_publication"]["snapshots"] if item["artifact_directory"]]
-        assert any(report["snapshot_binding"]["marker"] == "child_exit_observed" for report in consumer_reports)
-        assert all(report["test_status"] == "UNKNOWN" and report["coverage_status"] == "PARTIAL"
-                   and report["assertion_counts"] == dict(passed=0, failed=0, errored=0, broken=0)
-                   for report in consumer_reports)
-        assert consumer["expected_test_file_inventory"] is None and not consumer["test_inventory_complete"]
+        for mode in ("cpu", "off"):
+            consumer = phase("imports", [sys.executable, "-c", consumer_program], cwd=base,
+                env=diagnostic_env | dict(LIBTMUX_CI_PROFILE=mode, LIBTMUX_CI_TEST_FILE_INVENTORY="{}",
+                                         LIBTMUX_CI_DIAGNOSTICS_ROOT=str(base / ("consumer-diagnostics-" + mode))),
+                log=base / ("consumer-prefix-" + mode + ".log"), budget=0.9)
+            assert consumer["status"] == consumer["semantic_status"] == "FAIL" and consumer["exit_code"] == 7
+            assert consumer["checkpoint_publication"]["publisher_retired"] and consumer["direct_child_reaped"]
+            consumer_reports = [json.loads((Path(item["artifact_directory"]) / "diagnostics.json").read_text())
+                                for item in consumer["checkpoint_publication"]["snapshots"] if item["artifact_directory"]]
+            assert any(report["snapshot_binding"]["marker"] == "child_exit_observed" for report in consumer_reports)
+            assert all(report["test_status"] == "UNKNOWN" and report["coverage_status"] == "PARTIAL"
+                       and report["assertion_counts"] == dict(passed=0, failed=0, errored=0, broken=0)
+                       for report in consumer_reports)
+            assert consumer["expected_test_file_inventory"] is None and not consumer["test_inventory_complete"]
         missing_directory = base / "missing-checkpoint"
         missing_directory.mkdir()
         missing_answer = dict(diagnostics_directory=str(missing_directory), invocation="control",

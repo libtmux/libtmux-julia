@@ -588,12 +588,18 @@ separate two-minute ceiling. Exporter retirement has its own sanitized receipt.
 Failed setup produces explicitly unverified setup snapshots. CI uploads public
 bundles after their privacy checks, with missing artifacts reported as errors.
 
-The CI offline step requests CPU sampling with deferred symbol lookup for
-complete native suites and supported consumer phases. Unit and quality phases
-keep sampling off. Local sampling defaults off; set `LIBTMUX_CI_PROFILE=cpu`
-or `wall` to request it. The private observer supports CPU sampling on Julia
-1.10 and 1.13, and separate wall-time sampling on Julia 1.13. CI wall-time
-scheduling remains open.
+The CI offline step requests CPU sampling with deferred symbol lookup on
+Julia 1.13 for complete native suites and supported consumer phases. Unit and
+quality phases keep sampling off. Julia 1.10.0 jobs also keep sampling off:
+its native profiler can deadlock while loading shared libraries, as described
+in [Julia's loader-lock fix][julia-profile-loader-lock]. Floor-version jobs
+retain progress, timing, JUnit and child receipts, with CPU profiles unavailable.
+Track the legacy sampling limitation in [issue 25][julia-profile-followup].
+Local sampling defaults off; set `LIBTMUX_CI_PROFILE=cpu` or `wall` to request
+it. Separate wall-time sampling requires Julia 1.13; CI scheduling remains open.
+
+[julia-profile-loader-lock]: https://github.com/JuliaLang/julia/commit/1f05953fab1e14e1e881a224d8719d2c7d637da3
+[julia-profile-followup]: https://github.com/libtmux/libtmux-julia/issues/25
 
 Each admitted phase records its sampler request. A required native sampler
 must retain one matching start and at least one bound raw checkpoint. Missing,

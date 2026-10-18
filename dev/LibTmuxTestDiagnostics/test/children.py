@@ -103,6 +103,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("julia")
     parser.add_argument("--threads", type=int, choices=(1, 4), default=1)
+    parser.add_argument("--profile", choices=("cpu", "off"), default="cpu")
     parser.add_argument("--evidence", type=Path)
     parser.add_argument("--tool-project", type=Path)
     parser.add_argument("--tool-depot", type=Path)
@@ -145,7 +146,8 @@ def main():
     @assert rand(UInt64, 4) == expected_randomness
     '''
     with tempfile.TemporaryDirectory(prefix="ltj-child-control-") as directory:
-        env = dict(os.environ, LIBTMUX_CI_PROFILE="cpu",
+        env = dict(os.environ, LIBTMUX_CI_PROFILE=args.profile,
+                   LIBTMUX_CI_CONSUMER_DIAGNOSTICS="1",
                    LIBTMUX_CI_PROFILE_SYMBOLIZATION="deferred",
                    LIBTMUX_CI_INVOCATION="child-control",
                    LIBTMUX_CI_SOURCE_DIGEST=digest,
@@ -205,7 +207,7 @@ def main():
         admitted = [record for record in records if record["event"] == "child_admitted"]
         assert len(admitted) == 7, "actual consumer children were not independently admitted"
         assert len({record["child_token"] for record in admitted}) == 7
-        profiled = [record for record in admitted if record["profile_injected"]]
+        profiled = [record for record in admitted if record.get("bootstrap_injected", record["profile_injected"])]
         assert {record["child_pid"] for record in profiled} == {child_pid, restricted_pid}
         for admission in profiled:
             pid = admission["child_pid"]
@@ -220,6 +222,11 @@ def main():
                 assert ready["helper_loading"] == "owned_package_loader"
                 assert ready["helper_cache_origin_observed"] is True
             checkpoints = [record for record in child_records if record["event"] == "profile_checkpoint"]
+            assert admission["profile_injected"] == (args.profile == "cpu")
+            if args.profile == "off":
+                assert not checkpoints and not any(record["event"] == "profile_start" for record in child_records)
+                assert any(record["event"] == "child_exit_hook" for record in child_records)
+                continue
             assert checkpoints, "actual child checkpoint was not retained"
             payloads = [json.loads((Path(directory) / record["file"]).read_text()) for record in checkpoints]
             assert any(payload["data"] for payload in payloads), "actual child has no CPU samples"
@@ -234,7 +241,8 @@ def main():
         assert all(record["kernel_reap_time_status"] == "unavailable_libuv_owned" for record in exits)
         assert all(record["invocation"] == "child-control" and record["source_digest"] == digest
                    for record in records)
-        receipt = dict(status="PASS", threads=args.threads, actual_child_profile=True,
+        receipt = dict(status="PASS", threads=args.threads, actual_child_profile=args.profile == "cpu",
+                       profile_mode=args.profile,
                        admitted_children=7, stdout_bytes_preserved=True,
                        stderr_bytes_preserved=True, ignorestatus_preserved=True,
                        parent_randomness_preserved=True,

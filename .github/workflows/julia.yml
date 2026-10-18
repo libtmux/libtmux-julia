@@ -185,7 +185,7 @@ jobs:
           --threads '${{ matrix.threads }}'
       - name: Check prepared cell offline
         env:
-          LIBTMUX_CI_PROFILE: cpu
+          LIBTMUX_CI_PROFILE: ${{ matrix.julia == '1.10.0' && 'off' || 'cpu' }}
           LIBTMUX_CI_PROFILE_SYMBOLIZATION: deferred
         run: >-
           python3 dev/check-matrix.py run "$MATRIX_STAGE"

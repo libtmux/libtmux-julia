@@ -45,7 +45,8 @@ end
 function run_consumer_child(phase::AbstractString, command)
     result, failure = nothing, nothing
     try
-        if get(ENV, "LIBTMUX_CI_PROFILE", "off") == "off"
+        if get(ENV, "LIBTMUX_CI_PROFILE", "off") == "off" &&
+           get(ENV, "LIBTMUX_CI_CONSUMER_DIAGNOSTICS", "0") != "1"
             result = run(command)
         else
             if CONSUMER_DIAGNOSTICS[] === nothing

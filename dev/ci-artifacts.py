@@ -1466,7 +1466,9 @@ def checkpoint_child_prefixes(event_paths, evidence, admission, *, invocation,
                         or not isinstance(token, str) or not IDENTIFIER.fullmatch(token)
                         or birth != f"{token}-{pid}" or not IDENTIFIER.fullmatch(birth)
                         or birth in births or token in tokens
-                        or type(record.get("profile_injected")) is not bool):
+                        or type(record.get("profile_injected")) is not bool
+                        or type(record.get("bootstrap_injected", record.get("profile_injected"))) is not bool
+                        or record["profile_injected"] and not record.get("bootstrap_injected", True)):
                     raise ValueError("checkpoint child admission is invalid or ambiguous")
                 admitted[birth] = record
                 births.add(birth)
@@ -1478,7 +1480,7 @@ def checkpoint_child_prefixes(event_paths, evidence, admission, *, invocation,
                         or marker["child_pid"] != selected["child_pid"]):
                     raise ValueError("checkpoint child marker has no matching admission")
             expected = {f"events-{birth}.jsonl": record for birth, record in admitted.items()
-                        if record["profile_injected"]}
+                        if record.get("bootstrap_injected", record["profile_injected"])}
             for name, path in tuple(available.items()):
                 record = expected.pop(name, None)
                 if record is None:
@@ -2368,6 +2370,14 @@ def self_test():
         reused_children = checkpoint_run("live-admitted-children-reused", profile_reuse=child_approval, **child_args)
         assert reused_children["profile_reuse_counts"]["reused"] == 2
         assert reused_children["assertion_counts"] == children["assertion_counts"]
+        child_path.write_bytes("".join(json.dumps(item) + "\n" for item in child_events[:2]).encode())
+        unprofiled_items = phase_events[:-1] + [checkpoint_marker,
+            admitted | dict(profile_injected=False, bootstrap_injected=True), exited, future]
+        unprofiled = checkpoint_run("live-unprofiled-child", **(child_args | dict(items=unprofiled_items)))
+        assert {item["process_id"] for item in unprofiled["processes"]} == {"direct-123", "consumer-124"}
+        assert unprofiled["profile_checkpoint_counts"] == dict(attempted=1, copied=1)
+        assert unprofiled["coverage_status"] == "PARTIAL"
+        child_path.write_bytes(child_raw + b'{"concurrent_tail":')
         grandchild_path = root / "events-application-126.jsonl"
         grandchild_profile = root / "application-profile.json"
         grandchild_profile.write_text(json.dumps(payload | dict(process_birth_id="application-126", pid=126)) + "\n")

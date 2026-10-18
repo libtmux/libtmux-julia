@@ -2,11 +2,12 @@ module LibTmuxChildDiagnostics
 
 const ENTERED_NS = time_ns()
 const MODE = get(ENV, "LIBTMUX_CI_PROFILE", "off")
+const ENABLED = MODE != "off" || !isempty(get(ENV, "LIBTMUX_CI_DIAGNOSTICS_DIR", ""))
 const HELPER_IMPORT_NS = time_ns()
 const HELPER_SOURCE = joinpath(@__DIR__, "LibTmuxTestDiagnostics.jl")
 const HELPER_LOADING = Ref("disabled")
 const HELPER_CACHE_USED = Ref(false)
-if MODE != "off"
+if ENABLED
     project = get(ENV, "LIBTMUX_CI_CHILD_HELPER_PROJECT", "")
     depot = get(ENV, "LIBTMUX_CI_CHILD_HELPER_DEPOT", "")
     selected = Ref(false)
@@ -46,7 +47,7 @@ if MODE != "off"
         HELPER_CACHE_USED[] = false
     end
 end
-const DIAGNOSTICS = MODE == "off" ? nothing : LibTmuxTestDiagnostics
+const DIAGNOSTICS = ENABLED ? LibTmuxTestDiagnostics : nothing
 const HELPER_IMPORTED_NS = time_ns()
 const APPLICATION_STARTED_NS = Ref{UInt64}(0)
 
@@ -86,7 +87,7 @@ end
 function start_child()
     diagnostics = DIAGNOSTICS
     diagnostics === nothing && return
-    MODE in ("cpu", "wall") ||
+    MODE in ("off", "cpu", "wall") ||
         throw(ArgumentError("child profile mode must be off, cpu or wall"))
     token = diagnostics.identity(required("LIBTMUX_CI_CHILD_TOKEN"), "child token")
     token != get(ENV, "LIBTMUX_CI_PROCESS_TOKEN", "") ||
