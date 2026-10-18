@@ -109,11 +109,12 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
         end
     end
 
-    @testset "MCP reports an unsupported tmux release without effects" begin
+    @testset "MCP version failures preserve admitted effects" begin
         failure = LibTmux.UnsupportedTmuxVersion("3.2a", "3.3a", "")
-        for name in ("capture_pane", "send_keys", "kill_pane")
-            error = LibTmuxMCP._tool_error(failure, name)
-            @test error["code"] == "unsupported_tmux" && error["effects"] == "none"
+        for admitted in (false, true)
+            error = LibTmuxMCP._tool_error(failure, admitted)
+            @test error["code"] == "unsupported_tmux"
+            @test error["effects"] == (admitted ? "possible" : "none")
             @test occursin("3.3a", error["message"])
             @test occursin("Upgrade tmux", error["message"])
         end
@@ -121,7 +122,10 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
             LibTmux.CommandResult(UInt8[], UInt8[], 1, 0),
             "version probe",
         )
-        @test LibTmuxMCP._tool_error(probe, "kill_pane")["effects"] == "none"
+        for admitted in (false, true)
+            error = LibTmuxMCP._tool_error(probe, admitted)
+            @test error["effects"] == (admitted ? "possible" : "none")
+        end
     end
 
     @testset "MCP application catalog is pure and policy is copied" begin

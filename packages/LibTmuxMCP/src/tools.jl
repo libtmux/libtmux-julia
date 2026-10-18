@@ -1066,17 +1066,22 @@ end
 @noinline function (invocation::_ToolInvocation)(context)
     plan = invocation.plan
     budget = min(context.budget, get(plan.args, "timeoutSeconds", context.budget))
-    _execute_tool(
-        invocation.app,
-        plan,
-        _ToolContext(
-            context.started,
-            budget,
-            context.cancel,
-            invocation.progress,
-            invocation.effects,
-        ),
+    tool_context = _ToolContext(
+        context.started,
+        budget,
+        context.cancel,
+        invocation.progress,
+        invocation.effects,
     )
+    _tool_remaining(tool_context)
+    LibTmux._check_version(
+        invocation.app.server,
+        LibTmux._client_environment(ENV);
+        cancel=tool_context.cancel,
+        timeout=tool_context.budget,
+        started=tool_context.started,
+    )
+    _execute_tool(invocation.app, plan, tool_context)
 end
 
 function _invoke_tool(

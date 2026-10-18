@@ -72,10 +72,11 @@ Configured tmux hooks and aliases can change state during every tool, including
 listing and capture. Control attachment and detachment can also trigger hooks
 or unattached-session policies. All tools advertise conservative hints:
 `readOnlyHint: false`, `destructiveHint: true` and `idempotentHint: false`.
-`error.effects: none` identifies rejection before external I/O admission. Once
-any stage admits I/O, errors report `possible`, including after an earlier
-batch item, cancellation, creation cleanup or result truncation. A later
-command's unsent status never proves that the whole call had no effects.
+`error.effects: none` identifies rejection before potentially effectful I/O
+admission, including the initial hook-free version check. Once any stage admits
+potentially effectful I/O, errors report `possible`, including after an earlier
+batch item, cancellation, creation cleanup or result truncation. A later version
+refusal or unsent command never proves that the whole call had no effects.
 
 Use repeated `--allow-pane` values to constrain panes. `--caller-pane`
 supplies an explicit startup target; the control client's current pane is

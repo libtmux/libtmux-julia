@@ -168,10 +168,11 @@ The default catalog contains [`list_panes`][tool_list_panes],
 - Repeat `--tool` to replace the default catalog.
 - The same policy applies to every item in
   [`run_operations`][tool_run_operations] before any item executes.
-- The server needs tmux 3.3a or newer. A tool called against an older or
-  unreadable tmux fails with code `unsupported_tmux` and `effects: none`. The
-  message says to upgrade tmux and restart the server, or pin the previous
-  libtmux release.
+- The server needs tmux 3.3a or newer. An initial version check against an
+  older tmux fails with code `unsupported_tmux` and `effects: none`. An
+  unreadable version also refuses the call before admitting operations. The
+  unsupported release error explains how to upgrade tmux and restart the
+  server, or pin the previous libtmux release.
 
 Narrow discovery with a generation-bound session/window `scope`, native inert
 `where` criteria, or explicit scalar `columns`. Continue `nextPageToken` only
@@ -200,12 +201,13 @@ detach control clients, which can trigger hooks and unattached-session policies.
 The catalog therefore advertises `readOnlyHint: false`, `destructiveHint: true`
 and `idempotentHint: false`, including for listing and capture.
 
-`error.effects: none` means the call failed before external I/O admission, such
-as argument validation, target policy or prior cancellation. Once any stage
-admits tmux I/O, errors report `possible`. This includes earlier batch items,
-control attachment, creation cleanup and truncated results. A later command's
-unsent status cannot erase those effects. `possible` does not assert that a
-change occurred; cancellation and errors never establish rollback.
+`error.effects: none` means the call failed before potentially effectful I/O
+admission, such as argument validation, target policy, prior cancellation or
+the initial hook-free version check. Once any stage admits potentially
+effectful tmux I/O, errors report `possible`. This includes earlier batch items,
+control attachment, creation cleanup and truncated results. A later version
+refusal or unsent command cannot erase those effects. `possible` does not assert
+that a change occurred; cancellation and errors never establish rollback.
 
 ### Batches
 
