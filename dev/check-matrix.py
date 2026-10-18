@@ -1923,7 +1923,8 @@ def run(args):
                            cleanup_seconds=WORKER_RETIREMENT_SECONDS,
                            interrupt_grace=WORKER_RETIREMENT_SECONDS,
                            live_phases=tuple(name for name in cancellation["planned_phases"]
-                                             if name in metadata.get("test_file_inventory", {})))
+                                             if name in metadata.get("test_file_inventory", {})
+                                             or name in PROFILE_CONSUMER_PHASES))
         except BaseException as error:
             result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
                           active_phase=batch, error_type=type(error).__name__,
@@ -2017,7 +2018,16 @@ def self_test_profile_transport(evidence_directory=None):
             "import json,os,pathlib;pathlib.Path(" + repr(str(observed)) + ").write_text(json.dumps({"
             "'mode':os.environ['LIBTMUX_CI_PROFILE'],"
             "'symbolization':os.environ['LIBTMUX_CI_PROFILE_SYMBOLIZATION']}))"]
-        plan = [("core-normal", command, 1, "outer")]
+        consumer_command = [sys.executable, "-c", """import json,os
+pid=os.getpid()
+record=dict(schema=2,event='process_start',invocation=os.environ['LIBTMUX_CI_INVOCATION'],
+    source_digest=os.environ['LIBTMUX_CI_SOURCE_DIGEST'],ci_phase=os.environ['LIBTMUX_CI_PHASE'],
+    pid=pid,thread=1,seq=1,elapsed_ns=1,
+    process_birth_id=os.environ['LIBTMUX_CI_PROCESS_TOKEN']+'-'+str(pid))
+print('LIBTMUX_TEST_PROGRESS '+json.dumps(record),flush=True)
+"""]
+        plan = [("core-normal", command, 1, "outer"),
+                ("imports", consumer_command, 1, "outer")]
         helper = base / "worker.py"
         helper.write_text("""import importlib.util,json,os,pathlib,sys
 spec=importlib.util.spec_from_file_location('transport_worker',sys.argv.pop(1))
@@ -2034,7 +2044,7 @@ raise SystemExit(module.main())
 """)
         (base / "transport-plan.json").write_text(json.dumps(plan))
         args = SimpleNamespace(stage=str(base), julia=sys.executable, tmux=sys.executable,
-            threads=1, tier="outer", suite="runtime", worker=False,
+            threads=1, tier="outer", suite="all", worker=False,
             expected_julia=None, expected_tmux=None, expected_os=None, expected_arch=None)
         real_phase = phase
         def worker_phase(name, argv, **kwargs):
@@ -2052,6 +2062,13 @@ raise SystemExit(module.main())
         assert native["profile_request_status"] == "FAIL" and native["exit_code"] == 0
         assert native["semantic_status"] == "PASS" and native["status"] == "FAIL"
         assert all(item["profile_request"]["mode"] == "off" for item in report["workers"])
+        worker = next(item for item in report["workers"] if item["name"] == "outer")
+        assert worker["output_observer"]["rejected_records"] == 0, \
+            "supervisor rejected bound consumer progress forwarded by its worker"
+        assert worker["output_observer"]["forwarded_records"] == 1
+        consumer = next(item for item in report["phases"] if item["name"] == "imports")
+        assert consumer["test_inventory_status"] == "UNAVAILABLE_NATIVE_INVENTORY"
+        assert consumer["coverage_complete"] is False
 
 
 def self_test_profile_request_guard():
