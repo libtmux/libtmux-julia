@@ -249,13 +249,20 @@ struct _ProcessDrain{F}
     io::Base.PipeEndpoint
     stream::Symbol
     limit::Int
+    activity::Threads.Atomic{UInt64}
+    abandoned::Threads.Atomic{Bool}
 end
+
+# How long the pipes of an exited client may stay silent before a descendant
+# that inherited them is presumed to be holding them open.
+const _PIPE_QUIET_NS = UInt64(250_000_000)
 
 Base.@noinline function (worker::_ProcessDrain)()
     captured = UInt8[]
     try
         while !eof(worker.io)
             chunk = readavailable(worker.io)
+            worker.activity[] = time_ns()
             available = worker.limit - length(captured)
             count = min(length(chunk), available)
             offset = length(captured)
@@ -267,9 +274,40 @@ Base.@noinline function (worker::_ProcessDrain)()
             end
         end
     catch cause
-        worker.stop(ProcessIOError(worker.stream, cause))
+        worker.abandoned[] || worker.stop(ProcessIOError(worker.stream, cause))
     end
     captured
+end
+
+# Wait for both drains once the client has exited. A descendant, such as the
+# server of a tmux that cannot close its descriptors, may keep a pipe open
+# forever: when no output arrived for `_PIPE_QUIET_NS`, close our read ends so
+# the drains finish with what was written.
+function _await_drains(tasks, activity, abandoned, close_pipes)
+    done = Base.Event()
+    joiner = Threads.@spawn begin
+        foreach(wait, tasks)
+        notify(done)
+    end
+    # The client's exit counts as activity, so the interval starts there.
+    activity[] = max(activity[], time_ns())
+    while !istaskdone(joiner)
+        deadline = activity[] + _PIPE_QUIET_NS
+        remaining = (Int64(deadline) - Int64(time_ns())) / 1e9
+        remaining > 0 || begin
+            abandoned[] = true
+            close_pipes()
+            break
+        end
+        tick = Timer(_ -> notify(done), remaining)
+        try
+            wait(done)
+        finally
+            close(tick)
+        end
+    end
+    wait(joiner)
+    nothing
 end
 
 struct _ProcessInput{F}
@@ -383,16 +421,38 @@ function _run_process(
                 _DeadlineCallback(stop, delay),
                 max(0.0, delay - (time_ns() - started) / 1e9),
             )
-        output_worker = _ProcessDrain(stop, output_pipe.out, :stdout, max_output_bytes)
+        activity = Threads.Atomic{UInt64}(time_ns())
+        abandoned = Threads.Atomic{Bool}(false)
+        output_worker = _ProcessDrain(
+            stop,
+            output_pipe.out,
+            :stdout,
+            max_output_bytes,
+            activity,
+            abandoned,
+        )
         output_task = Threads.@spawn output_worker()
         push!(workers, output_task)
-        error_worker = _ProcessDrain(stop, error_pipe.out, :stderr, max_error_bytes)
+        error_worker = _ProcessDrain(
+            stop,
+            error_pipe.out,
+            :stderr,
+            max_error_bytes,
+            activity,
+            abandoned,
+        )
         error_task = Threads.@spawn error_worker()
         push!(workers, error_task)
         input_worker = _ProcessInput(stop, input_pipe.in, payload)
         writer_task = Threads.@spawn input_worker()
         push!(workers, writer_task)
         wait(proc)
+        _await_drains(
+            (output_task, error_task),
+            activity,
+            abandoned,
+            _ProcessDrainClose(output_pipe.out, error_pipe.out),
+        )
         stdout_bytes, stderr_bytes = fetch(output_task), fetch(error_task)
         write_error = fetch(writer_task)
         failure = lock(state_lock) do
@@ -458,15 +518,24 @@ Run one tmux client with literal arguments and return owned output bytes.
 The client uses UTF-8 mode independently of the caller's locale.
 Nonzero exits raise `CommandError` unless `check=false`. I/O yields to other
 Julia tasks. Cancellation kills and reaps the client, not any remote pane job.
-This subprocess path checks no server generation; use strict references only
-through transports that explicitly advertise that capability.
+The call checks the release of the selected daemon, or of the executable that
+would create it, against tmux 3.3a. The first command to an endpoint probes the
+release; later commands to the same executable and endpoint skip the probe.
+Every command runs behind a fence on the checked release, so a replaced daemon
+raises `UnsupportedTmuxVersion` before any effect. A fence mismatch, a vanished
+endpoint or a tmux 3.1 or older answer drops the remembered release and probes
+once more. The probe runs no user hook. It does not pin a server generation;
+use strict references only through transports that explicitly advertise that
+capability.
 
 The first cancellation, deadline, output overflow or pipe error wins. Its
 `result` retains bounded output and observed exit/signal evidence after client
 retirement; it is `nothing` before submission. Failed input delivery is an
 I/O error even with `check=false`. Cleanup allows at most 900 ms for inherited
-output pipes after stopping the owned client, then closes them. Return or
-failure joins I/O tasks, timer tasks and any running cancellation callback.
+output pipes after stopping the owned client, then closes them. After a client
+exits by itself, a pipe that stays open and silent for 250 ms is closed and the
+output read so far is returned. Return or failure joins I/O tasks, timer tasks
+and any running cancellation callback.
 If cleanup also fails, `CompositeException` preserves the primary error first.
 
 Arguments and individual environment entries are limited to a conservative
@@ -479,19 +548,71 @@ function run_command(
     args::AbstractString...;
     check::Bool=true,
     env::AbstractDict=ENV,
+    _checked::Union{Nothing,Base.RefValue{Any}}=nothing,
     kwargs...,
 )
     started = time_ns()
     isempty(args) &&
         throw(ArgumentError("supply a tmux command; implicit attach is not supported"))
-    argv = _argv(server, collect(args))
-    sum(ncodeunits(arg) + 1 for arg in argv) <= 14 * 1024 || throw(
+    sum(ncodeunits(arg) + 1 for arg in _argv(server, collect(args))) <= 14 * 1024 || throw(
         ArgumentError(
             "command exceeds the conservative 14 KiB limit; use a buffer/input operation for large data",
         ),
     )
     environment = _client_environment(env)
-    result = _run_process(setenv(Cmd(argv), environment); _started=started, kwargs...)
+    cleanup = first(args) == "kill-server"
+    result = checked = nothing
+    for attempt = 1:2
+        # A known live endpoint skips the probe. The fence below still checks
+        # every command and drops a stale entry, so a replaced or vanished
+        # daemon costs one retry before any effect.
+        known =
+            _checked !== nothing && _checked[] !== nothing ? _checked[].version :
+            _cached_release(server)
+        reused = attempt == 1 && known !== nothing
+        checked =
+            reused ? (; version=known, live=true) :
+            _check_version(
+                server,
+                environment;
+                cleanup,
+                cancel=get(kwargs, :cancel, nothing),
+                timeout=get(kwargs, :timeout, nothing),
+                started,
+            )
+        # An absent endpoint has nothing to stop, so cleanup is complete.
+        checked.version === nothing && return CommandResult(UInt8[], UInt8[], 0, 0)
+        marker = _version_marker()
+        argv = _fenced_argv(server, args, checked, marker)
+        result = _run_process(setenv(Cmd(argv), environment); _started=started, kwargs...)
+        mismatch = _fence_failed(result, marker)
+        vanished =
+            reused &&
+            result.exitcode != 0 &&
+            _endpoint_absent(decode_text(result.stderr; invalid=:replace))
+        # An old daemon that replaced the cached one answers the fenced command
+        # with a protocol diagnostic instead of the marker.
+        stale =
+            reused &&
+            result.exitcode != 0 &&
+            any(_pre_probe_diagnostic, _stderr_lines(result))
+        if (mismatch || vanished || stale) && reused
+            _forget_release!(server)
+            _checked === nothing || (_checked[] = nothing)
+            continue
+        end
+        mismatch && _throw_fence()
+        break
+    end
+    if result.exitcode == 0 && result.termsignal == 0
+        if cleanup
+            _forget_release!(server)
+            _checked === nothing || (_checked[] = nothing)
+        else
+            _remember_release!(server, checked.version)
+            _checked === nothing || (_checked[] = (; checked.version, live=true))
+        end
+    end
     if check && (result.exitcode != 0 || result.termsignal != 0)
         throw(CommandError(result, String(first(args))))
     end

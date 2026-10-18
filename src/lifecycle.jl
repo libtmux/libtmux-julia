@@ -346,6 +346,16 @@ function open_server(;
     )
     environment = _client_environment(env)
     cancel === nothing || !_iscancelled(cancel) || throw(RequestCancelled(false))
+    # The executable creates the daemon, so its release decides the check.
+    _require_supported(
+        _executable_version(
+            Server(; socket_name="owned", tmux=executable),
+            environment;
+            cancel,
+            timeout=_snapshot_remaining(started, budget),
+            started,
+        ),
+    )
     token = string(UUIDs.uuid4())
     directory = mktempdir(; prefix="libtmux-julia-", cleanup=false)
     marker = joinpath(directory, "owner")

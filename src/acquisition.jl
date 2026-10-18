@@ -45,7 +45,7 @@ function _observed_bool(value, field)
     throw(ArgumentError("invalid Boolean format field $field"))
 end
 
-function _verify_row_codec(server, started, timeout, cancel)
+function _verify_row_codec(server, started, timeout, cancel, checked=nothing)
     probe = raw"#{s|^.*$|A\\B" * "\tC\nD|;" * _format_template(["version"])[3:end]
     result = run_command(
         server,
@@ -54,6 +54,7 @@ function _verify_row_codec(server, started, timeout, cancel)
         probe;
         timeout=_snapshot_remaining(started, timeout),
         cancel,
+        _checked=checked,
     )
     result.stdout == codeunits("A\\\\B\\tC\\nD\n") || throw(
         UnsupportedCapability(
@@ -70,7 +71,16 @@ function _snapshot_remaining(started, timeout)
     remaining
 end
 
-function _snapshot_rows(server, command, fields, started, timeout, cancel; args=())
+function _snapshot_rows(
+    server,
+    command,
+    fields,
+    started,
+    timeout,
+    cancel,
+    checked=nothing;
+    args=(),
+)
     result = run_command(
         server,
         command,
@@ -79,18 +89,20 @@ function _snapshot_rows(server, command, fields, started, timeout, cancel; args=
         _format_template(fields);
         timeout=_snapshot_remaining(started, timeout),
         cancel,
+        _checked=checked,
     )
     _decode_format_rows(result.stdout, length(fields))
 end
 
-function _snapshot_metadata(server, started, timeout, cancel)
+function _snapshot_metadata(server, started, timeout, cancel, checked=nothing)
     rows = _snapshot_rows(
         server,
         "display-message",
         _SERVER_FIELDS,
         started,
         timeout,
-        cancel;
+        cancel,
+        checked;
         args=("-p",),
     )
     length(rows) == 1 || throw(InconsistentSnapshot("expected one server observation"))
@@ -100,8 +112,16 @@ function _snapshot_metadata(server, started, timeout, cancel)
     ServerIdentity(socket_path=row[4], generation=row[1] * ":" * row[2])
 end
 
-function _capture_graph_rows(server, started, timeout, cancel)
-    ss = _snapshot_rows(server, "list-sessions", _SESSION_FIELDS, started, timeout, cancel)
+function _capture_graph_rows(server, started, timeout, cancel, checked=nothing)
+    ss = _snapshot_rows(
+        server,
+        "list-sessions",
+        _SESSION_FIELDS,
+        started,
+        timeout,
+        cancel,
+        checked,
+    )
     ws =
         isempty(ss) ? Vector{String}[] :
         _snapshot_rows(
@@ -110,7 +130,8 @@ function _capture_graph_rows(server, started, timeout, cancel)
             _WINDOW_FIELDS,
             started,
             timeout,
-            cancel;
+            cancel,
+            checked;
             args=("-a",),
         )
     ps =
@@ -121,12 +142,21 @@ function _capture_graph_rows(server, started, timeout, cancel)
             _PANE_FIELDS,
             started,
             timeout,
-            cancel;
+            cancel,
+            checked;
             args=("-a",),
         )
     cs =
         isempty(ss) ? Vector{String}[] :
-        _snapshot_rows(server, "list-clients", _CLIENT_FIELDS, started, timeout, cancel)
+        _snapshot_rows(
+            server,
+            "list-clients",
+            _CLIENT_FIELDS,
+            started,
+            timeout,
+            cancel,
+            checked,
+        )
     (; ss, ws, ps, cs)
 end
 
@@ -224,13 +254,14 @@ function snapshot(
     isfinite(budget) && 0 < budget < 1e15 ||
         throw(ArgumentError("snapshot timeout must be positive and finite"))
     started = time_ns()
-    _verify_row_codec(server, started, budget, cancel)
+    checked = Ref{Any}(nothing)
+    _verify_row_codec(server, started, budget, cancel, checked)
     for attempt = 1:2
         try
-            before = _snapshot_metadata(server, started, budget, cancel)
-            captured = _capture_graph_rows(server, started, budget, cancel)
-            confirmed = _capture_graph_rows(server, started, budget, cancel)
-            after = _snapshot_metadata(server, started, budget, cancel)
+            before = _snapshot_metadata(server, started, budget, cancel, checked)
+            captured = _capture_graph_rows(server, started, budget, cancel, checked)
+            confirmed = _capture_graph_rows(server, started, budget, cancel, checked)
+            after = _snapshot_metadata(server, started, budget, cancel, checked)
             before == after ||
                 throw(InconsistentSnapshot("daemon identity changed during acquisition"))
             _graph_signature(captured) == _graph_signature(confirmed) ||

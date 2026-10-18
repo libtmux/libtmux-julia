@@ -305,7 +305,10 @@ ownership.
   publication and full compatibility support are pending.
 - **Protocol.** Modern discovery uses `2026-07-28`. The legacy initialize
   profile is `2025-11-25`.
-- **Julia 1.10 or newer and tmux 3.2a or newer.**
+- **Julia 1.10 or newer and tmux 3.3a or newer.**
+- **Older tmux is refused.** A tool called against an older or unreadable tmux
+  fails with code `unsupported_tmux` and `effects: none`. The message says to
+  upgrade tmux and restart the server, or pin the previous libtmux release.
 - **Linux, including WSL, and macOS.** CI runs the complete suite on Ubuntu
   24.04 and on macOS, arm64 and x86_64.
 

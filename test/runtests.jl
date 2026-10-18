@@ -2,7 +2,8 @@ using Test
 using LibTmux
 
 suite = isempty(ARGS) ? "all" : only(ARGS)
-suite in ("unit", "integration", "all") || error("suite must be unit, integration or all")
+suite in ("unit", "integration", "rejection", "old-daemon", "all") ||
+    error("suite must be unit, integration, rejection, old-daemon or all")
 if suite in ("unit", "all")
     include("server.jl")
     include("process.jl")
@@ -16,11 +17,14 @@ if suite in ("unit", "all")
     include("format_rows.jl")
     include("options_catalog.jl")
     include("control_protocol.jl")
+    include("support_versions.jl")
 end
 if suite in ("integration", "all")
     include("fixture_contract.jl")
     include("named_tmux.jl")
     include("lifecycle.jl")
+    include("support_check.jl")
+    include("support_unreadable.jl")
     include("integration.jl")
     include("acquisition.jl")
     include("operations.jl")
@@ -41,4 +45,13 @@ if suite in ("integration", "all")
     include("control_configuration.jl")
     include("control_options.jl")
     include("control_buffers.jl")
+end
+if suite == "rejection"
+    # Run against a tmux executable below the supported floor.
+    include("support_rejection.jl")
+end
+if suite == "old-daemon"
+    # Real tmux 3.0a and 3.1c daemons behind a current client. Their servers
+    # cannot host the owned-daemon fixture the rejection suite builds on.
+    include("support_unreadable.jl")
 end

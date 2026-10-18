@@ -413,7 +413,8 @@ The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
   `Manifest.toml`.
 - **Standard library only.** The core imports only Julia standard libraries.
   The JSON and Tables integrations are optional extensions.
-- **Julia 1.10 or newer and tmux 3.2a or newer.**
+- **Julia 1.10 or newer and tmux 3.3a or newer.** Operations refuse an older
+  or unreadable tmux release before they have any effect.
   [Compatibility][repo-docs-src-compatibility-md] lists the cells that passed
   the complete suite.
 - **Linux, including WSL, and macOS.** CI runs the complete suite on Ubuntu

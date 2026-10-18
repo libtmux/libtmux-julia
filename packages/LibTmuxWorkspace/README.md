@@ -58,7 +58,7 @@ $ bin/libtmux-workspace --help
 ```
 
 The commands `validate`, `plan`, `load` and `freeze` run [`validate`][validate],
-[`plan`][plan], [`apply`][apply] and [`freeze`][freeze]. Have tmux 3.2a or
+[`plan`][plan], [`apply`][apply] and [`freeze`][freeze]. Have tmux 3.3a or
 newer on your `PATH`.
 
 Save this workspace as `workspace.yaml`. `${PROJECT}` expands from a value you
@@ -480,7 +480,7 @@ lists the defaults and what `validate` copies.
   core does not depend on this package.
 - **Precompilation.** It covers inert configuration and CLI reporting. It never
   starts a process or contacts tmux.
-- **Julia 1.10 or newer and tmux 3.2a or newer.**
+- **Julia 1.10 or newer and tmux 3.3a or newer.**
 - **Linux, including WSL, and macOS.** CI runs the complete suite on Ubuntu
   24.04 and on macOS, arm64 and x86_64.
 - **Attach.** The automated consumer tests have not exercised `--attach`.

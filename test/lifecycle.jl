@@ -11,6 +11,11 @@ function lifecycle_environment()
     )
 end
 
+# Scripted executables answer the release probe before their scripted failure.
+scripted_release(
+    release="3.3a",
+) = "#!/bin/sh\nif [ \"\$1\" = -V ]; then echo 'tmux $release'; exit 0; fi\n"
+
 @testset "owned server lifecycle" begin
     tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
     owned = LibTmux.open_server(; tmux, env=lifecycle_environment())
@@ -121,7 +126,10 @@ end
             contains_environment = occursin("owned-environment-marker", diagnostic)
             @test !contains_environment
             executable = joinpath(parent, "failing-tmux")
-            write(executable, "#!/bin/sh\nprintf 'startup diagnostic' >&2\nexit 7\n")
+            write(
+                executable,
+                scripted_release() * "printf 'startup diagnostic' >&2\nexit 7\n",
+            )
             chmod(executable, 0o700)
             failure = try
                 LibTmux.open_server(tmux=executable, env=lifecycle_environment())
@@ -133,7 +141,7 @@ end
             @test failure.result.stderr == codeunits("startup diagnostic")
             @test readdir(parent) == ["failing-tmux"]
 
-            write(executable, "#!/bin/sh\nprintf '%070000d' 0 >&2\nexit 7\n")
+            write(executable, scripted_release() * "printf '%070000d' 0 >&2\nexit 7\n")
             failure = try
                 LibTmux.open_server(tmux=executable, env=lifecycle_environment())
             catch error
@@ -152,7 +160,8 @@ end
             executable, ready, hold = joinpath.(parent, ("waiting-tmux", "ready", "hold"))
             write(
                 executable,
-                "#!/bin/sh\nprintf '%s\\n' \"\$\$\" >\"\$LIBTMUX_READY\"\nexec /bin/cat \"\$LIBTMUX_HOLD\"\n",
+                scripted_release() *
+                "printf '%s\\n' \"\$\$\" >\"\$LIBTMUX_READY\"\nexec /bin/cat \"\$LIBTMUX_HOLD\"\n",
             )
             chmod(executable, 0o700)
             run(`mkfifo $hold`)
