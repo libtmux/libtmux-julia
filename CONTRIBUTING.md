@@ -233,7 +233,8 @@ The [example inventory](docs/example-inventory.md) distinguishes exact pure
 doctests, snippets derived from executable programs, and contextual examples.
 After the matrix preparation below, run the contextual examples with its
 resolved project and depot. The runner supplies an owned server, captured rows
-and private files, then checks the results and cleanup:
+and private files, then checks the results and cleanup. A `text` block right
+after a contextual fence must equal what the fence prints:
 
 ```console
 $ env JULIA_DEPOT_PATH="$matrix_stage/depot" julia \
@@ -249,7 +250,9 @@ Check the root and package READMEs. The static mode checks that package
 headings link their directories, every link and anchor resolves, API links
 name public bindings, public names mentioned in prose are linked, MCP tool
 names link their tool pages, and every `--option` exists in the launcher's
-`--help`. It also runs planted failures with clean controls. It needs the
+`--help`. It also requires Quick start as the first section, a "What it leaves
+out" and a "Support and status" section, and prose blocks of at most 240
+characters. It runs planted failures with clean controls. It needs the
 prepared quality project and no tmux:
 
 ```console

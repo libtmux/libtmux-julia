@@ -95,7 +95,8 @@ function readme_links(text)
 end
 
 function heading_slug(heading)
-    text = replace(heading, r"\[([^\]]*)\]\([^)]*\)" => s"\1")
+    text = replace(heading, r"\[((?:[^\[\]]|\[[^\]]*\])*)\]\([^)]*\)" => s"\1")
+    text = replace(text, r"\[((?:[^\[\]]|\[[^\]]*\])*)\]\[[^\]]*\]" => s"\1")
     text = replace(text, "`" => "")
     text = lowercase(strip(text))
     text = replace(text, r"[^\p{L}\p{N} _-]" => "")
@@ -211,6 +212,72 @@ function package_heading_problems(text, name; root=README_ROOT)
         startswith(url, README_TREE) || continue
         isdir(joinpath(root, url[(length(README_TREE)+1):end])) ||
             push!(problems, "$name: heading link $url names a missing directory")
+    end
+    problems
+end
+
+# A README reads at a glance: prose blocks stay short, Quick start comes
+# first, and the non-goals and support lines have their own sections.
+const README_WALL = 240
+
+# Paragraphs and list items outside code, tables and headings, with the line
+# each one starts on. The contents line is a row of links, so it is skipped.
+function prose_blocks(text)
+    blocks = Tuple{Int,String}[]
+    current = String[]
+    start = 0
+    function finish!()
+        isempty(current) || push!(blocks, (start, join(current, ' ')))
+        empty!(current)
+    end
+    for (number, line) in enumerate(split(resolved_prose(text), '\n'; keepempty=true))
+        stripped = strip(line)
+        if isempty(stripped) ||
+           startswith(stripped, '|') ||
+           startswith(stripped, '<') ||
+           occursin(r"^#{1,6} ", stripped)
+            finish!()
+            continue
+        end
+        item = match(r"^(?:[-*]|\d+\.) (.*)$", stripped)
+        if item !== nothing
+            finish!()
+            start = number
+            push!(current, String(item.captures[1]))
+            continue
+        end
+        isempty(current) && (start = number)
+        push!(current, String(stripped))
+    end
+    finish!()
+    [block for block in blocks if !startswith(block[2], "**Contents**")]
+end
+
+function rendered_length(block)
+    text = replace(block, r"\[((?:[^\[\]]|\[[^\]]*\])+)\]\([^)]*\)" => s"\1")
+    length(replace(text, "`" => ""))
+end
+
+function wall_problems(text, name)
+    [
+        "$name:$number: a prose block of $(rendered_length(block)) characters exceeds $README_WALL"
+        for (number, block) in prose_blocks(text) if rendered_length(block) > README_WALL
+    ]
+end
+
+function structure_problems(text, name)
+    sections = String[
+        strip(found.captures[1]) for found in eachmatch(r"^## (.+)$"m, blank_fences(text))
+    ]
+    problems = String[]
+    if !isempty(sections) && first(sections) != "Quick start"
+        push!(
+            problems,
+            "$name: the first section is \"$(first(sections))\"; it must be Quick start",
+        )
+    end
+    for required in ("What it leaves out", "Support and status")
+        required in sections || push!(problems, "$name: no \"$required\" section")
     end
     problems
 end
@@ -475,6 +542,8 @@ function static_problems(name, text, tools, index, helps; root=README_ROOT)
     append!(problems, tool_table_problems(text, name, tools))
     append!(problems, marker_problems(text, name))
     append!(problems, flag_problems(text, name, helps))
+    append!(problems, wall_problems(text, name))
+    append!(problems, structure_problems(text, name))
     name == "README.md" && append!(problems, package_heading_problems(text, name; root))
     name == "packages/LibTmuxMCP/README.md" &&
         isempty(tool_rows(text)) &&
@@ -1123,6 +1192,34 @@ function self_test()
         )
     end
 
+    wall = "Sentence one is here. " ^ 14
+    expect_problem("a wall of prose", wall_problems(wall, "t.md"), "exceeds")
+    expect_problem("a wall in a list item", wall_problems("- $wall\n", "t.md"), "exceeds")
+    expect_clean("short prose", wall_problems("Sentence one is here. " ^ 5, "t.md"))
+    expect_clean(
+        "link targets are not prose",
+        wall_problems("[a](https://example.com/" * "x" ^ 300 * ")\n", "t.md"),
+    )
+    expect_clean("a wall inside a code block", wall_problems("```\n$wall\n```\n", "t.md"))
+    expect_clean("a contents line", wall_problems("**Contents** — $wall\n", "t.md"))
+    sections = "## Quick start\n\n## What it leaves out\n\n## Support and status\n"
+    expect_clean("ordered sections", structure_problems(sections, "t.md"))
+    expect_problem(
+        "Quick start second",
+        structure_problems("## Install\n\n" * sections, "t.md"),
+        "must be Quick start",
+    )
+    expect_problem(
+        "no non-goals",
+        structure_problems("## Quick start\n\n## Support and status\n", "t.md"),
+        "What it leaves out",
+    )
+    expect_problem(
+        "no support",
+        structure_problems("## Quick start\n\n## What it leaves out\n", "t.md"),
+        "Support and status",
+    )
+
     step = ReadmeStep("x", ReadmeFence("console", "\$ x\n", 1, nothing), "valid\n")
     @assert output_problem("x", "valid\n", "valid\n") === nothing
     @assert output_problem("x", "valid\n", "invalid\n") !== nothing
@@ -1130,6 +1227,10 @@ function self_test()
     @assert heading_slug("[LibTmux](https://x.test): the core library") ==
             "libtmux-the-core-library"
     @assert heading_slug("Install v0.1.0-alpha.1") == "install-v010-alpha1"
+    @assert heading_slug("[`snapshot`][snapshot]: what tmux has now") ==
+            "snapshot-what-tmux-has-now"
+    @assert heading_slug("[`LibTmux`](https://x.test): the core library") ==
+            "libtmux-the-core-library"
     @assert setup_reason("git clone x", "README.md") !== nothing
     @assert setup_reason("bin/libtmux-mcp --help", "README.md") === nothing
     println("PASS planted README failures are reported and clean controls stay clean")
