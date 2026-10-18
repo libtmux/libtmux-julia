@@ -206,16 +206,16 @@ function _control_stop!(connection::ControlConnection, reason::Symbol)
         true
     end
     stop || return
-    auxiliary = lock(connection.lock) do
-        connection.closing_requested || !isempty(connection.signals) ? nothing :
-        connection.cleanup
-    end
-    auxiliary === nothing || _control_stop!(auxiliary, reason)
     try
         process_running(connection.process) && kill(connection.process, Base.SIGTERM)
     catch error
         error isa Base.IOError || rethrow()
     end
+    auxiliary = lock(connection.lock) do
+        connection.closing_requested || !isempty(connection.signals) ? nothing :
+        connection.cleanup
+    end
+    auxiliary === nothing || _control_stop!(auxiliary, reason)
     _close_owned(connection.input)
     nothing
 end

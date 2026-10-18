@@ -185,6 +185,42 @@
             close(connection)
             @test run_command(server, "has-session", "-t", string(session.id)).exitcode == 0
 
+            # Outer tier: hold the auxiliary lock through primary retirement.
+            @testset "primary stop does not wait for the auxiliary lock" begin
+                contended = LibTmux.open_control(server, session)
+                stopper = nothing
+                try
+                    lock(contended.cleanup.lock) do
+                        stopper = Threads.@spawn LibTmux._control_stop!(
+                            contended,
+                            :closed_by_caller,
+                        )
+                        wait(contended.process)
+                        @test contended.process.termsignal != Base.SIGKILL
+                        @test !istaskdone(stopper)
+                    end
+                finally
+                    try
+                        stopper === nothing || fetch(stopper)
+                    finally
+                        close(contended)
+                    end
+                end
+                @test process_exited(contended.cleanup.process)
+                @test all(
+                    istaskdone,
+                    (
+                        contended.workers...,
+                        contended.cleanup.workers...,
+                        contended.supervisor,
+                        contended.cleanup.supervisor,
+                        contended.cleanup_worker,
+                        contended.stop_timer_task,
+                        contended.cleanup.stop_timer_task,
+                    ),
+                )
+            end
+
             closing = LibTmux.open_control(server, session; capacity=1)
             signal = LibTmux.control_signal(closing)
             blocked = Threads.@spawn try
