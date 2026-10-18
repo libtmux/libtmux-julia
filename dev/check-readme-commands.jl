@@ -565,15 +565,9 @@ end
 
 function sandbox_close(box::ReadmeSandbox)
     for socket in sandbox_sockets(box)
-        run(
-            ignorestatus(
-                pipeline(
-                    setenv(`$(box.tmux) -S $socket kill-server`, box.environment);
-                    stdout=devnull,
-                    stderr=devnull,
-                ),
-            ),
-        )
+        # Julia 1.10 defines ignorestatus only for commands, not redirections.
+        kill = ignorestatus(setenv(`$(box.tmux) -S $socket kill-server`, box.environment))
+        run(pipeline(kill; stdout=devnull, stderr=devnull))
     end
     rm(box.root; recursive=true, force=true)
 end
