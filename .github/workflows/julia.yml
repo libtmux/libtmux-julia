@@ -16,10 +16,11 @@ on:
         type: choice
         default: Linux-x86_64-julia1.13.1-tmux3.7c-t4-all
         options:
-          - Linux-x86_64-julia1.10.0-tmux3.2a-t1-all
-          - Linux-x86_64-julia1.10.0-tmux3.2a-t4-all
+          - Linux-x86_64-julia1.10.0-tmux3.3a-t1-all
+          - Linux-x86_64-julia1.10.0-tmux3.3a-t4-all
           - Linux-x86_64-julia1.13.1-tmux3.7c-t1-all
           - Linux-x86_64-julia1.13.1-tmux3.7c-t4-all
+          - Linux-x86_64-julia1.13.1-tmux3.8-t1-all
           - Darwin-arm64-julia1.13.1-tmux3.7c-t1-all
           - Darwin-x86_64-julia1.13.1-tmux3.7c-t1-all
 

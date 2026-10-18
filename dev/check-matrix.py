@@ -236,11 +236,6 @@ def signal_group(process, number):
     except ProcessLookupError:
         # Exit may win the race between the waiter deadline and signal delivery.
         pass
-    except PermissionError:
-        # macOS refuses to signal a group whose leader has exited; the leader
-        # is reaped by the waiter either way.
-        if sys.platform != "darwin":
-            raise
 
 
 class _DarwinBSDInfo(ctypes.Structure):
@@ -2505,11 +2500,15 @@ with (directory / f"events-{birth}.jsonl").open("w") as journal:
             assert snapshots and all(item["exporter"]["direct_child_reaped"] for item in snapshots)
             partial_reports = [json.loads((Path(item["artifact_directory"]) / "diagnostics.json").read_text())
                                for item in snapshots if item["artifact_directory"]]
-            assert any(report["test_status"] == "FAIL" for report in partial_reports)
+            assert partial_reports
             for report in partial_reports:
                 assert report["snapshot_kind"] == "LIVE_PREFIX" and report["coverage_status"] == "PARTIAL"
                 assert report["test_status"] != "PASS"
-            failure = next(report for report in partial_reports if report["test_status"] == "FAIL")
+            if mode == "hard":
+                failure = next(report for report in partial_reports if report["test_status"] == "FAIL")
+            else:
+                failure = json.loads((Path(prefix["diagnostics_directory"]) / "public" / "diagnostics.json").read_text())
+                assert failure["test_status"] == "FAIL"
             assert failure["processes"][0]["assertion_problems"][0]["detail"] == "expected 1; observed 2"
         consumer_program = r'''
 import json, os, pathlib, subprocess, sys

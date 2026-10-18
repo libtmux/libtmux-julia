@@ -686,10 +686,10 @@ installed launcher checks exceed these limits. Passing correctness checks
 do not waive the timing requirement.
 
 The current runnable tiers include unit checks, owned-tmux integration,
-forced-cleanup cases, generated criteria and external imports. Four CI product
-cells cover quality, example discovery and compatibility at their listed
-checkpoints. Benchmark baselines and an independent guide walkthrough remain
-open. Focused passing checks do not establish support outside recorded cells.
+forced-cleanup cases, generated criteria and external imports. Linux CI covers
+the floor/current toolchains at one and four threads, plus tmux 3.8 at one
+thread. Benchmark baselines and an independent guide walkthrough remain open.
+Focused passing checks do not establish support outside recorded cells.
 
 Keep network access, installs, production builds, browsers, sleeps, and broad
 corpus scans out of the inner and mid loops. Replace polling delays with
