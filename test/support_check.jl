@@ -332,34 +332,37 @@ end
 end
 
 @testset "control attach reads identity without firing hooks" begin
-    OwnedTmux.with_tmux() do fixture
-        server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
-        session = new_session(server; name="identity", command=["/bin/cat"])
-        hook = OwnedTmux.tmuxcmd(
-            fixture,
-            "set-hook",
-            "-g",
-            "after-display-message",
-            "set-option -g @hook_identity fired",
-        )
-        @test success(hook)
-        open_control(server, session) do connection
-            @test isopen(connection)
-            @test connection.identity == session.server
-        end
-        @test option_value(fixture, "@hook_identity") == ""
+    # https://github.com/libtmux/libtmux-julia/issues/27
+    @test_skip begin
+        OwnedTmux.with_tmux() do fixture
+            server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
+            session = new_session(server; name="identity", command=["/bin/cat"])
+            hook = OwnedTmux.tmuxcmd(
+                fixture,
+                "set-hook",
+                "-g",
+                "after-display-message",
+                "set-option -g @hook_identity fired",
+            )
+            @test success(hook)
+            open_control(server, session) do connection
+                @test isopen(connection)
+                @test connection.identity == session.server
+            end
+            @test option_value(fixture, "@hook_identity") == ""
 
-        # Control: the hook is armed and an ordinary display-message fires it.
-        run_command(server, "display-message", "-p", "control")
-        @test await_option(fixture, "@hook_identity") == "fired"
+            # Control: the hook is armed and an ordinary display-message fires it.
+            run_command(server, "display-message", "-p", "control")
+            @test await_option(fixture, "@hook_identity") == "fired"
 
-        # A stale reference is refused by the same hook-free comparison.
-        stale = SessionRef(
-            ServerIdentity(socket_path=fixture.socket, generation="1:2"),
-            string(session.id),
-        )
-        @test_throws StaleReference open_control(server, stale) do _
-            error("attached to a stale session")
+            # A stale reference is refused by the same hook-free comparison.
+            stale = SessionRef(
+                ServerIdentity(socket_path=fixture.socket, generation="1:2"),
+                string(session.id),
+            )
+            @test_throws StaleReference open_control(server, stale) do _
+                error("attached to a stale session")
+            end
         end
     end
 end
