@@ -68,6 +68,27 @@ const DOC_SNIPPETS = Dict(
         source="",
         note="Task-based captures and scoped control cleanup",
     ),
+    ("README.md", 4) => (
+        kind=:executable,
+        gate=:doctest,
+        fingerprint="ac18abfbc26dc39ce9b7295bc9da9e1c2d03f6a69f41ccdc4eaaf2aa8a6ddaab",
+        source="",
+        note="Pure criterion encoding without a live daemon",
+    ),
+    ("README.md", 5) => (
+        kind=:executable,
+        gate=:doctest,
+        fingerprint="f2df9f11edd575824c8619e63e96bfdf40d8f0d1f160d367ddd3fd9e8cbcdf99",
+        source="",
+        note="JSON 1.9 criteria codec round trip",
+    ),
+    ("README.md", 6) => (
+        kind=:executable,
+        gate=:context,
+        fingerprint="92a37440be5fd9547cfb6cd7f9b17f6854653454994504df69e486d7aad6e10a",
+        source="",
+        note="Retained snapshot projected through Tables 1.14",
+    ),
     ("docs/criteria-wire.md", 1) => (
         kind=:executable,
         gate=:doctest,
@@ -349,10 +370,7 @@ function inventory_text(entries)
         println(output, "| [$path](../$path) | $(DOC_PROGRAMS[path]) |")
     end
     println(output, "\n## Runtime boundaries\n")
-    println(
-        output,
-        "`dev/check-doc-examples.jl doctest` runs the four pure fences exactly as",
-    )
+    println(output, "`dev/check-doc-examples.jl doctest` runs the pure fences exactly as")
     println(
         output,
         "shipped through Documenter, with a private copy of the workspace fixture.",
@@ -473,6 +491,10 @@ function run_contextual_snippets(entries)
                 screens = execute(("README.md", 3))
                 @assert length(screens) == 2 &&
                         all(screen -> isempty(strip(screen)), screens)
+                execute(("README.md", 6))
+                columns = Base.invokelatest(getproperty, workspace, :columns)
+                @assert columns.current_command == ["cat", "cat"]
+                @assert columns.id == [pane.id for pane in LibTmux.panes(captured)]
                 @assert readdir(directory) == ["tmux"]
             end
         end

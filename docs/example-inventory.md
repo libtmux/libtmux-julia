@@ -9,6 +9,9 @@ and program links. It does not establish runtime correctness.
 | [README.md](../README.md) (1) | executable | owned-context runner | Private server, captured screen and retained snapshot |
 | [README.md](../README.md) (2) | executable | owned-context runner | Captured predicates without a live daemon |
 | [README.md](../README.md) (3) | executable | owned-context runner | Task-based captures and scoped control cleanup |
+| [README.md](../README.md) (4) | executable | snippet doctests | Pure criterion encoding without a live daemon |
+| [README.md](../README.md) (5) | executable | snippet doctests | JSON 1.9 criteria codec round trip |
+| [README.md](../README.md) (6) | executable | owned-context runner | Retained snapshot projected through Tables 1.14 |
 | [docs/criteria-wire.md](../docs/criteria-wire.md) (1) | executable | snippet doctests | Pure criteria wire round trip |
 | [docs/criteria-wire.md](../docs/criteria-wire.md) (2) | executable | snippet doctests | JSON 1.9 criteria codec round trip |
 | [docs/projections.md](../docs/projections.md) (1) | executable | owned-context runner | Owned snapshot passed to pane_rows |
@@ -41,7 +44,7 @@ from this inventory check.
 
 ## Runtime boundaries
 
-`dev/check-doc-examples.jl doctest` runs the four pure fences exactly as
+`dev/check-doc-examples.jl doctest` runs the pure fences exactly as
 shipped through Documenter, with a private copy of the workspace fixture.
 Use the prepared quality project containing Documenter, JSON and both
 consumer packages; dependency resolution stays outside the check.
