@@ -408,7 +408,7 @@ function _close_control_lane(connection::ControlConnection)
     _control_stop!(connection, :closed_by_caller)
     connection.supervisor === nothing || wait(connection.supervisor)
     _control_join_observation(connection.observation)
-    nothing
+    lock(() -> connection.cleanup_error, connection.lock)
 end
 
 function _control_request(
@@ -613,6 +613,7 @@ function _open_control_lane(
     timeout::Real=5.0,
     cancel=nothing,
     capacity::Integer=64,
+    _make_timer=_owned_timer,
 )
     !(capacity isa Bool) && 0 < capacity <= typemax(Int) || throw(
         ArgumentError("control capacity must be a positive representable Int, not Bool"),
@@ -627,13 +628,8 @@ function _open_control_lane(
         throw(CrossServerReference(string(session.id)))
     # The attach cannot start a daemon, so only a live endpoint needs a release
     # check; the handshake below binds the connection to the captured daemon.
-    release = _check_daemon(
-        server,
-        _client_environment(ENV);
-        cancel,
-        timeout=_snapshot_remaining(started, budget),
-        started,
-    )
+    release =
+        _check_daemon(server, _client_environment(ENV); cancel, timeout=budget, started)
     selector =
         server.socket_path === nothing ? ["-L", something(server.socket_name)] :
         ["-S", server.socket_path]
@@ -733,22 +729,24 @@ function _open_control_lane(
                     foreach(_close_owned, (input, output, errors))
                     wait(spawned)
                 end
+                nothing
             else
                 _control_stop!(connection, :setup_failure)
                 _control_supervise(connection)
+                lock(() -> connection.cleanup_error, connection.lock)
             end
-            nothing
         catch error
             error
         end
         cleanup === nothing ? throw(primary) : throw(CompositeException([primary, cleanup]))
     end
-    timer, timer_task = _owned_timer(max(0.0, budget - (time_ns() - started) / 1e9)) do
+    timer, timer_task = _make_timer(max(0.0, budget - (time_ns() - started) / 1e9)) do
         _control_stop!(connection, :open_timeout)
     end
     registration =
         cancel === nothing ? nothing :
         on_cancel(() -> _control_stop!(connection, :open_cancelled), cancel)
+    failures = Any[]
     try
         lock(connection.lock) do
             while connection.startup && connection.state === :opening
@@ -793,18 +791,37 @@ function _open_control_lane(
         end
         connection
     catch error
-        _close_control_lane(connection)
         if error isa ControlConnectionError
-            error.reason === :open_timeout &&
-                throw(DeadlineExceeded(budget, error.sent, nothing))
-            error.reason === :open_cancelled && throw(RequestCancelled(error.sent))
+            if error.reason === :open_timeout
+                error = DeadlineExceeded(budget, error.sent, nothing)
+            elseif error.reason === :open_cancelled
+                error = RequestCancelled(error.sent)
+            end
         end
-        rethrow()
+        push!(failures, error)
     finally
-        close(timer)
-        wait(timer_task)
-        registration === nothing || close(registration)
+        for finalize in (
+            () -> close(timer),
+            () -> wait(timer_task),
+            () -> registration === nothing || close(registration),
+        )
+            try
+                finalize()
+            catch error
+                push!(failures, error)
+            end
+        end
     end
+    if !isempty(failures)
+        cleanup = try
+            _close_control_lane(connection)
+        catch error
+            error
+        end
+        cleanup === nothing || push!(failures, cleanup)
+        length(failures) == 1 ? throw(only(failures)) : throw(CompositeException(failures))
+    end
+    connection
 end
 
 """
@@ -1037,7 +1054,9 @@ end
 
 function Base.close(connection::ControlConnection)
     if connection.cleanup === nothing
-        return _close_control_lane(connection)
+        cleanup = _close_control_lane(connection)
+        cleanup === nothing || throw(cleanup)
+        return nothing
     end
     owner = lock(connection.lock) do
         connection.closing_requested && return false
@@ -1145,10 +1164,17 @@ function open_control(
         isopen(auxiliary) || throw(ControlConnectionError(:cleanup_lane_lost, false))
         primary.cleanup_worker = Threads.@spawn _control_signal_worker(primary)
         primary
-    catch
-        auxiliary === nothing || _close_control_lane(auxiliary)
-        close(primary)
-        rethrow()
+    catch error
+        failures = Any[error]
+        for lane in (auxiliary, primary)
+            lane === nothing && continue
+            try
+                close(lane)
+            catch cleanup
+                push!(failures, cleanup)
+            end
+        end
+        length(failures) == 1 ? rethrow() : throw(CompositeException(failures))
     end
 end
 

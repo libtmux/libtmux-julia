@@ -433,33 +433,93 @@
         end
 
         @testset "opening interruptions retain typed errors" begin
-            mktempdir(; prefix="ltj-control-open-") do directory
-                socket = joinpath(directory, "s")
+            OwnedTmux.with_tmux() do fixture
+                directory = fixture.directory
+                real = Server(socket_path=fixture.socket, tmux=fixture.tmux)
+                session = new_session(real; name="opening", command=["cat"])
                 shim = joinpath(directory, "tmux")
                 write(
                     shim,
-                    "#!/bin/sh\nprintf '%s\\n' \"\$\$\" > \"\$LTJ_CONTROL_OPEN_PID\"\nexec /bin/cat\n",
+                    raw"""#!/bin/sh
+for argument in "$@"; do
+    if [ "$argument" = attach-session ]; then
+        if [ -n "${LTJ_CONTROL_OPEN_FIFO:-}" ]; then trap '' TERM; fi
+        printf '%s\n' "$$" > "$LTJ_CONTROL_OPEN_PID"
+        if [ -n "${LTJ_CONTROL_OPEN_FIFO:-}" ]; then exec /bin/cat "$LTJ_CONTROL_OPEN_FIFO"; fi
+        exec /bin/cat
+    fi
+done
+exec "$LTJ_CONTROL_OPEN_TMUX" "$@"
+""",
                 )
                 chmod(shim, 0o700)
-                identity = ServerIdentity(; socket_path=socket, generation="opening-probe")
-                session = SessionRef(identity, "\$0")
-                server = Server(; socket_path=socket, tmux=shim)
+                server = Server(; socket_path=fixture.socket, tmux=shim)
                 pidfile = joinpath(directory, "deadline-pid")
-                withenv(
-                    "TMUX"=>nothing,
-                    "TMUX_PANE"=>nothing,
-                    "LTJ_CONTROL_OPEN_PID"=>pidfile,
-                ) do
-                    @test_throws DeadlineExceeded open_control(
-                        server,
-                        session;
-                        timeout=0.05,
-                    )
+                reached_attach = Ref(false)
+                function expire_at_attach(callback, _)
+                    monitor = OwnedTmux.FolderMonitor(directory)
+                    watchdog, watchdog_task = LibTmux._owned_timer(0.9) do
+                        close(monitor)
+                    end
+                    try
+                        while !ispath(pidfile) || filesize(pidfile) == 0
+                            wait(monitor)
+                        end
+                        reached_attach[] = true
+                    catch error
+                        error isa EOFError || rethrow()
+                    finally
+                        close(watchdog)
+                        wait(watchdog_task)
+                        close(monitor)
+                    end
+                    LibTmux._owned_timer(callback, 0)
                 end
-                pid = parse(Int, strip(read(pidfile, String)))
-                # ESRCH is 3 on the supported Linux/macOS hosts; EPERM is not retirement.
-                @test ccall(:kill, Cint, (Cint, Cint), pid, 0) == -1 &&
-                      Base.Libc.errno() == 3
+                fifo = joinpath(directory, "held-open")
+                run(`mkfifo $fifo`)
+                # Outer fault control: the FIFO client requires the 900 ms stop escalation.
+                for forced_stop in (false, true)
+                    pidfile =
+                        joinpath(directory, forced_stop ? "forced-pid" : "deadline-pid")
+                    reached_attach[] = false
+                    withenv(
+                        "TMUX"=>nothing,
+                        "TMUX_PANE"=>nothing,
+                        "LTJ_CONTROL_OPEN_PID"=>pidfile,
+                        "LTJ_CONTROL_OPEN_TMUX"=>fixture.tmux,
+                        "LTJ_CONTROL_OPEN_FIFO"=>(forced_stop ? fifo : nothing),
+                    ) do
+                        # Expire only after the owned client reaches attach.
+                        outcome = try
+                            LibTmux._open_control_lane(
+                                server,
+                                session;
+                                _make_timer=expire_at_attach,
+                            )
+                        catch error
+                            error
+                        end
+                        if forced_stop
+                            @test outcome isa CompositeException
+                            if outcome isa CompositeException
+                                @test first(outcome.exceptions) isa DeadlineExceeded
+                                @test any(
+                                    error ->
+                                        error isa LibTmux.ControlCleanupError &&
+                                        error.reason === :client_stop_timeout,
+                                    outcome.exceptions,
+                                )
+                            end
+                        else
+                            @test outcome isa DeadlineExceeded && !outcome.sent
+                        end
+                    end
+                    @test reached_attach[]
+                    pid = parse(Int, strip(read(pidfile, String)))
+                    # ESRCH is 3 on Linux/macOS; EPERM is not retirement.
+                    @test ccall(:kill, Cint, (Cint, Cint), pid, 0) == -1 &&
+                          Base.Libc.errno() == 3
+                end
 
                 pidfile = joinpath(directory, "cancel-pid")
                 monitor = OwnedTmux.FolderMonitor(directory)
@@ -478,6 +538,7 @@
                         "TMUX"=>nothing,
                         "TMUX_PANE"=>nothing,
                         "LTJ_CONTROL_OPEN_PID"=>pidfile,
+                        "LTJ_CONTROL_OPEN_TMUX"=>fixture.tmux,
                     ) do
                         @test_throws RequestCancelled open_control(
                             server,
@@ -496,7 +557,11 @@
                     close(monitor)
                     wait(watcher)
                 end
-                @test !ispath(socket)
+                @test isempty(
+                    run_command(real, "list-clients", "-F", "#{client_pid}").stdout,
+                )
+                @test run_command(real, "has-session", "-t", string(session.id)).exitcode ==
+                      0
             end
         end
     end
