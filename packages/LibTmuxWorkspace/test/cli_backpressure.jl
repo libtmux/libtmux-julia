@@ -35,18 +35,22 @@ import JSON
         proc = nothing
         timer = timer_task = nothing
         forced = Ref(false)
+        first_byte = Ref{Union{Nothing,UInt8}}(nothing)
+        errors_path = joinpath(directory, "stderr")
         try
-            proc = run(
-                pipeline(
-                    ignorestatus(Cmd([launcher, "plan", path, "--output", "json"]));
-                    stdout=output,
-                    stderr=devnull,
-                );
-                wait=false,
-            )
+            proc = open(errors_path, "w") do errors
+                run(
+                    pipeline(
+                        ignorestatus(Cmd([launcher, "plan", path, "--output", "json"]));
+                        stdout=output,
+                        stderr=errors,
+                    );
+                    wait=false,
+                )
+            end
             close(output.in)
             @assert output.out.buffer.maxsize == 1
-            @test read(output.out, UInt8) == UInt8('{')
+            @test (first_byte[] = read(output.out, UInt8)) == UInt8('{')
             timer, timer_task = LibTmuxWorkspace._owned_timer(0.9) do
                 if process_running(proc)
                     forced[] = true
@@ -54,9 +58,27 @@ import JSON
                 end
             end
             wait(proc)
+            if first_byte[] != UInt8('{') || (proc.exitcode, proc.termsignal) != (3, 0)
+                println(
+                    stderr,
+                    "workspace child exit=",
+                    proc.exitcode,
+                    " signal=",
+                    proc.termsignal,
+                )
+                println(
+                    stderr,
+                    "child stderr: first 64 KiB of ",
+                    filesize(errors_path),
+                    " bytes",
+                )
+                open(errors_path) do errors
+                    write(stderr, read(errors, 64 * 1024))
+                end
+            end
             @assert output.out.buffer.maxsize == 1 && bytesavailable(output.out) <= 1
             @test !forced[]
-            @test proc.exitcode == 3
+            @test (proc.exitcode, proc.termsignal) == (3, 0)
             output.out.buffer.maxsize = read_maximum
             @test length(read(output.out)) < 512 * 1575
         finally

@@ -703,6 +703,7 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                     "wait_for_text",
                     Dict("text"=>"not-emitted", "timeoutSeconds"=>0.1),
                 )
+                elapsed = (time_ns() - started) / 1e9
                 deadline_result =
                     limited.is_error &&
                     limited.structured_content["error"]["code"] == "deadline"
@@ -710,7 +711,9 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                     println("unexpected wait result: ", limited.structured_content)
                 @test deadline_result
                 @test limited.structured_content["error"]["effects"] == "possible"
-                @test (time_ns() - started) / 1e9 < 0.9
+                elapsed < 0.9 ||
+                    println(stderr, "MCP literal deadline call_seconds=", elapsed)
+                @test elapsed < 0.9
                 @test isempty(clients(snapshot(server)))
                 entered = Channel{Any}(2)
                 token = CancellationToken()
