@@ -252,8 +252,10 @@ name public bindings, public names mentioned in prose are linked, MCP tool
 names link their tool pages, and every `--option` exists in the launcher's
 `--help`. It also requires Quick start as the first section, a "What it leaves
 out" and a "Support and status" section, and prose blocks of at most 240
-characters. It runs planted failures with clean controls. It needs the
-prepared quality project and no tmux:
+characters. A README is read outside GitHub too, so a link to a file of this
+repository must be an absolute GitHub `blob` or `tree` URL for a path that
+exists, never a relative link. It runs planted failures with clean controls. It
+needs the prepared quality project and no tmux:
 
 ```console
 $ env JULIA_DEPOT_PATH="$matrix_stage/depot" julia \
@@ -284,7 +286,8 @@ $ env JULIA_DEPOT_PATH="$matrix_stage/depot" julia \
 Neither mode fetches a URL. After editing links, run the `links` mode. It
 needs the network and is not part of the matrix. It requires a 200 response
 without a redirect for each URL and first checks that a page the site does not
-publish does not return 200:
+publish does not return 200. A link to a file that a pull request adds returns
+404 until the pull request merges:
 
 ```console
 $ julia \

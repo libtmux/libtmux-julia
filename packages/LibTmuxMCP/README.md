@@ -210,7 +210,7 @@ $ claude mcp add tmux-batch -- \
 
 If an item fails, earlier effects stay. The result reports its one-based
 `failedIndex` and sets `atomic: false`.
-[Batch results](docs/contracts.md#batches) covers truncated output.
+[Batch results][mcp-docs-contracts-md-batches] covers truncated output.
 
 ### [`create_session`][tool_create_session]: a session the server owns
 
@@ -296,7 +296,7 @@ julia> main(["--bogus"]; output=IOBuffer(), err=IOBuffer())
 - **MCP tasks and HTTP.** The server speaks stdio and does not advertise tasks
   or HTTP transport.
 
-[The full rules](docs/contracts.md) cover targets, batches, waiting and
+[The full rules][mcp-docs-contracts-md] cover targets, batches, waiting and
 ownership.
 
 ## Support and status
@@ -313,16 +313,16 @@ ownership.
 
 | | |
 | --- | --- |
-| [Contracts](docs/contracts.md) | Targets, batches, waiting and ownership |
-| [Adapter ownership](docs/adapter.md) | Protocol framing and resource limits |
+| [Contracts](https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/contracts.md) | Targets, batches, waiting and ownership |
+| [Adapter ownership](https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/adapter.md) | Protocol framing and resource limits |
 | [Tool pages](https://libtmux.org/en/julia/latest/mcp/tools/) | Input and output of every tool |
 | [API reference](https://libtmux.org/en/julia/latest/mcp/reference/) | Every public binding, one page each |
 | [Guide](https://libtmux.org/en/julia/latest/mcp/source-guide/) | Connect a client, step by step |
-| [Root README](../../README.md) | The core library and the other packages |
+| [Root README](https://github.com/libtmux/libtmux-julia/blob/master/README.md) | The core library and the other packages |
 
 ## License
 
-[MIT](LICENSE).
+[MIT][mcp-license].
 
 [libtmux]: https://libtmux.org/en/julia/latest/reference/libtmux/
 [server]: https://libtmux.org/en/julia/latest/reference/libtmux-server/
@@ -342,3 +342,6 @@ ownership.
 [tool_run_operations]: https://libtmux.org/en/julia/latest/mcp/tools/run_operations/
 [tool_create_session]: https://libtmux.org/en/julia/latest/mcp/tools/create_session/
 [tool_teardown_session]: https://libtmux.org/en/julia/latest/mcp/tools/teardown_session/
+[mcp-docs-contracts-md]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/contracts.md
+[mcp-docs-contracts-md-batches]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/contracts.md#batches
+[mcp-license]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/LICENSE

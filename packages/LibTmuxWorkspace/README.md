@@ -154,8 +154,8 @@ the format [tmuxp](https://tmuxp.git-pull.com/) reads, in a documented subset.
 - **Unsupported.** Python plugins, file imports, `sleep` keys and hooks produce
   `:unsupported` diagnostics.
 
-[Every rule](docs/contracts.md#version-1-configuration) covers pane shorthand,
-`enter`, history suppression, options and window indices.
+[Every rule][ws-docs-contracts-md-version-1-configuration] covers pane
+shorthand, `enter`, history suppression, options and window indices.
 
 ## Check a file before it touches tmux
 
@@ -178,7 +178,7 @@ julia> isempty(result.steps)
 false
 ```
 
-[`examples/workspace.yaml`](examples/workspace.yaml) covers command ordering,
+[`examples/workspace.yaml`][ws-examples-workspace-yaml] covers command ordering,
 blank panes, layout, focus and a command without Enter. `read_config` is the
 only call that reads a file.
 
@@ -251,7 +251,7 @@ println(result.session)
   marker command in it.
 - Sent commands cannot be rolled back.
 
-[Readiness, cancellation and events](docs/contracts.md#applying-a-plan) cover
+[Readiness, cancellation and events][ws-docs-contracts-md-applying-a-plan] cover
 the deadline, `before_script` and the handshake.
 [`run_before_script`][run_before_script] runs one script on its own.
 
@@ -374,7 +374,7 @@ julia> main(["bogus"]; out=IOBuffer(), err=IOBuffer())
 2
 ```
 
-[Output bounds, Ctrl-C and cleanup](docs/contracts.md#the-command-line)
+[Output bounds, Ctrl-C and cleanup][ws-docs-contracts-md-the-command-line]
 describe the installed launcher.
 
 ## Run the programs in this checkout
@@ -400,7 +400,7 @@ $ julia \
     -e 'using Pkg; Pkg.develop([PackageSpec(path="../.."), PackageSpec(path=".")]); Pkg.precompile()'
 ```
 
-The [dry-plan program](examples/plan.jl) plans the shipped configuration:
+The [dry-plan program][ws-examples-plan-jl] plans the shipped configuration:
 
 ```console
 $ julia \
@@ -409,9 +409,9 @@ $ julia \
     examples/plan.jl
 ```
 
-[`examples/owned_load.jl`](examples/owned_load.jl) creates an isolated server,
-loads two panes, freezes the supported subset, then removes its owned server.
-It uses only public core and workspace APIs:
+[`examples/owned_load.jl`][ws-examples-owned_load-jl] creates an isolated
+server, loads two panes, freezes the supported subset, then removes its owned
+server. It uses only public core and workspace APIs:
 
 ```console
 $ julia \
@@ -421,7 +421,7 @@ $ julia \
 ```
 
 The package tests, and the checks they run, are in
-[Working in this checkout](docs/contracts.md#working-in-this-checkout).
+[Working in this checkout][ws-docs-contracts-md-working-in-this-checkout].
 
 ## Handle errors and limits
 
@@ -452,24 +452,24 @@ and `:limit`. Syntax errors name the document root and give no line.
 [`validate`][validate] and [`expand`][expand] take it as `limits`. Parsers
 reject duplicate keys before a key can overwrite another.
 
-[Ownership, limits and errors](docs/contracts.md#ownership-limits-and-errors)
+[Ownership, limits and errors][ws-docs-contracts-md-ownership-limits-and-errors]
 lists the defaults and what `validate` copies.
 
 ## What it leaves out
 
 - **Python plugins and builders.** They produce `:unsupported` diagnostics, as
   do file imports, `sleep` keys and arbitrary hooks.
-  [The subset](docs/contracts.md#version-1-configuration) also rejects YAML
+  [The subset][ws-docs-contracts-md-version-1-configuration] also rejects YAML
   aliases, anchors and merge keys.
 - **Full tmuxp compatibility.** The package imports a subset with stricter
   duplicate, type, version and focus checks.
-  [Relation to tmuxp](docs/contracts.md#relation-to-tmuxp) names the sources.
+  [Relation to tmuxp][ws-docs-contracts-md-relation-to-tmuxp] names the sources.
 - **A default server.** `load` and `freeze` need a socket that you name.
 - **Undoing shell effects.** Sent commands and scripts stay done. Rollback
-  removes only [resources it proved it created](docs/contracts.md#rollback).
+  removes only [resources it proved it created][ws-docs-contracts-md-rollback].
 - **An exact freeze.** [`freeze`][freeze] keeps names, indices, layouts,
-  directories and focus. [Everything else](docs/contracts.md#freezing-a-session)
-  is omitted.
+  directories and focus.
+  [Everything else][ws-docs-contracts-md-freezing-a-session] is omitted.
 
 ## Support and status
 
@@ -489,15 +489,15 @@ lists the defaults and what `validate` copies.
 
 | | |
 | --- | --- |
-| [Contracts](docs/contracts.md) | Every rule behind the file format, loading, freezing and the launcher |
+| [Contracts](https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/docs/contracts.md) | Every rule behind the file format, loading, freezing and the launcher |
 | [API reference](https://libtmux.org/en/julia/latest/workspace/reference/) | Every public binding, one page each |
 | [Guide](https://libtmux.org/en/julia/latest/workspace/source-guide/) | Load a workspace, step by step |
-| [Root README](../../README.md) | The core library and the other packages |
-| [Changelog](CHANGELOG.md) | What each release changed |
+| [Root README](https://github.com/libtmux/libtmux-julia/blob/master/README.md) | The core library and the other packages |
+| [Changelog](https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/CHANGELOG.md) | What each release changed |
 
 ## License
 
-[MIT](LICENSE).
+[MIT][ws-license].
 
 [libtmux]: https://libtmux.org/en/julia/latest/reference/libtmux/
 [validate]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-validate/
@@ -515,3 +515,15 @@ lists the defaults and what `validate` copies.
 [configlimits]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-configlimits/
 [configerror]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-workspaceconfigerror/
 [planstep]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-planstep/
+[ws-docs-contracts-md-applying-a-plan]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/docs/contracts.md#applying-a-plan
+[ws-docs-contracts-md-freezing-a-session]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/docs/contracts.md#freezing-a-session
+[ws-docs-contracts-md-ownership-limits-and-errors]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/docs/contracts.md#ownership-limits-and-errors
+[ws-docs-contracts-md-relation-to-tmuxp]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/docs/contracts.md#relation-to-tmuxp
+[ws-docs-contracts-md-rollback]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/docs/contracts.md#rollback
+[ws-docs-contracts-md-the-command-line]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/docs/contracts.md#the-command-line
+[ws-docs-contracts-md-version-1-configuration]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/docs/contracts.md#version-1-configuration
+[ws-docs-contracts-md-working-in-this-checkout]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/docs/contracts.md#working-in-this-checkout
+[ws-examples-owned_load-jl]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/examples/owned_load.jl
+[ws-examples-plan-jl]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/examples/plan.jl
+[ws-examples-workspace-yaml]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/examples/workspace.yaml
+[ws-license]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/LICENSE

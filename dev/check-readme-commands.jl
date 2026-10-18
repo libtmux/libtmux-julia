@@ -7,6 +7,7 @@ const README_ROOT = dirname(@__DIR__)
 const README_FILES =
     ("README.md", "packages/LibTmuxWorkspace/README.md", "packages/LibTmuxMCP/README.md")
 const README_TREE = "https://github.com/libtmux/libtmux-julia/tree/master/"
+const README_BLOB = "https://github.com/libtmux/libtmux-julia/blob/master/"
 const README_SITE = "https://libtmux.org/en/julia/latest/"
 const README_DEADLINE = 180.0
 # Directories whose headings in the root README must link them, and a file
@@ -189,6 +190,44 @@ function link_target_problems(text, name; root=README_ROOT)
         path = first(split(url, '#'; limit=2))
         ispath(joinpath(directory, path)) ||
             push!(problems, "$name:$(link.line): $url names a missing path")
+    end
+    problems
+end
+
+# A README is also read outside GitHub, in an exported package or on a registry
+# page, where a relative link breaks. A link to a file of this repository is an
+# absolute GitHub URL that names an existing path: blob for a file, tree for a
+# directory. The new files of a pull request 404 there until it merges.
+function repo_link_problems(text, name; root=README_ROOT)
+    problems = String[]
+    for link in readme_links(text)
+        url = link.url
+        (startswith(url, "#") || startswith(url, "mailto:")) && continue
+        if !startswith(url, "http")
+            push!(
+                problems,
+                "$name:$(link.line): $url is a relative repository link; use $(README_BLOB)PATH",
+            )
+            continue
+        end
+        for (prefix, kind) in ((README_BLOB, "blob"), (README_TREE, "tree"))
+            startswith(url, prefix) || continue
+            path = String(first(split(url[(length(prefix)+1):end], '#'; limit=2)))
+            target = joinpath(root, path)
+            if !ispath(target)
+                push!(problems, "$name:$(link.line): $url names a missing path")
+            elseif kind == "blob" && isdir(target)
+                push!(
+                    problems,
+                    "$name:$(link.line): $url names a directory; use $(README_TREE)$path",
+                )
+            elseif kind == "tree" && !isdir(target)
+                push!(
+                    problems,
+                    "$name:$(link.line): $url names a file; use $(README_BLOB)$path",
+                )
+            end
+        end
     end
     problems
 end
@@ -536,6 +575,7 @@ function static_problems(name, text, tools, index, helps; root=README_ROOT)
     append!(problems, console_problems(text, name))
     append!(problems, fence_link_problems(text, name))
     append!(problems, link_target_problems(text, name; root))
+    append!(problems, repo_link_problems(text, name; root))
     append!(problems, api_link_problems(text, name, index, tools))
     append!(problems, mentioned_api_problems(text, name, index, tools))
     append!(problems, tool_link_problems(text, name, tools))
@@ -1167,6 +1207,63 @@ function self_test()
             tools,
         ),
     )
+
+    mktempdir() do directory
+        write(joinpath(directory, "a.md"), "text\n")
+        mkpath(joinpath(directory, "pkg"))
+        blob(path) = "[x]($(README_BLOB)$path)"
+        expect_problem(
+            "relative repository link",
+            repo_link_problems("[x](a.md)\n", "t.md"; root=directory),
+            "relative repository link",
+        )
+        expect_problem(
+            "relative link with an anchor",
+            repo_link_problems("[x](pkg/a.md#top)\n", "t.md"; root=directory),
+            "relative repository link",
+        )
+        expect_problem(
+            "relative reference-style link",
+            repo_link_problems("[x][r]\n\n[r]: a.md\n", "t.md"; root=directory),
+            "relative repository link",
+        )
+        expect_problem(
+            "absolute link to a missing path",
+            repo_link_problems(blob("gone.md") * "\n", "t.md"; root=directory),
+            "names a missing path",
+        )
+        expect_problem(
+            "blob link to a directory",
+            repo_link_problems(blob("pkg") * "\n", "t.md"; root=directory),
+            "names a directory",
+        )
+        expect_problem(
+            "tree link to a file",
+            repo_link_problems("[x]($(README_TREE)a.md)\n", "t.md"; root=directory),
+            "names a file",
+        )
+        expect_problem(
+            "relative link reaches the static check",
+            static_problems(
+                "README.md",
+                "[x](a.md)\n",
+                tools,
+                index,
+                helps;
+                root=directory,
+            ),
+            "relative repository link",
+        )
+        expect_clean(
+            "absolute, anchor and external links",
+            repo_link_problems(
+                blob("a.md#top") *
+                " [y]($(README_TREE)pkg) [z](#top) [w](https://example.com/a.md)\n",
+                "t.md";
+                root=directory,
+            ),
+        )
+    end
 
     mktempdir() do directory
         write(joinpath(directory, "t.md"), "# Title\n")

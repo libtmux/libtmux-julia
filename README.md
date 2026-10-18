@@ -34,7 +34,7 @@ and, through the MCP package, agents that share a terminal.
 [Leaves out](#what-it-leaves-out) · [Support](#support-and-status) ·
 [Documentation](#documentation) ·
 [API reference](https://libtmux.org/en/julia/latest/reference/) ·
-[Field reference](docs/generated/criteria.md)
+[Field reference][repo-docs-generated-criteria-md]
 
 The core uses only Julia standard libraries. Add a companion for MCP or
 workspace configuration:
@@ -42,8 +42,8 @@ workspace configuration:
 | Package | Use it for |
 | --- | --- |
 | [**LibTmux**](#libtmux-the-core-library) | Sessions, windows, panes, snapshots and control connections |
-| [LibTmuxMCP](packages/LibTmuxMCP) | MCP tools to inspect panes, send keys and wait for output |
-| [LibTmuxWorkspace](packages/LibTmuxWorkspace) | Load and freeze tmuxp-style YAML or JSON workspaces |
+| [LibTmuxMCP](https://github.com/libtmux/libtmux-julia/tree/master/packages/LibTmuxMCP) | MCP tools to inspect panes, send keys and wait for output |
+| [LibTmuxWorkspace](https://github.com/libtmux/libtmux-julia/tree/master/packages/LibTmuxWorkspace) | Load and freeze tmuxp-style YAML or JSON workspaces |
 
 ## Quick start
 
@@ -89,8 +89,8 @@ The block calls [`new_session`][new_session], [`split_window`][split_window],
 pane's UTF-8 text, and the panes run `cat`, so their screens start blank.
 
 [`capture_bytes`][capture_bytes] returns the original bytes.
-[`examples/owned_capture.jl`](examples/owned_capture.jl) runs the same flow and
-checks that the server is gone afterwards.
+[`examples/owned_capture.jl`][repo-examples-owned_capture-jl] runs the same
+flow and checks that the server is gone afterwards.
 
 ## Find sessions, windows, and panes
 
@@ -142,14 +142,14 @@ ordered, read-only [`Selection`][selection]. `collect` gives you a vector, and
 [`windowlinks`][windowlinks] and [`paneoccurrences`][paneoccurrences] keep each
 session's context for a window that belongs to several.
 
-Runnable: [`examples/shared_windows.jl`](examples/shared_windows.jl) links one
-window into two sessions and queries both views.
+Runnable: [`examples/shared_windows.jl`][repo-examples-shared_windows-jl]
+links one window into two sessions and queries both views.
 
-[Queries and relations](docs/src/queries.md) ·
-[Filterable fields](docs/generated/criteria.md) ·
-[JSON criteria](docs/criteria-wire.md) ·
-[Tables projections](docs/projections.md). At the Julia prompt, `?PaneWhere`
-and `?capture_pane` show API help.
+[Queries and relations][repo-docs-src-queries-md] ·
+[Filterable fields][repo-docs-generated-criteria-md] ·
+[JSON criteria][repo-docs-criteria-wire-md] ·
+[Tables projections][repo-docs-projections-md]. At the Julia prompt,
+`?PaneWhere` and `?capture_pane` show API help.
 
 ## Choose which server to use
 
@@ -209,7 +209,7 @@ The terminal echoes every key, so the stream carries the text you typed.
 [`decode_text`][decode_text] turns the bytes into a `String`, and
 [`capture_baseline`][capture_baseline] records the screen at a reset point.
 
-Runnable: [`examples/output_stream.jl`](examples/output_stream.jl). It also
+Runnable: [`examples/output_stream.jl`][repo-examples-output_stream-jl]. It also
 reads the cursor with [`observation_cursor`][observation_cursor].
 
 ## Reuse a control connection
@@ -240,8 +240,8 @@ outer block closes the server.
 
 A control client counts as attached in tmux. Connection loss is terminal, and
 cancelling a sent operation does not undo it.
-[Ownership and cancellation](docs/src/ownership.md) and
-[output streams](docs/src/observations.md) cover deadlines and cleanup.
+[Ownership and cancellation][repo-docs-src-ownership-md] and
+[output streams][repo-docs-src-observations-md] cover deadlines and cleanup.
 
 ## Run the example programs
 
@@ -249,10 +249,10 @@ Each program creates and cleans up its own tmux server:
 
 | Task | Program |
 | --- | --- |
-| Create a session and capture its screen | [owned_capture.jl](examples/owned_capture.jl) |
-| Query shared windows and their panes | [shared_windows.jl](examples/shared_windows.jl) |
-| Cancel a waiting control operation | [control_cancel.jl](examples/control_cancel.jl) |
-| Send text and subscribe to pane output | [output_stream.jl](examples/output_stream.jl) |
+| Create a session and capture its screen | [owned_capture.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/owned_capture.jl) |
+| Query shared windows and their panes | [shared_windows.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/shared_windows.jl) |
+| Cancel a waiting control operation | [control_cancel.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/control_cancel.jl) |
+| Send text and subscribe to pane output | [output_stream.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/output_stream.jl) |
 
 To run the programs, clone the source:
 
@@ -273,10 +273,10 @@ $ julia \
     examples/shared_windows.jl
 ```
 
-The [MCP guide](packages/LibTmuxMCP) and
-[workspace guide](packages/LibTmuxWorkspace) include their own installation
+The [MCP guide][repo-packages-libtmuxmcp] and
+[workspace guide][repo-packages-libtmuxworkspace] include their own installation
 and launcher commands. The
-[workspace example](packages/LibTmuxWorkspace/examples/owned_load.jl) loads a
+[workspace example][ws-examples-owned_load-jl] loads a
 configuration and checks its layout, focus and cleanup.
 
 ## Packages
@@ -314,8 +314,8 @@ julia> encode_where(wide)["entity"]
 Load JSON 1.9+ to move criteria through JSON text, or Tables 1.14+ to read
 projected rows as a table. The core imports neither.
 
-[Portable criteria](docs/criteria-wire.md) ·
-[Tables projections](docs/projections.md)
+[Portable criteria][repo-docs-criteria-wire-md] ·
+[Tables projections][repo-docs-projections-md]
 
 With JSON loaded, [`write_where_json`][write_where_json] and
 [`read_where_json`][read_where_json] round trip a criterion:
@@ -351,7 +351,7 @@ server and freeze a running session back into a file.
 
 [API reference](https://libtmux.org/en/julia/latest/workspace/reference/) ·
 [Guide](https://libtmux.org/en/julia/latest/workspace/source-guide/) ·
-[Package README](packages/LibTmuxWorkspace)
+[Package README][repo-packages-libtmuxworkspace]
 
 From a checkout, after [`install_cli`][workspace_install_cli] creates
 `bin/libtmux-workspace`, [`validate`][workspace_validate] checks the shipped
@@ -373,7 +373,7 @@ list panes, capture a pane and send keys.
 [API reference](https://libtmux.org/en/julia/latest/mcp/reference/) ·
 [Tools](https://libtmux.org/en/julia/latest/mcp/tools/) ·
 [Guide](https://libtmux.org/en/julia/latest/mcp/source-guide/) ·
-[Package README](packages/LibTmuxMCP)
+[Package README][repo-packages-libtmuxmcp]
 
 The server borrows a tmux server that is already running. Start one on its
 own socket:
@@ -391,7 +391,7 @@ Claude Code. Until you enable more tools, the client sees
 $ claude mcp add tmux -- "$PWD/bin/libtmux-mcp" --socket-name agent
 ```
 
-The [MCP README](packages/LibTmuxMCP) covers other clients and every tool.
+The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
 
 ## What it leaves out
 
@@ -404,7 +404,7 @@ The [MCP README](packages/LibTmuxMCP) covers other clients and every tool.
 - **Your tmux configuration.** [`open_server`][open_server] starts a daemon
   with an empty configuration, and nothing edits `~/.tmux.conf`.
 - **Remote and native Windows tmux.** The core drives a local POSIX tmux. SSH
-  and native Windows tmux are [excluded](docs/src/compatibility.md).
+  and native Windows tmux are [excluded][repo-docs-src-compatibility-md].
 
 ## Support and status
 
@@ -414,11 +414,11 @@ The [MCP README](packages/LibTmuxMCP) covers other clients and every tool.
 - **Standard library only.** The core imports only Julia standard libraries.
   The JSON and Tables integrations are optional extensions.
 - **Julia 1.10 or newer and tmux 3.2a or newer.**
-  [Compatibility](docs/src/compatibility.md) lists the cells that passed the
-  complete suite.
+  [Compatibility][repo-docs-src-compatibility-md] lists the cells that passed
+  the complete suite.
 - **Linux, including WSL, and macOS.** CI runs the complete suite on Ubuntu
   24.04 and on macOS, arm64 and x86_64. Native Windows tmux is outside scope.
-- **Evidence.** The [capability manifest](docs/capabilities.toml) and the
+- **Evidence.** The [capability manifest][repo-docs-capabilities-toml] and the
   [CI results](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
   record what is verified. Benchmark baselines and an independent guide
   walkthrough remain open.
@@ -428,11 +428,11 @@ The [MCP README](packages/LibTmuxMCP) covers other clients and every tool.
 | | |
 | --- | --- |
 | [Reference](https://libtmux.org/en/julia/latest/reference/) | Every public binding, one page each |
-| [Installation guide](docs/src/installation.md) | Add the MCP or workspace companion with the matching core |
-| [Contributing and checks](CONTRIBUTING.md) | The checks a change must pass |
-| [Troubleshooting](docs/src/troubleshooting.md) | Symptoms and next steps |
-| [Benchmarks](benchmark/README.md) | What each execution mode costs |
-| [Changelog](CHANGELOG.md) | What each release changed |
+| [Installation guide](https://github.com/libtmux/libtmux-julia/blob/master/docs/src/installation.md) | Add the MCP or workspace companion with the matching core |
+| [Contributing and checks](https://github.com/libtmux/libtmux-julia/blob/master/CONTRIBUTING.md) | The checks a change must pass |
+| [Troubleshooting](https://github.com/libtmux/libtmux-julia/blob/master/docs/src/troubleshooting.md) | Symptoms and next steps |
+| [Benchmarks](https://github.com/libtmux/libtmux-julia/blob/master/benchmark/README.md) | What each execution mode costs |
+| [Changelog](https://github.com/libtmux/libtmux-julia/blob/master/CHANGELOG.md) | What each release changed |
 
 ## Attribution
 
@@ -449,7 +449,7 @@ Please use the following BibTeX template to cite libtmux-julia in scientific dis
 
 ## License
 
-Core, MCP and workspace packages use the [MIT license](LICENSE).
+Core, MCP and workspace packages use the [MIT license][repo-license].
 
 [with_server]: https://libtmux.org/en/julia/latest/reference/libtmux-with_server/
 [new_session]: https://libtmux.org/en/julia/latest/reference/libtmux-new_session/
@@ -484,3 +484,18 @@ Core, MCP and workspace packages use the [MIT license](LICENSE).
 [tool_list_panes]: https://libtmux.org/en/julia/latest/mcp/tools/list_panes/
 [tool_capture_pane]: https://libtmux.org/en/julia/latest/mcp/tools/capture_pane/
 [tool_send_keys]: https://libtmux.org/en/julia/latest/mcp/tools/send_keys/
+[repo-docs-capabilities-toml]: https://github.com/libtmux/libtmux-julia/blob/master/docs/capabilities.toml
+[repo-docs-criteria-wire-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/criteria-wire.md
+[repo-docs-generated-criteria-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/generated/criteria.md
+[repo-docs-projections-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/projections.md
+[repo-docs-src-compatibility-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/src/compatibility.md
+[repo-docs-src-observations-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/src/observations.md
+[repo-docs-src-ownership-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/src/ownership.md
+[repo-docs-src-queries-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/src/queries.md
+[repo-examples-output_stream-jl]: https://github.com/libtmux/libtmux-julia/blob/master/examples/output_stream.jl
+[repo-examples-owned_capture-jl]: https://github.com/libtmux/libtmux-julia/blob/master/examples/owned_capture.jl
+[repo-examples-shared_windows-jl]: https://github.com/libtmux/libtmux-julia/blob/master/examples/shared_windows.jl
+[repo-license]: https://github.com/libtmux/libtmux-julia/blob/master/LICENSE
+[repo-packages-libtmuxmcp]: https://github.com/libtmux/libtmux-julia/tree/master/packages/LibTmuxMCP
+[repo-packages-libtmuxworkspace]: https://github.com/libtmux/libtmux-julia/tree/master/packages/LibTmuxWorkspace
+[ws-examples-owned_load-jl]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/examples/owned_load.jl
