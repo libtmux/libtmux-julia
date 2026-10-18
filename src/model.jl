@@ -16,6 +16,7 @@ Base.:(==)(a::ServerIdentity, b::ServerIdentity) =
 Base.isequal(a::ServerIdentity, b::ServerIdentity) = a == b
 Base.hash(x::ServerIdentity, h::UInt) = hash((x.socket_path, x.generation), h)
 
+"""The supertype of every tmux entity ID: [`TmuxID`](@ref) and [`ClientID`](@ref)."""
 abstract type EntityID end
 
 """A validated tmux numeric ID whose type fixes its entity kind."""
@@ -172,6 +173,11 @@ function Base.getproperty(snap::Snapshot, key::Symbol)
 end
 Base.show(io::IO, snap::Snapshot) = print(io, "Snapshot(acquired=", snap.acquired, ")")
 
+"""
+The supertype of the rows a [`Snapshot`](@ref) holds: sessions, windows,
+panes, clients and window links. Each row reads from the snapshot it came
+from.
+"""
 abstract type EntitySnapshot end
 for name in (:SessionSnapshot, :WindowSnapshot, :PaneSnapshot, :ClientSnapshot, :WindowLink)
     @eval struct $name <: EntitySnapshot

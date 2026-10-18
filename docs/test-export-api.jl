@@ -147,6 +147,10 @@ end
     @test symbol("LibTmux.SessionID")["definition"] == "TmuxID{:session}"
     @test symbol("LibTmux.SessionID")["typeArguments"] == [":session"]
     @test symbol("LibTmux.TmuxID")["supporting"]
+    # A documented type's in-module supertypes get pages of their own.
+    for id in ("LibTmux.EntityID", "LibTmux.EntitySnapshot", "LibTmux._FiniteCommandResult")
+        @test symbol(id)["supporting"] && !isempty(symbol(id)["documentation"])
+    end
 
     incomplete = deepcopy(DATA)
     broken = only(filter(s->s["id"] == "LibTmux.kill_session", incomplete["symbols"]))

@@ -328,6 +328,12 @@ function extract_modules(scopes, files, syntax)
                 target = nameof(value)
                 target in primary || push!(supporting, target)
             end
+            # A documented type's page names its supertypes, so each needs a page.
+            parent = value isa Type ? supertype(Base.unwrap_unionall(value)) : Any
+            while parent !== Any && parentmodule(parent) === mod
+                nameof(parent) in primary || push!(supporting, nameof(parent))
+                parent = supertype(parent)
+            end
         end
         nameset = sort!(unique([primary; collect(supporting)]); by=string)
         push!(
