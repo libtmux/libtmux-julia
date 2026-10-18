@@ -14,8 +14,6 @@ verified_product_cells = [
   "Linux x86_64 / Julia 1.10.0 / tmux 3.3a / 1 thread",
   "Linux x86_64 / Julia 1.13.1 / tmux 3.7c / 4 threads",
   "Linux x86_64 / Julia 1.13.1 / tmux 3.8 / 1 thread",
-  "macOS arm64 / Julia 1.13.0 / tmux 3.7c / 1 thread",
-  "macOS x86_64 / Julia 1.13.0 / tmux 3.7c / 1 thread",
 ]
 
 [required]

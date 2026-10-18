@@ -457,9 +457,10 @@ Both must pass at the same source revision to complete a split cell. Use
 the option runs both.
 
 Pull requests run combined QA cells: Linux floor (tmux 3.3a) at one thread,
-current Linux at four threads, Linux on tmux 3.8 at one thread, and current
-macOS on each architecture at one thread. Rejection cells run tmux 3.0a, 3.1c,
-3.2a and the unpatched 3.3 release against `test/runtests.jl rejection`, with
+current Linux at four threads, and Linux on tmux 3.8 at one thread. CI does
+not run macOS. macOS is supported on a best-effort basis, and CI coverage for
+it is highly limited. Rejection cells run tmux 3.0a, 3.1c, 3.2a and the
+unpatched 3.3 release against `test/runtests.jl rejection`, with
 the release as its own client and behind a 3.3a client; they assert that
 operations are refused without effect and sit outside the supported matrix. The
 3.0a and 3.1c cells run `test/runtests.jl old-daemon` instead: the real old
@@ -467,8 +468,8 @@ daemon behind a 3.3a client. Every rejection cell also runs the workspace CLI
 against a real daemon of the rejected release, and the 3.0a and 3.1c cells run
 the MCP tools against a daemon that replaces a checked one. Both package suites
 are `runtests.jl old-daemon` and fail instead of skipping when the builds are
-absent. Intermediate releases and macOS floor evidence remain explicit
-compatibility work; an unrun release is not support.
+absent. Intermediate releases remain explicit compatibility work; an unrun
+release is not support.
 
 The driver saves structured results before and after each phase. Interrupted
 runs retain completed failures and identify the unfinished phase; they never
@@ -481,9 +482,9 @@ $ python3 dev/check-matrix.py matrix
 ```
 
 Planned cells begin as `NOT RUN`. Only recorded successful checks against
-unchanged sources establish a passed cell. WSL counts as Linux; no local
-Linux run establishes macOS support. The workflow is prepared in
-`.github/workflows/julia.yml`; remote CI results require an actual run.
+unchanged sources establish a passed cell. WSL counts as Linux. The workflow
+is prepared in `.github/workflows/julia.yml`; remote CI results require an
+actual run.
 
 Run performance work separately using [the benchmark guide](benchmark/README.md).
 It covers execution modes, local criteria, output pressure and installed

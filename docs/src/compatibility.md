@@ -2,11 +2,12 @@
 
 | Boundary | Current evidence |
 | --- | --- |
-| Julia / tmux | 1.10.0 / 3.3a, 1.13.1 / 3.7c and 1.13.1 / 3.8 on Linux, and 1.13.0 / 3.7c on macOS, in the listed CI cells |
+| Julia / tmux | 1.10.0 / 3.3a, 1.13.1 / 3.7c and 1.13.1 / 3.8 on Linux, in the listed CI cells |
 | Linux x86_64 | 1.10.0 / 3.3a / 1 thread, 1.13.1 / 3.7c / 4 threads and 1.13.1 / 3.8 / 1 thread passed in Julia workflow run 39157326487 |
-| macOS arm64 | 1.13.0 / 3.7c / 1 thread passed |
-| macOS x86_64 | 1.13.0 / 3.7c / 1 thread passed |
 | Full package suite | Core, MCP, workspace, extensions, documentation, external imports, examples and launchers passed in all listed cells |
+
+CI runs Linux only. macOS is supported on a best-effort basis, and CI
+coverage for it is highly limited.
 
 These are exact CI cells, not a promise for other Julia, tmux, platform,
 architecture or thread combinations. Julia 1.10.0 on tmux 3.3a is the evidence
