@@ -94,7 +94,7 @@ function main(args)
     phase = isempty(args) ? "quality" : only(args)
     phase in ("quality", "format", "list") ||
         error("usage: check-quality.jl [quality|format|list]")
-    phase == "list" || options_check()
+    QUALITY_PHASE == "quality" && phase == "quality" && options_check()
     if phase == "list"
         foreach(path -> println(relpath(path, QUALITY_ROOT)), source_files())
     elseif phase == "quality"
