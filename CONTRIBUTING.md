@@ -600,8 +600,13 @@ must retain one matching start and at least one bound raw checkpoint. Missing,
 unsupported or contradictory sampling evidence fails diagnostics without
 changing original assertion counts or process exits. An empty checkpoint
 remains partial evidence. Checkpoints retain process/source identity,
-unresolved symbols and export overhead. Cumulative checkpoints and inclusive
-frames overlap. Copying every checkpoint does not establish complete sampling
+unresolved symbols and inclusive checkpoint elapsed times. These times overlap
+application work and observer waits; paired whole commands measure diagnostic
+overhead. Individual clocks stop before checkpoint-record emission; cumulative
+clocks include it. The 750 ms symbol lookup deadline starts at checkpoint entry
+and applies cooperatively between lookup batches. It does not bound the whole
+checkpoint. Cumulative checkpoints and inclusive frames overlap.
+Copying every checkpoint does not establish complete sampling
 coverage or symbol lookup.
 
 Saved profiles require the matching Julia version for native decoding. The CI

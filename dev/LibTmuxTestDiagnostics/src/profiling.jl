@@ -6,7 +6,8 @@ const PROFILE_MAX_BYTES = 32*1024*1024
 const PROFILE_MAX_ADDRESSES = 16_384
 const PROFILE_MAX_CHECKPOINTS = 8
 const PROFILE_CHECKPOINT_SECONDS = 5.0
-const PROFILE_EXPORT_SECONDS = 0.75
+const PROFILE_SYMBOLIZATION_SECONDS = 0.75
+const PROFILE_ELAPSED_SCOPE = "inclusive_elapsed; overlaps_application_and_observer_wait"
 
 struct ProfileBuffer <: IO
     io::IOBuffer
@@ -35,7 +36,7 @@ mutable struct ProfileSession
     task::Union{Task,Nothing}
     stopping::Threads.Atomic{Bool}
     sequence::Int
-    overhead_ns::UInt64
+    checkpoint_elapsed_ns::UInt64
 end
 
 function profile_event(session, event; fields...)
@@ -136,7 +137,9 @@ function start_profiles(
             sample_delay_seconds=0.01,
             sample_buffer_words=PROFILE_SAMPLE_WORDS,
             maximum_checkpoints=PROFILE_MAX_CHECKPOINTS,
-            checkpoint_work_seconds=PROFILE_EXPORT_SECONDS,
+            symbolization_deadline_seconds=PROFILE_SYMBOLIZATION_SECONDS,
+            symbolization_deadline_origin="checkpoint_start",
+            symbolization_limit_scope="cooperative_between_batches; not_checkpoint_deadline",
             checkpoint_scheduling="cooperative_requires_yield",
             measurement_scope="cumulative_buffer; checkpoints overlap",
             symbolization_policy=symbolization,
@@ -182,7 +185,7 @@ function checkpoint_profile(; label="requested", final=false)
         session.stopping[] && !final && return nothing
         Profile.stop_timer()
         paused = true
-        deadline = started+UInt64(round(PROFILE_EXPORT_SECONDS*1e9))
+        deadline = started+UInt64(round(PROFILE_SYMBOLIZATION_SECONDS*1e9))
         data = Profile.fetch(; limitwarn=false)
         truncated = length(data) > PROFILE_SAMPLE_WORDS
         if length(data) > PROFILE_SAMPLE_WORDS
@@ -203,6 +206,7 @@ function checkpoint_profile(; label="requested", final=false)
                 reason=unavailable,
                 label,
                 capture_seconds=(time_ns()-started)/1e9,
+                capture_scope=PROFILE_ELAPSED_SCOPE,
                 data_words=length(data),
             )
         end
@@ -271,6 +275,7 @@ function checkpoint_profile(; label="requested", final=false)
             symbolization_policy=session.symbolization,
             unresolved_addresses=unresolved,
             capture_seconds=(time_ns()-started)/1e9,
+            capture_scope=PROFILE_ELAPSED_SCOPE,
             symbolization_cache_addresses=length(session.lookup),
             measurement_scope=payload["measurement_scope"],
         )
@@ -286,7 +291,7 @@ function checkpoint_profile(; label="requested", final=false)
         )
         nothing
     finally
-        session.overhead_ns += time_ns()-started
+        session.checkpoint_elapsed_ns += time_ns()-started
         if paused && !session.stopping[]
             try
                 resume_sampler(session)
@@ -325,7 +330,8 @@ function stop_profiles()
             session,
             "profile_stop";
             checkpoint_count=session.sequence,
-            export_seconds=session.overhead_ns/1e9,
+            checkpoint_elapsed_seconds=session.checkpoint_elapsed_ns/1e9,
+            checkpoint_elapsed_scope=PROFILE_ELAPSED_SCOPE,
             timer_closed=(!isopen(session.timer)),
             checkpoint_task_retired=session.task === nothing || istaskdone(session.task),
             retirement_scope="timer_closed; task_cooperative; supervisor_reaps_process",

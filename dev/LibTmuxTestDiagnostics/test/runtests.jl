@@ -1,5 +1,4 @@
-include(joinpath(@__DIR__, "..", "src", "LibTmuxTestDiagnostics.jl"))
-using .LibTmuxTestDiagnostics
+using LibTmuxTestDiagnostics
 using Random, Test
 
 const D = LibTmuxTestDiagnostics

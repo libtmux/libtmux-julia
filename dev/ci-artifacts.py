@@ -381,7 +381,9 @@ def analyze_process(process):
         elif kind.startswith("profile_"):
             profiles.append(event)
             if kind == "profile_checkpoint" and finite_number(event.get("capture_seconds")):
-                spans.append(dict(kind="profile_export", label=event.get("file", "unknown"), seconds=event["capture_seconds"], outcome=event.get("status", "unknown")))
+                spans.append(dict(kind="profile_checkpoint_elapsed", label=event.get("file", "unknown"),
+                                  seconds=event["capture_seconds"], outcome=event.get("status", "unknown"),
+                                  metric_scope="inclusive_elapsed; overlaps_application_and_observer_wait"))
     finalized = {identifier for identifier, ts in testsets.items() if ts["finish"] is not None}
     invalid_counts = set()
     child_totals = {}
@@ -954,7 +956,8 @@ def timing_rows(processes, receipt):
                              compile_seconds=finish.get("compile_seconds"), compile_status=finish.get("compile_status", "unavailable")))
         for span in process["spans"]:
             rows.append(dict(kind=span.get("kind", "span"), name=span.get("label", "unknown"), process_id=process["process_id"],
-                             seconds=span.get("seconds"), outcome=span.get("outcome", "unknown"), metric_scope="inclusive_span"))
+                             seconds=span.get("seconds"), outcome=span.get("outcome", "unknown"),
+                             metric_scope=span.get("metric_scope", "inclusive_span")))
     if receipt:
         for name, loop in receipt.get("loops", {}).items():
             if isinstance(loop, dict):
@@ -2208,6 +2211,11 @@ def self_test():
         write(profile_events(payload))
         result = run("bound-profile")
         assert result["profile_copy_status"] == "RAW_PRESERVED" and not result["diagnostics_complete"]
+        ranked = list(csv.DictReader((root / "bound-profile" / "timings.csv").open()))
+        checkpoint_time = next(row for row in ranked if row["kind"] == "profile_checkpoint_elapsed")
+        assert float(checkpoint_time["seconds"]) == .01
+        assert checkpoint_time["metric_scope"] == "inclusive_elapsed; overlaps_application_and_observer_wait"
+        assert not any(row["kind"] == "profile_export" for row in ranked)
         retained = json.loads((root / "bound-profile" / result["profile_records"][0]["file"]).read_text())
         assert retained["data"] == payload["data"] and retained["lookup"]["0"] == [None]
         assert retained["decoder_status"] == "RAW_PRESERVED_NATIVE_DECODER_UNVERIFIED"

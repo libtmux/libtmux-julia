@@ -160,6 +160,32 @@ function check_profile_controls(directory, mode)
         "\"pid\":$(getpid()),",
     )
     @assert any(record->all(field->occursin(field, record), identity), records)
+    @assert any(
+        record->occursin("\"event\":\"profile_start\"", record) &&
+                occursin("\"symbolization_deadline_seconds\":0.75", record) &&
+                occursin(
+                    "\"symbolization_deadline_origin\":\"checkpoint_start\"",
+                    record,
+                ) &&
+                occursin("cooperative_between_batches; not_checkpoint_deadline", record),
+        records,
+    )
+    @assert any(
+        record->occursin("\"event\":\"profile_checkpoint\"", record) && occursin(
+            "inclusive_elapsed; overlaps_application_and_observer_wait",
+            record,
+        ),
+        records,
+    )
+    @assert any(
+        record->occursin("\"event\":\"profile_stop\"", record) &&
+                occursin("\"checkpoint_elapsed_seconds\":", record) &&
+                occursin(
+                    "inclusive_elapsed; overlaps_application_and_observer_wait",
+                    record,
+                ),
+        records,
+    )
     final_checkpoint = any(
         record->occursin("\"event\":\"profile_checkpoint\"", record) &&
                 occursin("\"label\":\"final\"", record),
