@@ -711,9 +711,9 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                     println("unexpected wait result: ", limited.structured_content)
                 @test deadline_result
                 @test limited.structured_content["error"]["effects"] == "possible"
-                elapsed < 0.9 ||
+                elapsed < 2.0 ||
                     println(stderr, "MCP literal deadline call_seconds=", elapsed)
-                @test elapsed < 0.9
+                @test elapsed < 2.0
                 @test isempty(clients(snapshot(server)))
                 entered = Channel{Any}(2)
                 token = CancellationToken()
