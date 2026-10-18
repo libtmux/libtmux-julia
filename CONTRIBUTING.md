@@ -245,6 +245,53 @@ $ env JULIA_DEPOT_PATH="$matrix_stage/depot" julia \
 The matrix runs separate doctest, contextual and external-example gates.
 A successful inventory check alone does not establish runtime correctness.
 
+Check the root and package READMEs. The static mode checks that package
+headings link their directories, every link and anchor resolves, API links
+name public bindings, public names mentioned in prose are linked, MCP tool
+names link their tool pages, and every `--option` exists in the launcher's
+`--help`. It also runs planted failures with clean controls. It needs the
+prepared quality project and no tmux:
+
+```console
+$ env JULIA_DEPOT_PATH="$matrix_stage/depot" julia \
+    --startup-file=no \
+    --compile=min \
+    -O0 \
+    --project="$matrix_stage/environment" \
+    dev/check-readme-commands.jl static
+```
+
+The commands mode installs both launchers into a private directory and runs
+the README console commands in order against a private tmux server. It starts
+each `claude mcp add` launcher and the `mcpServers` configuration as a client
+would, then compares the served tools with the documented ones. A command
+with a `text` block after it must print exactly that text. A command that is
+neither run nor accounted for fails. `<!-- file: NAME -->` before a code
+block writes that block to `NAME` first:
+
+```console
+$ env JULIA_DEPOT_PATH="$matrix_stage/depot" julia \
+    --startup-file=no \
+    --compile=min \
+    -O0 \
+    --project="$matrix_stage/environment" \
+    dev/check-readme-commands.jl commands
+```
+
+Neither mode fetches a URL. After editing links, run the `links` mode. It
+needs the network and is not part of the matrix. It requires a 200 response
+without a redirect for each URL and first checks that a page the site does not
+publish does not return 200:
+
+```console
+$ julia \
+    --startup-file=no \
+    --compile=min \
+    -O0 \
+    --project="$matrix_stage/environment" \
+    dev/check-readme-commands.jl links
+```
+
 ## External package imports
 
 The consumer checker exports read-only source copies into a directory outside

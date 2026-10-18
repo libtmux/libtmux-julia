@@ -18,10 +18,16 @@ The library and installed CLI share the same public operations.
 
 </div>
 
-The consumer package depends on the public `LibTmux` package, JSON 1.9 and
-YAML 0.4.17, and PrecompileTools. The core does not depend on this package
-or these consumer dependencies. Precompilation covers inert configuration
-and CLI reporting; it never starts processes or contacts tmux.
+[Install](#install-v010-alpha1) · [Quick start](#quick-start) ·
+[Inspect](#inspect-a-workspace) · [Configuration](#version-1-configuration) ·
+[Apply](#apply-and-inspect-partial-effects) · [CLI](#install-and-use-the-cli) ·
+[API reference](https://libtmux.org/en/julia/latest/workspace/reference/) ·
+[Guide](https://libtmux.org/en/julia/latest/workspace/source-guide/)
+
+The consumer package depends on the public [`LibTmux`][libtmux] package, JSON
+1.9 and YAML 0.4.17, and PrecompileTools. The core does not depend on this
+package or these consumer dependencies. Precompilation covers inert
+configuration and CLI reporting; it never starts processes or contacts tmux.
 
 ## Install v0.1.0-alpha.1
 
@@ -34,7 +40,8 @@ $ julia \
     -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
 ```
 
-Install a launcher bound to that environment:
+Install a launcher bound to that environment with
+[`install_cli`][install_cli]:
 
 ```console
 $ julia \
@@ -46,6 +53,103 @@ $ julia \
 ```console
 $ bin/libtmux-workspace --help
 ```
+
+## Quick start
+
+The installed launcher runs the library's operations from a shell:
+`validate` runs [`validate`][validate], `plan` runs [`plan`][plan], `load`
+runs [`apply`][apply] and `freeze` runs [`freeze`][freeze]. Have tmux 3.2a or
+newer on your `PATH`.
+
+Save this workspace as `workspace.yaml`. `${PROJECT}` expands from a value you
+pass, and `default-shell: /bin/sh` gives each pane the POSIX shell that the
+readiness handshake requires:
+
+<!-- file: workspace.yaml -->
+
+```yaml
+session_name: ${PROJECT}
+options:
+  default-shell: /bin/sh
+windows:
+  - window_name: editor
+    layout: even-horizontal
+    panes:
+      - shell_command: printf 'editor ready\n'
+      - null
+```
+
+Check its syntax and schema. This command never contacts tmux:
+
+```console
+$ bin/libtmux-workspace validate workspace.yaml
+```
+
+```text
+valid
+```
+
+Print the plan with `PROJECT` supplied. Each line is one JSON step, and
+nothing runs:
+
+```console
+$ bin/libtmux-workspace plan workspace.yaml --env PROJECT=demo
+```
+
+`load` and `freeze` need a server you name; there is no default-server
+fallback. Start one on its own socket:
+
+```console
+$ tmux -L work new-session -d -s scratch
+```
+
+Load the workspace into it. Progress goes to stderr, and a successful load
+prints one line:
+
+```console
+$ bin/libtmux-workspace load workspace.yaml \
+    --socket-name work \
+    --env PROJECT=demo \
+    --rollback-created
+```
+
+```text
+loaded
+```
+
+`--rollback-created` removes what `load` created if it fails partway. Check
+the result with tmux:
+
+```console
+$ tmux -L work list-windows -t demo -F '#{window_name}: #{window_panes} panes'
+```
+
+```text
+editor: 2 panes
+```
+
+Freeze the session back into a workspace file. The saved file validates:
+
+```console
+$ bin/libtmux-workspace freeze demo --socket-name work > frozen.yaml
+```
+
+```console
+$ bin/libtmux-workspace validate frozen.yaml
+```
+
+```text
+valid
+```
+
+Stop the server you started:
+
+```console
+$ tmux -L work kill-server
+```
+
+[Install and use the CLI](#install-and-use-the-cli) lists every option and exit
+code. It also shows `--output json` and `--output ndjson`.
 
 ## Develop from this checkout
 
@@ -73,7 +177,9 @@ $ julia \
 ## Inspect a workspace
 
 From this package directory, inspect the shipped configuration with the
-prepared Julia project:
+prepared Julia project. [`read_config`][read_config] reads the file,
+[`validate`][validate] checks it, [`expand`][expand] supplies values and
+[`plan`][plan] lists the steps:
 
 ```jldoctest
 julia> using LibTmuxWorkspace
@@ -110,8 +216,9 @@ $ julia \
     examples/owned_load.jl
 ```
 
-For text already held in memory, use `parse_config(text; format=:yaml)` or
-`format=:json`, then `validate`. Supply an absolute `source_path` when it is
+For text already held in memory, use
+[`parse_config(text; format=:yaml)`][parse_config] or `format=:json`, then
+`validate`. Supply an absolute `source_path` when it is
 known, or pass `base_directory` to `expand`. Parsing does not read that path.
 `read_config` is the explicit file I/O boundary and supplies its source path.
 
@@ -206,7 +313,7 @@ result = apply(server, prepared; rollback=:created)
 println(result.session)
 ```
 
-`apply` runs detached under one monotonic deadline (`timeout=30.0`). It creates
+[`apply`][apply] runs detached under one monotonic deadline (`timeout=30.0`). It creates
 sessions, windows and panes, applies options and environment, sends ordered
 commands, applies layout, then selects the requested pane/window. Names that
 already exist fail. Supply `reuse=existing_session_ref` to borrow exactly that
@@ -223,20 +330,22 @@ window launchers with input require `readiness=:none`; that opt-out gives the
 caller responsibility for readiness. Submitted command input is an external
 effect and cannot be rolled back. `enter=false` leaves input unsubmitted.
 
-`cancel=CancellationToken()` interrupts waits and prevents later steps.
-`on_event(event)` receives ordered step events, script output and completion;
-it must return promptly. Script output events contain owned byte chunks.
-`run_before_script` also works separately with `on_output(stream, bytes)`;
-it bounds each captured stream at 64 KiB by default and never decodes output
-implicitly. An expired deadline refuses child admission. Every admitted direct
-child is reaped, and owned pipe workers and timer callbacks are joined.
-Cancellation/deadline kill its still-owned POSIX process group. Escaped children
-and descendants surviving successful script exit are unproved external effects.
-Script execution inherits the caller environment by default, except `TMUX` and
-`TMUX_PANE`; pass `script_env` to `apply`, or `env` to `run_before_script`, to
-choose it explicitly. Expansion still uses only its separately supplied `env`.
+`cancel=`[`CancellationToken()`][cancellationtoken] interrupts waits and
+prevents later steps. `on_event(event)` receives ordered step events, script
+output and completion; it must return promptly. Script output events contain
+owned byte chunks. [`run_before_script`][run_before_script] also works
+separately with `on_output(stream, bytes)`; it bounds each captured stream at 64
+KiB by default and never decodes output implicitly. An expired deadline refuses
+child admission. Every admitted direct child is reaped, and owned pipe workers
+and timer callbacks are joined. Cancellation/deadline kill its still-owned POSIX
+process group. Escaped children and descendants surviving successful script exit
+are unproved external effects. Script execution inherits the caller environment
+by default, except `TMUX` and `TMUX_PANE`; pass `script_env` to `apply`, or
+`env` to `run_before_script`, to choose it explicitly. Expansion still uses only
+its separately supplied `env`.
 
-Failures raise `WorkspaceApplyError` with `cause` and a `result` containing:
+Failures raise [`WorkspaceApplyError`][applyerror] with `cause` and a `result`
+containing:
 
 | Field | Meaning |
 | --- | --- |
@@ -254,7 +363,8 @@ link could not be observed is reported as unresolved. Cleanup does not restore
 borrowed options/environment, global settings or shell effects, and it never
 guesses which resources an uncertain reply might have created.
 
-`freeze(server, session_ref)` returns a `WorkspaceDocument` containing names,
+[`freeze(server, session_ref)`][freeze] returns a
+[`WorkspaceDocument`][document] containing names,
 window indices/layouts, pane directories and focus. Write `document.data` with
 your JSON/YAML encoder. It cannot reconstruct commands, options, environment,
 history or shell side effects. Shared windows become independent windows when
@@ -300,10 +410,10 @@ has not been exercised by the automated consumer tests.
 Human progress and script output go to stderr. `--output json` writes one final
 stdout document. `--output ndjson` writes ordered progress followed by one
 terminal `result` or `error`, each with a sequence number; script bytes are
-base64. Ctrl-C returns cancellation evidence and applies requested cleanup.
-The installed-launcher test verifies this with a blocked owned script.
-The installed process owns Ctrl-C handling until exit. Calling library `main`
-leaves the embedding application's signal handlers unchanged.
+base64. Ctrl-C returns cancellation evidence and applies requested cleanup. The
+installed-launcher test verifies this with a blocked owned script. The installed
+process owns Ctrl-C handling until exit. Calling library [`main`][main] leaves
+the embedding application's signal handlers unchanged.
 
 The installed launcher owns one bounded writer for stdout and stderr. Progress
 callbacks enqueue at most 64 records and 8 MiB; one active record can retain
@@ -331,22 +441,22 @@ validated configuration. `WorkspaceDocument.data` is parsed mutable data;
 validate it before handing it to other code. Expanded records and plan
 steps contain owned values.
 
-`ConfigLimits()` defaults to 1 MiB of document/string data, 32 nesting levels
+[`ConfigLimits()`][configlimits] defaults to 1 MiB of document/string data, 32 nesting levels
 and 20,000 values. JSON and YAML nesting are bounded before recursive object
 construction. Both parsers reject duplicates before a key can overwrite
 another. File reads request at most `max_bytes + 1` bytes. Expansion bounds
 constructed strings before allocation with its own `limits` argument.
 
-`WorkspaceConfigError` exposes `code`, `path` and `message`. Examples include
+[`WorkspaceConfigError`][configerror] exposes `code`, `path` and `message`. Examples include
 `:duplicate`, `:unknown_key`, `:unsupported`, `:version`, `:type`, `:value`,
 `:limit`, `:variable` and `:home`. Parser errors are normalized without
 including configuration values, which can contain secrets. Syntax diagnostics
 currently identify the document root rather than parser line/column positions.
 
-Plans contain ordered `PlanStep` values with `action`, optional `window` and
-`pane` positions, and named `arguments`. Creating a window includes its first
-pane. The steps describe intended effects; they do not establish a live
-server generation, target identity, readiness or rollback capability.
+Plans contain ordered [`PlanStep`][planstep] values with `action`, optional
+`window` and `pane` positions, and named `arguments`. Creating a window includes
+its first pane. The steps describe intended effects; they do not establish a
+live server generation, target identity, readiness or rollback capability.
 
 ## Verification and source contract
 
@@ -390,7 +500,7 @@ minimal compilation explicitly; it does not replace this normal check.
 Set `LIBTMUX_TEST_TMUX` to select a tmux executable. Every live test owns its
 socket and daemon; none uses the default server. Tests require no network or
 package resolution after preparation. Consumer tests own their
-servers through the public core `with_server` operation.
+servers through the public core [`with_server`][with_server] operation.
 
 `dev/cli_latency.jl OUTPUT.json [normal|o0|minimal|all] [samples]` is a separate
 benchmark tier, defaulting to `normal`. It compares
@@ -415,3 +525,22 @@ builders and sleeping readiness strategies remain unsupported.
 ## License
 
 [MIT](LICENSE).
+
+[libtmux]: https://libtmux.org/en/julia/latest/reference/libtmux/
+[cancellationtoken]: https://libtmux.org/en/julia/latest/reference/libtmux-cancellationtoken/
+[validate]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-validate/
+[plan]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-plan/
+[apply]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-apply/
+[freeze]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-freeze/
+[read_config]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-read_config/
+[expand]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-expand/
+[parse_config]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-parse_config/
+[applyerror]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-workspaceapplyerror/
+[document]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-workspacedocument/
+[run_before_script]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-run_before_script/
+[install_cli]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-install_cli/
+[main]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-main/
+[configlimits]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-configlimits/
+[configerror]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-workspaceconfigerror/
+[planstep]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-planstep/
+[with_server]: https://libtmux.org/en/julia/latest/reference/libtmux-with_server/
