@@ -144,6 +144,7 @@ def main():
     '''
     with tempfile.TemporaryDirectory(prefix="ltj-child-control-") as directory:
         env = dict(os.environ, LIBTMUX_CI_PROFILE="cpu",
+                   LIBTMUX_CI_PROFILE_SYMBOLIZATION="deferred",
                    LIBTMUX_CI_INVOCATION="child-control",
                    LIBTMUX_CI_SOURCE_DIGEST=digest,
                    LIBTMUX_CI_PROCESS_TOKEN="control-parent",
@@ -202,6 +203,7 @@ def main():
             payloads = [json.loads((Path(directory) / record["file"]).read_text()) for record in checkpoints]
             assert any(payload["data"] for payload in payloads), "actual child has no CPU samples"
             assert all(payload["pid"] == pid and payload["threads"] == args.threads for payload in payloads)
+            assert all(payload["symbolization_policy"] == "deferred" for payload in payloads)
         exits = [record for record in records if record["event"] == "child_exit_observed"]
         assert len(exits) == 7
         child_exit, = [record for record in exits if record["child_pid"] == child_pid]

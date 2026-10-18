@@ -149,17 +149,48 @@ function check_profile_controls(directory, mode)
     @assert D.PROFILE_SESSION[] === nothing
     @assert rand(copy(Random.default_rng())) == rand(before)
     events = read(joinpath(directory, "events-profile-"*mode*".jsonl"), String)
-    @assert occursin("\"input_sha256\":\"$digest\"", events)
-    @assert occursin("\"label\":\"final\"", events)
+    records = split(chomp(events), '\n')
+    identity = (
+        "\"event\":\"profile_checkpoint\"",
+        "\"file\":\"$(basename(checkpoint.path))\"",
+        "\"input_sha256\":\"$digest\"",
+        "\"invocation\":\"$(payload["invocation"])\"",
+        "\"source_digest\":\"$source_digest\"",
+        "\"process_birth_id\":\"$(payload["process_birth_id"])\"",
+        "\"pid\":$(getpid()),",
+    )
+    @assert any(record->all(field->occursin(field, record), identity), records)
+    final_checkpoint = any(
+        record->occursin("\"event\":\"profile_checkpoint\"", record) &&
+                occursin("\"label\":\"final\"", record),
+        records,
+    )
+    busy = any(
+        record->occursin("\"event\":\"profile_unavailable\"", record) &&
+                occursin("\"reason\":\"finalization_busy\"", record),
+        records,
+    )
+    @assert final_checkpoint || busy
+    finalization = final_checkpoint ? "CAPTURED" : "UNAVAILABLE_BUSY"
     @assert occursin("timer_closed; task_cooperative; supervisor_reaps_process", events)
     @assert !occursin("checkpoint_failed", events)
     @assert session.sequence <= 8
     @assert all(name->ncodeunits(name) <= 128, readdir(directory))
-    checkpoints = count(
+    profile_files = count(
         name->startswith(name, "profile-") && endswith(name, ".json"),
         readdir(directory),
     )
-    (; mode, supported=true, checkpoints, hot_occurrences, retirement_seconds)
+    checkpoints =
+        count(record->occursin("\"event\":\"profile_checkpoint\"", record), records)
+    (;
+        mode,
+        supported=true,
+        checkpoints,
+        profile_files,
+        hot_occurrences,
+        retirement_seconds,
+        finalization,
+    )
 end
 
 mode = length(ARGS) > 1 ? ARGS[2] : "cpu"
@@ -179,12 +210,17 @@ println(
     profile_result.supported,
     "; threads=",
     Threads.nthreads(),
-    "; checkpoints=",
+    "; recorded_checkpoints=",
     profile_result.checkpoints,
+    "; profile_files=",
+    get(profile_result, :profile_files, 0),
     "; hot_frame_occurrences=",
     get(profile_result, :hot_occurrences, nothing),
     "; retirement_seconds=",
     get(profile_result, :retirement_seconds, nothing),
+    "; finalization=",
+    get(profile_result, :finalization, "UNAVAILABLE"),
+    "; sampling_coverage=UNPROVED",
     "; seconds=",
     (time_ns()-profile_started)/1e9,
 )
