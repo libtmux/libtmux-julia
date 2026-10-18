@@ -44,6 +44,7 @@ function test_acquisition_captured_tmux_graph()
                     "-T",
                     replace(title, "#" => "##"),
                 )
+                run_command(server, "select-pane", "-t", "dev:api.0")
                 snap = LibTmux.snapshot(server)
                 @test length(LibTmux.sessions(snap)) == 2
                 @test length(LibTmux.windows(snap)) == 2
@@ -55,7 +56,13 @@ function test_acquisition_captured_tmux_graph()
                     p -> p.pid > 0 && p.tty !== nothing && p.exit_status === nothing,
                     panes(snap),
                 )
-                @test @inferred((p -> p.pid)(first(panes(snap)))) isa Int
+                @test @inferred(Union{Nothing,Int}, (p -> p.pid)(first(panes(snap)))) isa Int
+                @test only(
+                    filter(
+                        PaneWhere(active=true, window=WindowWhere(name="api")),
+                        panes(snap),
+                    ),
+                ).index == 0
                 @test count(p -> p.title == title, LibTmux.panes(snap)) == 1
                 @test any(p -> p.current_path == expected_path, LibTmux.panes(snap))
                 @test count(
@@ -235,6 +242,13 @@ function test_acquisition_unavailable_fields()
         exited.ps[1][13] = "7"
         @test only(panes(LibTmux._snapshot_from_rows(identity, exited, (1.0, 2.0)))).exit_status ===
               7
+        absent = deepcopy(rows)
+        absent.ps[1][11] = ""
+        absent_snapshot = LibTmux._snapshot_from_rows(identity, absent, (1.0, 2.0))
+        no_process = only(panes(absent_snapshot))
+        @test @inferred(Union{Nothing,Int}, (p -> p.pid)(no_process)) === nothing
+        @test PaneWhere(pid=nothing)(no_process)
+        @test only(project_rows(panes(absent_snapshot); columns=(:pid,))).pid === nothing
         @test_throws SnapshotCoverageError LibTmux._observed_int("", "pane_width")
     end
 end

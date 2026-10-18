@@ -15,7 +15,7 @@ const _CRITERIA_FIELDS = Dict{Tuple{Symbol,Symbol},_CriteriaField}(
     (:pane, :current_command) => _CriteriaField(:String, true, :scalar, :any),
     (:pane, :current_path) => _CriteriaField(:String, true, :scalar, :any),
     (:pane, :title) => _CriteriaField(:String, false, :scalar, :any),
-    (:pane, :pid) => _CriteriaField(:Integer, false, :scalar, :any),
+    (:pane, :pid) => _CriteriaField(:Integer, true, :scalar, :any),
     (:pane, :tty) => _CriteriaField(:String, true, :scalar, :any),
     (:pane, :exit_status) => _CriteriaField(:Integer, true, :scalar, :any),
     (:pane, :history_size) => _CriteriaField(:Integer, false, :scalar, :any),
@@ -110,7 +110,7 @@ Base.@constprop :aggressive function _typed_captured(x::ClientSnapshot{S}, key::
     _captured(x, key)
 end
 
-_snapshot_integer_fields(::Val{:pane}) = ((:index, false), (:width, false), (:height, false), (:pid, false), (:exit_status, true), (:history_size, false), (:history_limit, false), (:cursor_x, false), (:cursor_y, false),)
+_snapshot_integer_fields(::Val{:pane}) = ((:index, false), (:width, false), (:height, false), (:pid, true), (:exit_status, true), (:history_size, false), (:history_limit, false), (:cursor_x, false), (:cursor_y, false),)
 _numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:index}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 1)
 _numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:width}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 2)
 _numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ::Val{:pane}, ::Val{:height}) where {SI,WI,PI,CI,LI} = fieldtype(PI, 3)
@@ -130,7 +130,7 @@ Base.@constprop :aggressive function _typed_captured(x::PaneSnapshot{S}, key::Sy
     key === :current_command && return _captured(x, :current_command)::Union{Nothing,String}
     key === :current_path && return _captured(x, :current_path)::Union{Nothing,String}
     key === :title && return _captured(x, :title)::String
-    key === :pid && return _captured(x, :pid)::_numeric_type(S, Val(:pane), Val(:pid))
+    key === :pid && return _captured(x, :pid)::Union{Nothing,_numeric_type(S, Val(:pane), Val(:pid))}
     key === :tty && return _captured(x, :tty)::Union{Nothing,String}
     key === :exit_status && return _captured(x, :exit_status)::Union{Nothing,_numeric_type(S, Val(:pane), Val(:exit_status))}
     key === :history_size && return _captured(x, :history_size)::_numeric_type(S, Val(:pane), Val(:history_size))
@@ -226,7 +226,7 @@ Keywords:
 - `current_command` (String): Command name observed by tmux.
 - `current_path` (String): Path observed on the tmux host; text matching is lexical.
 - `title` (String): Pane title, including literal format-like text.
-- `pid` (Integer): Observed initial pane process ID; not an identity guard.
+- `pid` (Integer): Observed initial pane process ID, or captured absence when tmux reports none; not an identity guard.
 - `tty` (String): Pane PTY path, or captured absence for a pane without a PTY.
 - `exit_status` (Integer): Normal-exit status retained by tmux; live or signal-terminated panes have captured absence.
 - `history_size` (Integer): Retained scrollback lines.

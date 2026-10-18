@@ -13,7 +13,7 @@ fields = [
   { name = "current_command", wire = "tmux.pane.current_command", type = "String", nullable = true, tmux = "pane_current_command", availability = "May be uncaptured; nonempty dead-pane fallback is retained.", summary = "Command name observed by tmux." },
   { name = "current_path", wire = "tmux.pane.current_path", type = "String", nullable = true, tmux = "pane_current_path", availability = "May be uncaptured when tmux cannot resolve cwd.", summary = "Path observed on the tmux host; text matching is lexical." },
   { name = "title", wire = "tmux.pane.title", type = "String", tmux = "pane_title", summary = "Pane title, including literal format-like text." },
-  { name = "pid", wire = "tmux.pane.pid", type = "Integer", tmux = "pane_pid", summary = "Observed initial pane process ID; not an identity guard." },
+  { name = "pid", wire = "tmux.pane.pid", type = "Integer", nullable = true, tmux = "pane_pid", summary = "Observed initial pane process ID, or captured absence when tmux reports none; not an identity guard." },
   { name = "tty", wire = "tmux.pane.tty", type = "String", nullable = true, tmux = "pane_tty", summary = "Pane PTY path, or captured absence for a pane without a PTY." },
   { name = "exit_status", wire = "tmux.pane.exit_status", type = "Integer", nullable = true, tmux = "pane_dead_status", summary = "Normal-exit status retained by tmux; live or signal-terminated panes have captured absence." },
   { name = "history_size", wire = "tmux.pane.history_size", type = "Integer", tmux = "history_size", summary = "Retained scrollback lines." },

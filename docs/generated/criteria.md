@@ -49,7 +49,7 @@ pushdown is not implemented. Availability depends on captured coverage.
 | `current_command` | `tmux.pane.current_command` | `String` | true | `pane_current_command` | Command name observed by tmux. May be uncaptured; nonempty dead-pane fallback is retained. |
 | `current_path` | `tmux.pane.current_path` | `String` | true | `pane_current_path` | Path observed on the tmux host; text matching is lexical. May be uncaptured when tmux cannot resolve cwd. |
 | `title` | `tmux.pane.title` | `String` | false | `pane_title` | Pane title, including literal format-like text.  |
-| `pid` | `tmux.pane.pid` | `Integer` | false | `pane_pid` | Observed initial pane process ID; not an identity guard.  |
+| `pid` | `tmux.pane.pid` | `Integer` | true | `pane_pid` | Observed initial pane process ID, or captured absence when tmux reports none; not an identity guard.  |
 | `tty` | `tmux.pane.tty` | `String` | true | `pane_tty` | Pane PTY path, or captured absence for a pane without a PTY.  |
 | `exit_status` | `tmux.pane.exit_status` | `Integer` | true | `pane_dead_status` | Normal-exit status retained by tmux; live or signal-terminated panes have captured absence.  |
 | `history_size` | `tmux.pane.history_size` | `Integer` | false | `history_size` | Retained scrollback lines.  |

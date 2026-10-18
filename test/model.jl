@@ -111,6 +111,7 @@ function test_model_captured_identity_and_local_collections()
                   LibTmux.PaneID("%3")
             @test occursin("%1", sprint(show, ps[1]))
             @test_throws LibTmux.SnapshotCoverageError ps[1].width
+            @test_throws LibTmux.SnapshotCoverageError ps[1].pid
             @test ps[2].current_command === nothing
         end
     end
@@ -163,7 +164,10 @@ function test_model_schema_accessors_infer_and_retain_numeric_values()
         @test @inferred(Union{Nothing,String}, (p -> p.current_command)(pane)) === nothing
         @test @inferred((p -> p.ref)(pane)) == PaneRef(identity, "%1")
         @test @inferred((p -> p.window.width)(pane)) === 80
-        @test @inferred((p -> (p.pid, p.history_size, p.cursor_x))(pane)) === (123, 0, 2)
+        @test @inferred(
+            Tuple{Union{Nothing,Int},Int,Int},
+            (p -> (p.pid, p.history_size, p.cursor_x))(pane)
+        ) === (123, 0, 2)
         @test @inferred(Union{Nothing,Int}, (p -> p.exit_status)(pane)) === nothing
         @test @inferred(Union{Nothing,String}, (p -> p.tty)(pane)) === nothing
         @test @inferred((p -> (p.window.layout, p.window.zoomed))(pane)) === ("full", false)
