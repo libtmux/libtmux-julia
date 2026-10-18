@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+#### CI no longer runs macOS
+
+The Julia workflow runs its Linux cells only. macOS stays supported on a
+best-effort basis, and CI coverage for it is highly limited. The READMEs,
+the compatibility guide and the contributing guide say so. (#34)
+
+#### The release workflow checks a tag install again
+
+The job that installs a pushed release tag into a fresh Julia environment
+read fields Pkg does not provide and failed after a successful install. It
+now checks each installed package's name, version, source, revision and
+tree, and its self-test is built from Pkg's own package fields. (#34)
+
 ## 0.1.0-alpha.2 - 2026-10-18
 
 #### Require tmux 3.3a
