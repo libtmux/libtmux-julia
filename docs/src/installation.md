@@ -15,7 +15,7 @@ $ julia \
     -e 'using Pkg
         Pkg.activate(".")
         repo = "https://github.com/libtmux/libtmux-julia.git"
-        revision = "e48057e583ac918c042c58021fac52137bbe05b3"
+        revision = "029c58b8a45e6d7abe87e83557b8b93980def42f"
         Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
@@ -34,7 +34,7 @@ $ julia \
     -e 'using Pkg
         Pkg.activate(".")
         repo = "https://github.com/libtmux/libtmux-julia.git"
-        revision = "e48057e583ac918c042c58021fac52137bbe05b3"
+        revision = "029c58b8a45e6d7abe87e83557b8b93980def42f"
         Pkg.add([
             Pkg.PackageSpec(url=repo, rev=revision),
             Pkg.PackageSpec(
@@ -69,7 +69,7 @@ $ julia \
     -e 'using Pkg
         Pkg.activate(".")
         repo = "https://github.com/libtmux/libtmux-julia.git"
-        revision = "e48057e583ac918c042c58021fac52137bbe05b3"
+        revision = "029c58b8a45e6d7abe87e83557b8b93980def42f"
         Pkg.add([
             Pkg.PackageSpec(url=repo, rev=revision),
             Pkg.PackageSpec(

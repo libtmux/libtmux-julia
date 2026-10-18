@@ -25,7 +25,7 @@ $ cd libtmux-julia
 ```
 
 ```console
-$ git checkout 9e3776d07798174a3590a728d28029efcbb52780
+$ git checkout 029c58b8a45e6d7abe87e83557b8b93980def42f
 ```
 
 Create a local environment for the example:
