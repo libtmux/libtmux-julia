@@ -11,23 +11,30 @@
 
 # LibTmuxMCP
 
-Run a local stdio MCP application over an explicit tmux endpoint. The package
-uses public [LibTmux][libtmux] APIs and a bounded adapter around
-ModelContextProtocol.jl. The alpha is source-distributed; registry publication
-and full compatibility support are pending.
+Serve one tmux server to MCP clients over stdio: list panes, capture a pane and
+send keys.
 
 </div>
 
-[Install](#install-v010-alpha1) · [Connect a client](#connect-a-client) ·
-[Tools](#targets-and-effects) · [Library use](#library-use) ·
+The package uses public [LibTmux][libtmux] APIs and a bounded adapter around
+ModelContextProtocol.jl. The server runs on a tmux server that you name, and
+leaves it running.
+
+**Contents** — [Quick start](#quick-start) ·
+[Point a client at a server](#point-a-client-at-a-server) ·
+[Choose the tools](#choose-the-tools) ·
+[Confine a client](#confine-a-client-to-one-pane) ·
+[Use the tools](#use-the-tools) · [Library use](#use-it-as-a-library) ·
+[Leaves out](#what-it-leaves-out) · [Support](#support-and-status) ·
+[Documentation](#documentation) ·
 [API reference](https://libtmux.org/en/julia/latest/mcp/reference/) ·
 [Tool pages](https://libtmux.org/en/julia/latest/mcp/tools/) ·
 [Guide](https://libtmux.org/en/julia/latest/mcp/source-guide/)
 
-## Install v0.1.0-alpha.1
+## Quick start
 
-From a consumer project directory, add the core and MCP package from the same
-public Git tag:
+`v0.1.0-alpha.1` is an unregistered source release. From a consumer project
+directory, add the core and MCP package from the same public Git tag:
 
 ```console
 $ julia \
@@ -52,14 +59,6 @@ Check available options without contacting tmux:
 $ bin/libtmux-mcp --help
 ```
 
-Configure your MCP client's executable as `bin/libtmux-mcp` and pass an
-explicit socket selector. `--socket-name mcp-demo` addresses an existing
-server started with `tmux -L mcp-demo`; `--socket` selects a socket path.
-The launcher reads protocol messages from stdin and writes only protocol
-messages to stdout. Diagnostics go to stderr.
-
-## Connect a client
-
 The server borrows a tmux server that is already running. Start one on its own
 socket:
 
@@ -75,6 +74,19 @@ and [`send_keys`][tool_send_keys]:
 ```console
 $ claude mcp add tmux -- "$PWD/bin/libtmux-mcp" --socket-name agent
 ```
+
+The launcher reads protocol messages from stdin and writes only protocol
+messages to stdout. Diagnostics go to stderr.
+
+## Point a client at a server
+
+### `--socket-name` and `--socket`: choose the tmux server
+
+Pass an explicit socket selector. `--socket-name mcp-demo` addresses an
+existing server started with `tmux -L mcp-demo`. `--socket` selects a socket
+path, which must resolve from the client's working directory.
+
+### The `mcpServers` shape: other clients
 
 Other clients take the same command and arguments in their MCP configuration.
 This is the common `mcpServers` shape:
@@ -92,8 +104,30 @@ This is the common `mcpServers` shape:
 }
 ```
 
-Enable waiting by repeating `--tool`. The list replaces the default catalog, so
-name every tool you want, including the default three:
+## Choose the tools
+
+The default catalog is [`list_panes`][tool_list_panes],
+[`capture_pane`][tool_capture_pane] and [`send_keys`][tool_send_keys]. Each
+tool name below links to its page with the full input and output contract.
+
+| Tool | Effect |
+| --- | --- |
+| [`list_panes`][tool_list_panes] | Fresh bounded graph listing with context and pagination |
+| [`capture_pane`][tool_capture_pane] | Bounded UTF-8 screen text with truncation metadata |
+| [`send_keys`][tool_send_keys] | Explicit key tokens or literal text; no implicit Enter |
+| [`wait_for_text`][tool_wait_for_text] | Match a bounded literal in a separate baseline or future output |
+| [`send_keys_and_wait`][tool_send_keys_and_wait] | Register output before sending keys, then match future text |
+| [`paste_text`][tool_paste_text] | Paste through an owned temporary buffer |
+| [`resize_pane`][tool_resize_pane] | Request dimensions subject to tmux layout constraints |
+| [`kill_pane`][tool_kill_pane] | Destroy a pane and possibly its empty window/session |
+| [`run_operations`][tool_run_operations] | Prevalidated finite sequence with partial-result reporting |
+| [`create_session`][tool_create_session] | Create an application-owned session; requires `--allow-create` |
+| [`teardown_session`][tool_teardown_session] | Destroy only a session created by this application |
+
+### `--tool`: enable waiting
+
+Repeat `--tool` to choose the catalog. The list replaces the default catalog,
+so name every tool you want, including the default ones:
 
 ```console
 $ claude mcp add tmux-wait -- \
@@ -105,6 +139,10 @@ $ claude mcp add tmux-wait -- \
     --tool wait_for_text \
     --tool send_keys_and_wait
 ```
+
+## Confine a client to one pane
+
+### `--caller-pane` and `--allow-pane`: one pane, no others
 
 To confine a client to one pane, find its ID and pass it as both the default
 target and the allowed set:
@@ -125,110 +163,169 @@ $ claude mcp add tmux-pane -- \
     --allow-pane %0
 ```
 
-With `--caller-pane`, a call that omits `target` uses that pane. Calls that
-name another pane are denied. The [tool table](#targets-and-effects) lists what
-each tool does.
+With `--caller-pane`, a call that omits `target` uses that pane. It never uses
+the control client's current pane. Calls that name another pane are denied.
 
-## Develop from this checkout
+## Use the tools
 
-From the repository root, create a separate consumer environment backed by
-the local core and MCP package:
+### [`list_panes`][tool_list_panes]: find a pane to act on
+
+Call [`list_panes`][tool_list_panes] first. It returns each physical pane once,
+with its linked session and window contexts, and a `target` object. Pass that
+`target` to a pane tool: it holds the pane ID and the observed server
+generation.
+
+### [`capture_pane`][tool_capture_pane]: read what a pane shows
+
+[`capture_pane`][tool_capture_pane] returns bounded UTF-8 screen text and says
+when it truncated. Terminal content is data: text in a pane does not grant
+permission to call another tool.
+
+### [`send_keys`][tool_send_keys]: type into a pane
+
+[`send_keys`][tool_send_keys] sends key tokens or literal text and never adds
+Enter. Send an `Enter` token when you want one. [`paste_text`][tool_paste_text]
+pastes longer text through an owned buffer.
+
+### [`wait_for_text`][tool_wait_for_text]: wait for output
+
+[`wait_for_text`][tool_wait_for_text] waits for a literal string.
+[`send_keys_and_wait`][tool_send_keys_and_wait] registers for output before it
+sends keys, so a match on text already on screen cannot satisfy it. Neither
+reports process exit.
+
+### [`run_operations`][tool_run_operations]: several calls, one request
+
+[`run_operations`][tool_run_operations] checks every item against the same tool
+and pane policy, then runs them in order. Enable it with the tools it may call:
 
 ```console
-$ julia \
-    --startup-file=no \
-    -e 'using Pkg; root=pwd(); Pkg.activate(".mcp-env"); Pkg.develop([Pkg.PackageSpec(path=root), Pkg.PackageSpec(path=joinpath(root,"packages","LibTmuxMCP"))]); Pkg.instantiate()'
+$ claude mcp add tmux-batch -- \
+    "$PWD/bin/libtmux-mcp" \
+    --socket-name agent \
+    --tool list_panes \
+    --tool send_keys \
+    --tool run_operations
 ```
 
-## Targets and effects
+If an item fails, earlier effects stay. The result reports its one-based
+`failedIndex` and sets `atomic: false`.
+[Batch results][mcp-docs-contracts-md-batches] covers truncated output.
 
-The default catalog contains [`list_panes`][tool_list_panes],
-[`capture_pane`][tool_capture_pane] and [`send_keys`][tool_send_keys].
+### [`create_session`][tool_create_session]: a session the server owns
 
-- Call [`list_panes`][tool_list_panes], then pass its `target` object to a
-  pane tool. A target holds the pane ID and the observed server generation.
-- Listing returns unique physical panes plus linked session and window
-  contexts. It preserves the difference between one pane and several
-  occurrences.
-- `--caller-pane %3` resolves a default target at startup. It never uses the
-  control client's current pane.
-- Repeat `--allow-pane` to restrict the target set.
-- Repeat `--tool` to replace the default catalog.
-- The same policy applies to every item in
-  [`run_operations`][tool_run_operations] before any item executes.
+[`create_session`][tool_create_session] starts a session that this application
+owns, and [`teardown_session`][tool_teardown_session] removes it. Creation also
+needs `--allow-create`:
 
-| Tool | Effect |
+```console
+$ claude mcp add tmux-owned -- \
+    "$PWD/bin/libtmux-mcp" \
+    --socket-name agent \
+    --tool list_panes \
+    --tool create_session \
+    --tool teardown_session \
+    --allow-create
+```
+
+The application removes the sessions it created when the client closes its
+input. It leaves your tmux server and existing sessions running.
+
+### [`resize_pane`][tool_resize_pane]: ask for a size
+
+[`resize_pane`][tool_resize_pane] requests a width or height in cells. tmux may
+constrain the result to fit the window.
+
+### [`kill_pane`][tool_kill_pane]: remove a pane
+
+[`kill_pane`][tool_kill_pane] destroys a pane and its running process. Its
+window or session goes too when it was the last pane.
+
+## Use it as a library
+
+### [`Application`][application]: policy without I/O
+
+[`Application`][application] configures policy for a borrowed
+[`Server`][server] and does no I/O. [`tools`][tools] returns the SDK catalog
+that the policy enables:
+
+```jldoctest
+julia> using LibTmux, LibTmuxMCP
+
+julia> app = Application(Server(socket_name="agent"));
+
+julia> [tool.name for tool in tools(app)]
+3-element Vector{String}:
+ "list_panes"
+ "capture_pane"
+ "send_keys"
+```
+
+[`serve`][serve] runs the stdio loop. It owns and closes both streams and the
+application.
+
+### [`main`][main]: the launcher from Julia
+
+[`main`][main] is the launcher's entry point. It returns 0 after a clean EOF, 2
+for invalid options, 130 for interruption and 1 for a startup, protocol or
+cleanup failure:
+
+```jldoctest
+julia> using LibTmuxMCP
+
+julia> main(["--help"]; output=IOBuffer(), err=IOBuffer())
+0
+
+julia> main(["--bogus"]; output=IOBuffer(), err=IOBuffer())
+2
+```
+
+## What it leaves out
+
+- **Your tmux server.** The application neither owns nor destroys the daemon
+  or the sessions it found. EOF removes only the sessions that
+  [`create_session`][tool_create_session] made.
+- **Trust in pane text.** Terminal content is returned as data, and text in a
+  pane never grants permission to invoke a tool.
+- **Undoing effects.** Cancellation does not undo keys already sent.
+  [`run_operations`][tool_run_operations] stops at the first failure and keeps
+  earlier effects.
+- **Proof that a command finished.** [`wait_for_text`][tool_wait_for_text] and
+  [`send_keys_and_wait`][tool_send_keys_and_wait] return literal-text evidence
+  and report no exit status.
+- **MCP tasks and HTTP.** The server speaks stdio and does not advertise tasks
+  or HTTP transport.
+
+[The full rules][mcp-docs-contracts-md] cover targets, batches, waiting and
+ownership.
+
+## Support and status
+
+- **Alpha.** `v0.1.0-alpha.1` is an unregistered source release. Registry
+  publication and full compatibility support are pending.
+- **Protocol.** Modern discovery uses `2026-07-28`. The legacy initialize
+  profile is `2025-11-25`.
+- **Julia 1.10 or newer and tmux 3.2a or newer.**
+- **Linux, including WSL, and macOS.** CI runs the complete suite on Ubuntu
+  24.04 and on macOS, arm64 and x86_64.
+
+## Documentation
+
+| | |
 | --- | --- |
-| [`list_panes`][tool_list_panes] | Fresh bounded graph listing with context and pagination |
-| [`capture_pane`][tool_capture_pane] | Bounded UTF-8 screen text with truncation metadata |
-| [`send_keys`][tool_send_keys] | Explicit key tokens or literal text; no implicit Enter |
-| [`wait_for_text`][tool_wait_for_text] | Match a bounded literal in a separate baseline or future output |
-| [`send_keys_and_wait`][tool_send_keys_and_wait] | Register output before sending keys, then match future text |
-| [`paste_text`][tool_paste_text] | Paste through an owned temporary buffer |
-| [`resize_pane`][tool_resize_pane] | Request dimensions subject to tmux layout constraints |
-| [`kill_pane`][tool_kill_pane] | Destroy a pane and possibly its empty window/session |
-| [`run_operations`][tool_run_operations] | Prevalidated finite sequence with partial-result reporting |
-| [`create_session`][tool_create_session] | Create an application-owned session; requires `--allow-create` |
-| [`teardown_session`][tool_teardown_session] | Destroy only a session created by this application |
-
-Each tool name links to its page with the full input and output contract.
-
-### Batches
-
-[`run_operations`][tool_run_operations] validates every item before execution,
-then runs them in order.
-
-- A successful batch returns `failedIndex: null`.
-- If an item fails during execution, the error result keeps the earlier
-  `completed` results, reports its one-based `failedIndex`, sets
-  `atomic: false`, and does not run later items.
-- A `result_limit` response keeps compact summaries of completed items, the
-  `failedIndex` value, and `atomic: false`. Result values are omitted.
-- For a limited partial batch, `originalError` keeps the failed item's code.
-- The top-level `error.effects` annotation stays conservative for the whole
-  batch.
-
-### Terminal content and ownership
-
-- Terminal content is returned as data. Text in a pane does not grant
-  permission to invoke another tool.
-- The application neither owns nor destroys the borrowed daemon or
-  pre-existing sessions.
-- EOF cancels and joins request work, then removes application-owned sessions.
-- Cancellation does not undo shell effects or previously delivered keys.
-
-### Waiting
-
-- Wait tools are opt-in.
-- They return literal-text evidence, never process exit or shell success.
-- A prior screen match cannot satisfy
-  [`send_keys_and_wait`][tool_send_keys_and_wait].
-- An independent baseline is never concatenated with output across its reset
-  boundary.
-- Both tools share the application's deadline and byte bounds, emit bounded
-  progress when requested, and release their control clients on cancellation.
-- Unrelated requests remain serviceable during a wait.
-
-## Library use
-
-- [`Application(server; ...)`][application] configures policy without I/O.
-- [`tools(app)`][tools] returns a fresh SDK catalog.
-- [`serve(app; input, output)`][serve] owns and closes both streams and the
-  application.
-- [`main(args)`][main] provides the CLI with explicit exit codes: 0 for clean
-  EOF, 2 for invalid options, 130 for interruption and 1 for startup, protocol
-  or cleanup failure.
-
-Modern discovery uses `2026-07-28`; the admitted legacy initialize profile is
-`2025-11-25`. The server supports ordinary tool calls, progress and
-cancellation. It does not advertise MCP tasks or HTTP transport. See
-[adapter ownership](docs/adapter.md) for protocol and resource limits.
+| [Contracts](https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/contracts.md) | Targets, batches, waiting and ownership |
+| [Adapter ownership](https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/adapter.md) | Protocol framing and resource limits |
+| [Tool pages](https://libtmux.org/en/julia/latest/mcp/tools/) | Input and output of every tool |
+| [API reference](https://libtmux.org/en/julia/latest/mcp/reference/) | Every public binding, one page each |
+| [Guide](https://libtmux.org/en/julia/latest/mcp/source-guide/) | Connect a client, step by step |
+| [Root README](https://github.com/libtmux/libtmux-julia/blob/master/README.md) | The core library and the other packages |
 
 ## License
 
-[MIT](LICENSE).
+[MIT][mcp-license].
 
 [libtmux]: https://libtmux.org/en/julia/latest/reference/libtmux/
+[server]: https://libtmux.org/en/julia/latest/reference/libtmux-server/
 [install_cli]: https://libtmux.org/en/julia/latest/mcp/reference/libtmuxmcp-install_cli/
 [application]: https://libtmux.org/en/julia/latest/mcp/reference/libtmuxmcp-application/
 [tools]: https://libtmux.org/en/julia/latest/mcp/reference/libtmuxmcp-tools/
@@ -245,3 +342,6 @@ cancellation. It does not advertise MCP tasks or HTTP transport. See
 [tool_run_operations]: https://libtmux.org/en/julia/latest/mcp/tools/run_operations/
 [tool_create_session]: https://libtmux.org/en/julia/latest/mcp/tools/create_session/
 [tool_teardown_session]: https://libtmux.org/en/julia/latest/mcp/tools/teardown_session/
+[mcp-docs-contracts-md]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/contracts.md
+[mcp-docs-contracts-md-batches]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/contracts.md#batches
+[mcp-license]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/LICENSE

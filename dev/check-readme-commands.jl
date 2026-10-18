@@ -7,6 +7,7 @@ const README_ROOT = dirname(@__DIR__)
 const README_FILES =
     ("README.md", "packages/LibTmuxWorkspace/README.md", "packages/LibTmuxMCP/README.md")
 const README_TREE = "https://github.com/libtmux/libtmux-julia/tree/master/"
+const README_BLOB = "https://github.com/libtmux/libtmux-julia/blob/master/"
 const README_SITE = "https://libtmux.org/en/julia/latest/"
 const README_DEADLINE = 180.0
 # Directories whose headings in the root README must link them, and a file
@@ -95,7 +96,8 @@ function readme_links(text)
 end
 
 function heading_slug(heading)
-    text = replace(heading, r"\[([^\]]*)\]\([^)]*\)" => s"\1")
+    text = replace(heading, r"\[((?:[^\[\]]|\[[^\]]*\])*)\]\([^)]*\)" => s"\1")
+    text = replace(text, r"\[((?:[^\[\]]|\[[^\]]*\])*)\]\[[^\]]*\]" => s"\1")
     text = replace(text, "`" => "")
     text = lowercase(strip(text))
     text = replace(text, r"[^\p{L}\p{N} _-]" => "")
@@ -192,6 +194,44 @@ function link_target_problems(text, name; root=README_ROOT)
     problems
 end
 
+# A README is also read outside GitHub, in an exported package or on a registry
+# page, where a relative link breaks. A link to a file of this repository is an
+# absolute GitHub URL that names an existing path: blob for a file, tree for a
+# directory. The new files of a pull request 404 there until it merges.
+function repo_link_problems(text, name; root=README_ROOT)
+    problems = String[]
+    for link in readme_links(text)
+        url = link.url
+        (startswith(url, "#") || startswith(url, "mailto:")) && continue
+        if !startswith(url, "http")
+            push!(
+                problems,
+                "$name:$(link.line): $url is a relative repository link; use $(README_BLOB)PATH",
+            )
+            continue
+        end
+        for (prefix, kind) in ((README_BLOB, "blob"), (README_TREE, "tree"))
+            startswith(url, prefix) || continue
+            path = String(first(split(url[(length(prefix)+1):end], '#'; limit=2)))
+            target = joinpath(root, path)
+            if !ispath(target)
+                push!(problems, "$name:$(link.line): $url names a missing path")
+            elseif kind == "blob" && isdir(target)
+                push!(
+                    problems,
+                    "$name:$(link.line): $url names a directory; use $(README_TREE)$path",
+                )
+            elseif kind == "tree" && !isdir(target)
+                push!(
+                    problems,
+                    "$name:$(link.line): $url names a file; use $(README_BLOB)$path",
+                )
+            end
+        end
+    end
+    problems
+end
+
 function package_heading_problems(text, name; root=README_ROOT)
     problems = String[]
     headings = Dict{String,String}()
@@ -211,6 +251,72 @@ function package_heading_problems(text, name; root=README_ROOT)
         startswith(url, README_TREE) || continue
         isdir(joinpath(root, url[(length(README_TREE)+1):end])) ||
             push!(problems, "$name: heading link $url names a missing directory")
+    end
+    problems
+end
+
+# A README reads at a glance: prose blocks stay short, Quick start comes
+# first, and the non-goals and support lines have their own sections.
+const README_WALL = 240
+
+# Paragraphs and list items outside code, tables and headings, with the line
+# each one starts on. The contents line is a row of links, so it is skipped.
+function prose_blocks(text)
+    blocks = Tuple{Int,String}[]
+    current = String[]
+    start = 0
+    function finish!()
+        isempty(current) || push!(blocks, (start, join(current, ' ')))
+        empty!(current)
+    end
+    for (number, line) in enumerate(split(resolved_prose(text), '\n'; keepempty=true))
+        stripped = strip(line)
+        if isempty(stripped) ||
+           startswith(stripped, '|') ||
+           startswith(stripped, '<') ||
+           occursin(r"^#{1,6} ", stripped)
+            finish!()
+            continue
+        end
+        item = match(r"^(?:[-*]|\d+\.) (.*)$", stripped)
+        if item !== nothing
+            finish!()
+            start = number
+            push!(current, String(item.captures[1]))
+            continue
+        end
+        isempty(current) && (start = number)
+        push!(current, String(stripped))
+    end
+    finish!()
+    [block for block in blocks if !startswith(block[2], "**Contents**")]
+end
+
+function rendered_length(block)
+    text = replace(block, r"\[((?:[^\[\]]|\[[^\]]*\])+)\]\([^)]*\)" => s"\1")
+    length(replace(text, "`" => ""))
+end
+
+function wall_problems(text, name)
+    [
+        "$name:$number: a prose block of $(rendered_length(block)) characters exceeds $README_WALL"
+        for (number, block) in prose_blocks(text) if rendered_length(block) > README_WALL
+    ]
+end
+
+function structure_problems(text, name)
+    sections = String[
+        strip(found.captures[1]) for found in eachmatch(r"^## (.+)$"m, blank_fences(text))
+    ]
+    problems = String[]
+    if !isempty(sections) && first(sections) != "Quick start"
+        push!(
+            problems,
+            "$name: the first section is \"$(first(sections))\"; it must be Quick start",
+        )
+    end
+    for required in ("What it leaves out", "Support and status")
+        required in sections || push!(problems, "$name: no \"$required\" section")
     end
     problems
 end
@@ -469,12 +575,15 @@ function static_problems(name, text, tools, index, helps; root=README_ROOT)
     append!(problems, console_problems(text, name))
     append!(problems, fence_link_problems(text, name))
     append!(problems, link_target_problems(text, name; root))
+    append!(problems, repo_link_problems(text, name; root))
     append!(problems, api_link_problems(text, name, index, tools))
     append!(problems, mentioned_api_problems(text, name, index, tools))
     append!(problems, tool_link_problems(text, name, tools))
     append!(problems, tool_table_problems(text, name, tools))
     append!(problems, marker_problems(text, name))
     append!(problems, flag_problems(text, name, helps))
+    append!(problems, wall_problems(text, name))
+    append!(problems, structure_problems(text, name))
     name == "README.md" && append!(problems, package_heading_problems(text, name; root))
     name == "packages/LibTmuxMCP/README.md" &&
         isempty(tool_rows(text)) &&
@@ -1100,6 +1209,63 @@ function self_test()
     )
 
     mktempdir() do directory
+        write(joinpath(directory, "a.md"), "text\n")
+        mkpath(joinpath(directory, "pkg"))
+        blob(path) = "[x]($(README_BLOB)$path)"
+        expect_problem(
+            "relative repository link",
+            repo_link_problems("[x](a.md)\n", "t.md"; root=directory),
+            "relative repository link",
+        )
+        expect_problem(
+            "relative link with an anchor",
+            repo_link_problems("[x](pkg/a.md#top)\n", "t.md"; root=directory),
+            "relative repository link",
+        )
+        expect_problem(
+            "relative reference-style link",
+            repo_link_problems("[x][r]\n\n[r]: a.md\n", "t.md"; root=directory),
+            "relative repository link",
+        )
+        expect_problem(
+            "absolute link to a missing path",
+            repo_link_problems(blob("gone.md") * "\n", "t.md"; root=directory),
+            "names a missing path",
+        )
+        expect_problem(
+            "blob link to a directory",
+            repo_link_problems(blob("pkg") * "\n", "t.md"; root=directory),
+            "names a directory",
+        )
+        expect_problem(
+            "tree link to a file",
+            repo_link_problems("[x]($(README_TREE)a.md)\n", "t.md"; root=directory),
+            "names a file",
+        )
+        expect_problem(
+            "relative link reaches the static check",
+            static_problems(
+                "README.md",
+                "[x](a.md)\n",
+                tools,
+                index,
+                helps;
+                root=directory,
+            ),
+            "relative repository link",
+        )
+        expect_clean(
+            "absolute, anchor and external links",
+            repo_link_problems(
+                blob("a.md#top") *
+                " [y]($(README_TREE)pkg) [z](#top) [w](https://example.com/a.md)\n",
+                "t.md";
+                root=directory,
+            ),
+        )
+    end
+
+    mktempdir() do directory
         write(joinpath(directory, "t.md"), "# Title\n")
         text = "# Title\n\n[a](#title) [b](#nothing) [c](missing.md) [d](t.md)\n"
         problems = link_target_problems(text, "t.md"; root=directory)
@@ -1123,6 +1289,34 @@ function self_test()
         )
     end
 
+    wall = "Sentence one is here. " ^ 14
+    expect_problem("a wall of prose", wall_problems(wall, "t.md"), "exceeds")
+    expect_problem("a wall in a list item", wall_problems("- $wall\n", "t.md"), "exceeds")
+    expect_clean("short prose", wall_problems("Sentence one is here. " ^ 5, "t.md"))
+    expect_clean(
+        "link targets are not prose",
+        wall_problems("[a](https://example.com/" * "x" ^ 300 * ")\n", "t.md"),
+    )
+    expect_clean("a wall inside a code block", wall_problems("```\n$wall\n```\n", "t.md"))
+    expect_clean("a contents line", wall_problems("**Contents** — $wall\n", "t.md"))
+    sections = "## Quick start\n\n## What it leaves out\n\n## Support and status\n"
+    expect_clean("ordered sections", structure_problems(sections, "t.md"))
+    expect_problem(
+        "Quick start second",
+        structure_problems("## Install\n\n" * sections, "t.md"),
+        "must be Quick start",
+    )
+    expect_problem(
+        "no non-goals",
+        structure_problems("## Quick start\n\n## Support and status\n", "t.md"),
+        "What it leaves out",
+    )
+    expect_problem(
+        "no support",
+        structure_problems("## Quick start\n\n## What it leaves out\n", "t.md"),
+        "Support and status",
+    )
+
     step = ReadmeStep("x", ReadmeFence("console", "\$ x\n", 1, nothing), "valid\n")
     @assert output_problem("x", "valid\n", "valid\n") === nothing
     @assert output_problem("x", "valid\n", "invalid\n") !== nothing
@@ -1130,6 +1324,10 @@ function self_test()
     @assert heading_slug("[LibTmux](https://x.test): the core library") ==
             "libtmux-the-core-library"
     @assert heading_slug("Install v0.1.0-alpha.1") == "install-v010-alpha1"
+    @assert heading_slug("[`snapshot`][snapshot]: what tmux has now") ==
+            "snapshot-what-tmux-has-now"
+    @assert heading_slug("[`LibTmux`](https://x.test): the core library") ==
+            "libtmux-the-core-library"
     @assert setup_reason("git clone x", "README.md") !== nothing
     @assert setup_reason("bin/libtmux-mcp --help", "README.md") === nothing
     println("PASS planted README failures are reported and clean controls stay clean")

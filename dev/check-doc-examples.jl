@@ -57,32 +57,53 @@ const DOC_SNIPPETS = Dict(
     ("README.md", 2) => (
         kind=:executable,
         gate=:context,
+        fingerprint="d8433e3f259892555763ffd3417be80b021dfe986fa4895e495b6030fa8b5cfd",
+        source="",
+        note="Retained snapshot listed pane by pane",
+    ),
+    ("README.md", 3) => (
+        kind=:executable,
+        gate=:context,
         fingerprint="029e7d4dc79346d0fc7f92452ef6cc9ed701546e5fe20d8daaa200ba2535ca96",
         source="",
         note="Captured predicates without a live daemon",
     ),
-    ("README.md", 3) => (
+    ("README.md", 4) => (
+        kind=:executable,
+        gate=:doctest,
+        fingerprint="982e665661e6074f54dfdac1e789622ac1dd7bbeaf11191d4b9370439c89fd4f",
+        source="",
+        note="Server descriptions without contacting tmux",
+    ),
+    ("README.md", 5) => (
+        kind=:executable,
+        gate=:context,
+        fingerprint="feead0621ecb479829522f955d6b4eaeb915ee9c91d7b1ba7662ae7248eee750",
+        source="",
+        note="Typed text read back from a control output stream",
+    ),
+    ("README.md", 6) => (
         kind=:executable,
         gate=:context,
         fingerprint="1dbd141b976758284585323df9dd3ed05627170006f2daf4d8ce3b12267b1320",
         source="",
         note="Task-based captures and scoped control cleanup",
     ),
-    ("README.md", 4) => (
+    ("README.md", 7) => (
         kind=:executable,
         gate=:doctest,
         fingerprint="ac18abfbc26dc39ce9b7295bc9da9e1c2d03f6a69f41ccdc4eaaf2aa8a6ddaab",
         source="",
         note="Pure criterion encoding without a live daemon",
     ),
-    ("README.md", 5) => (
+    ("README.md", 8) => (
         kind=:executable,
         gate=:doctest,
         fingerprint="f2df9f11edd575824c8619e63e96bfdf40d8f0d1f160d367ddd3fd9e8cbcdf99",
         source="",
         note="JSON 1.9 criteria codec round trip",
     ),
-    ("README.md", 6) => (
+    ("README.md", 9) => (
         kind=:executable,
         gate=:context,
         fingerprint="92a37440be5fd9547cfb6cd7f9b17f6854653454994504df69e486d7aad6e10a",
@@ -168,17 +189,66 @@ const DOC_SNIPPETS = Dict(
     ),
     ("packages/LibTmuxWorkspace/README.md", 2) => (
         kind=:executable,
+        gate=:doctest,
+        fingerprint="9397cd954650794bea40b0bf5894992d29b0ba1b35be6c0fcbb104bd91d61455",
+        source="",
+        note="Workspace text parsed, expanded and planned without tmux",
+    ),
+    ("packages/LibTmuxWorkspace/README.md", 3) => (
+        kind=:executable,
         gate=:context,
         fingerprint="3474dbfa248b047f7481d6c2e94c3d66cfad718843f2b62a422c4238d4a24f01",
         source="",
         note="Owned server and private workspace.yaml",
     ),
-    ("packages/LibTmuxWorkspace/README.md", 3) => (
+    ("packages/LibTmuxWorkspace/README.md", 4) => (
+        kind=:executable,
+        gate=:context,
+        fingerprint="e15ec45c03b8ab1136be78b4e08be848428589fbae024fc9baa5d2f40052675b",
+        source="",
+        note="Second apply of the same plan fails with a retained result",
+    ),
+    ("packages/LibTmuxWorkspace/README.md", 5) => (
+        kind=:executable,
+        gate=:context,
+        fingerprint="2a670dd8c9495a6d7fd9dee34355825d34952dc38e7f584ebdc05e7cd6e9e742",
+        source="",
+        note="Applied session frozen into a workspace document",
+    ),
+    ("packages/LibTmuxWorkspace/README.md", 6) => (
         kind=:executable,
         gate=:context,
         fingerprint="d3e17d2d572c86a8fb3f643053dfc3e930bd5023b4a8e0504448ec4e7d2ba1ac",
         source="",
         note="Private installation directory; installed launchers have a separate runtime gate",
+    ),
+    ("packages/LibTmuxWorkspace/README.md", 7) => (
+        kind=:executable,
+        gate=:doctest,
+        fingerprint="28035e8a9ce83a982032616d0de811035dfd3ac994ba3023bd5eb56b72c501d9",
+        source="",
+        note="Library entry point returns exit codes without a launcher",
+    ),
+    ("packages/LibTmuxWorkspace/README.md", 8) => (
+        kind=:executable,
+        gate=:doctest,
+        fingerprint="9b49987da0e512fcf508ac6ac0f57160b10c396776c3f1c422e299f2318af452",
+        source="",
+        note="Configuration error code and document path",
+    ),
+    ("packages/LibTmuxMCP/README.md", 1) => (
+        kind=:executable,
+        gate=:doctest,
+        fingerprint="45c11c15a0b1d89790bcc00981c2b6e7530fe02018d8e6bd28061eb029ef8e28",
+        source="",
+        note="Default tool catalog from an application, without tmux",
+    ),
+    ("packages/LibTmuxMCP/README.md", 2) => (
+        kind=:executable,
+        gate=:doctest,
+        fingerprint="66b2c08c6d36b9ba115095cbd4490f1690ffc552cbff004d0c036bd77502700b",
+        source="",
+        note="Launcher entry point returns exit codes without tmux",
     ),
     ("src/formats.jl", 1) => (
         kind=:executable,
@@ -459,6 +529,29 @@ function run_snippet_doctests(entries)
     end
 end
 
+# The text block that follows a Julia fence documents what the fence prints.
+function documented_output(entry; root=DOC_EXAMPLE_ROOT)
+    lines = split(replace(read(joinpath(root, entry.path), String), "\r\n"=>"\n"), '\n')
+    index = entry.line + count(==('\n'), entry.code) + 2
+    while index <= length(lines) && isempty(strip(lines[index]))
+        index += 1
+    end
+    index <= length(lines) && strip(lines[index]) == "```text" || return nothing
+    body = String[]
+    index += 1
+    while index <= length(lines) && !occursin(r"^```\s*$", lines[index])
+        push!(body, lines[index])
+        index += 1
+    end
+    join(body, '\n') * "\n"
+end
+
+function output_difference(entry, expected, observed)
+    expected === nothing && return nothing
+    strip(expected) == strip(observed) && return nothing
+    "$(entry.path):$(entry.line) printed $(repr(strip(observed))), not the documented $(repr(strip(expected)))"
+end
+
 function run_contextual_snippets(entries)
     @eval import LibTmux, LibTmuxWorkspace, Tables
     selected = Dict(
@@ -466,11 +559,20 @@ function run_contextual_snippets(entries)
         entry in entries if DOC_SNIPPETS[(entry.path, entry.ordinal)].gate === :context
     )
     executed = Set{Tuple{String,Int}}()
+    printed = Dict{Tuple{String,Int},String}()
     workspace = Module(gensym(:ShippedDocExamples))
     execute(key) = begin
         push!(executed, key)
         entry = selected[key]
-        Base.include_string(workspace, entry.code, entry.path)
+        value = Ref{Any}(nothing)
+        printed[key] = mktemp() do path, file
+            redirect_stdout(file) do
+                value[] = Base.include_string(workspace, entry.code, entry.path)
+            end
+            flush(file)
+            read(path, String)
+        end
+        value[]
     end
     bind(name, value) = Core.eval(workspace, Expr(:(=), name, QuoteNode(value)))
     endpoint = Ref{String}()
@@ -486,12 +588,16 @@ function run_contextual_snippets(entries)
                 @assert length(LibTmux.panes(captured)) == 2
                 @assert isempty(strip(Base.invokelatest(getproperty, workspace, :screen)))
                 @assert !ispath(dirname(captured.identity.socket_path))
-                ids = execute(("README.md", 2))
+                execute(("README.md", 2))
+                ids = execute(("README.md", 3))
                 @assert ids == [only(filter(p -> p.active, LibTmux.panes(captured))).id]
-                screens = execute(("README.md", 3))
+                execute(("README.md", 5))
+                echoed = Base.invokelatest(getproperty, workspace, :echoed)
+                @assert echoed == "hello from Julia"
+                screens = execute(("README.md", 6))
                 @assert length(screens) == 2 &&
                         all(screen -> isempty(strip(screen)), screens)
-                execute(("README.md", 6))
+                execute(("README.md", 9))
                 columns = Base.invokelatest(getproperty, workspace, :columns)
                 @assert columns.current_command == ["cat", "cat"]
                 @assert columns.id == [pane.id for pane in LibTmux.panes(captured)]
@@ -530,7 +636,7 @@ windows:
 """,
                 )
                 cd(directory) do
-                    execute(("packages/LibTmuxWorkspace/README.md", 2))
+                    execute(("packages/LibTmuxWorkspace/README.md", 3))
                     result = Base.invokelatest(getproperty, workspace, :result)
                     @assert result.status === :complete
                     observed = LibTmux.snapshot(server)
@@ -539,8 +645,16 @@ windows:
                         LibTmux.sessions(observed),
                     )
                     @assert length(LibTmux.panes(observed)) == 3
+                    execute(("packages/LibTmuxWorkspace/README.md", 4))
+                    @assert length(LibTmux.panes(LibTmux.snapshot(server))) == 3
+                    execute(("packages/LibTmuxWorkspace/README.md", 5))
+                    document = Base.invokelatest(getproperty, workspace, :document)
+                    @assert document.data["session_name"] == "example"
+                    @assert [
+                        window["window_name"] for window in document.data["windows"]
+                    ] == ["docs"]
                     bind(:bin_directory, joinpath(directory, "bin"))
-                    launcher = execute(("packages/LibTmuxWorkspace/README.md", 3))
+                    launcher = execute(("packages/LibTmuxWorkspace/README.md", 6))
                     @assert isfile(launcher) && !islink(launcher)
                     @assert dirname(launcher) == joinpath(directory, "bin")
                 end
@@ -549,6 +663,11 @@ windows:
     end
     @assert !ispath(endpoint[])
     @assert executed == Set(keys(selected))
+    for key in sort!(collect(executed))
+        problem =
+            output_difference(selected[key], documented_output(selected[key]), printed[key])
+        problem === nothing || error(problem)
+    end
     println("PASS ", length(executed), " exact contextual fences and owned cleanup")
 end
 
@@ -587,6 +706,24 @@ function doc_example_self_test()
     println(
         "PASS fence boundaries, unclosed fences, unclassified snippets and reviewed-content drift",
     )
+    mktempdir() do directory
+        write(
+            joinpath(directory, "printed.md"),
+            "```julia\nprintln(1)\nprintln(2)\n```\n\n```text\n1\n2\n```\n\n" *
+            "```julia\nprintln(3)\n```\n\nNo output block follows.\n",
+        )
+        fences =
+            document_fences(read(joinpath(directory, "printed.md"), String), "printed.md")
+        shown, silent = fences
+        expected = documented_output(shown; root=directory)
+        @assert expected == "1\n2\n"
+        @assert documented_output(silent; root=directory) === nothing
+        @assert output_difference(shown, expected, "1\n2\n") === nothing
+        @assert output_difference(silent, nothing, "anything") === nothing
+        differs = output_difference(shown, expected, "1\n3\n")
+        @assert differs !== nothing && occursin("not the documented", differs)
+    end
+    println("PASS documented output is found, compared and reported when it differs")
 end
 
 function doc_examples_main(arguments)
