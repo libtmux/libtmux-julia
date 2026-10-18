@@ -568,6 +568,9 @@ unit and complete-suite counts together. The final job report retains aggregate
 timing failures even when every test command passes. Missing completion records
 remain partial evidence.
 
+JUnit marks testsets containing only native `Broken` results as skipped.
+Its case totals describe diagnostic units; native assertion totals stay separate.
+
 Admitted native phases also publish immutable `LIVE_PREFIX` bundles while
 work runs. Process-start, assertion-problem and enabled profile-checkpoint
 notifications select a flushed prefix from the independently admitted direct

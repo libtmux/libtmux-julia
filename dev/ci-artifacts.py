@@ -1025,6 +1025,9 @@ def junit(report):
                 ET.SubElement(case, "failure", type="CompletedFailedBody", message="native Error counts prove completed-and-failed; see original assertions")
             elif body != "returned":
                 ET.SubElement(case, "skipped", message="UNKNOWN: body completion unavailable")
+            elif finish["counts"]["broken"] and not any(
+                    finish["counts"][key] for key in ("passed", "failed", "errored")):
+                ET.SubElement(case, "skipped", message="Native Broken results only; see separate assertion totals")
         for problem in process["assertion_problems"]:
             case = ET.SubElement(suite, "testcase", name=f"{problem['qualified_name']} > assertion-{problem['seq']}", classname="native-assertion-problem")
             if problem.get("file"):
@@ -2097,6 +2100,17 @@ def self_test():
         assert result["failure_detail_status"] == "NOT_OBSERVED"
         assert "root > nested" in (root / "complete" / "timings.csv").read_text()
         assert ET.fromstring((root / "complete" / "junit.xml").read_text()).find(".//testcase[@name='root > nested']") is not None
+        broken = json.loads(json.dumps(events))
+        broken[6]["counts"].update(passed=0, broken=1)
+        broken[8]["counts"].update(passed=1, broken=1)
+        write(broken)
+        result = run("native-broken")
+        assert result["assertion_counts"] == dict(passed=1, failed=0, errored=0, broken=1)
+        xml = ET.fromstring((root / "native-broken" / "junit.xml").read_text())
+        assert xml.find(".//testcase[@name='root > nested']/skipped") is not None, "all-Broken testset appeared as a passing JUnit case"
+        assert xml.find(".//testcase[@name='root']/skipped") is None
+        assert xml.find("testsuite").get("skipped") == "1"
+        write(events)
         evidence = collect_process_evidence([source], invocation="current", expected_source_digest=digest,
                                             source_roots=[(root, "owned")], expected_phase="tests")
         assert evidence["observed_file_coverage_complete"] and not evidence["test_inventory_complete"]
