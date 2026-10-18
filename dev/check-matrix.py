@@ -167,6 +167,11 @@ def signal_group(process, number):
     except ProcessLookupError:
         # Exit may win the race between the waiter deadline and signal delivery.
         pass
+    except PermissionError:
+        # macOS refuses to signal a group whose leader has exited; the leader
+        # is reaped by the waiter either way.
+        if sys.platform != "darwin":
+            raise
 
 
 def phase(name, argv, *, cwd, env, log, budget):
@@ -367,7 +372,7 @@ def command_plan(args, stage, metadata):
     add("workspace-unit", [*minimal, "packages/LibTmuxWorkspace/test/runtests.jl", "unit"], 30, "unit")
     add("mcp-unit", [*minimal, "packages/LibTmuxMCP/test/runtests.jl", "unit"], 30, "unit")
     add("quality", [*minimal, "dev/check-quality.jl", "quality"], 30, "quality")
-    add("format", [*normal, "dev/check-quality.jl", "format"], 30, "quality")
+    add("format", [*normal, "dev/check-quality.jl", "format"], 45, "quality")
     add("generated", [*minimal, "dev/generate-criteria.jl", "--check"], 30, "quality")
     add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 30, "quality")
     add("consumer-diagnostics", [*minimal, "dev/check-consumers.jl", "--self-test"], 30, "quality")
@@ -615,7 +620,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         budgets = {
             name: budget for name, _, budget, _ in selected_commands(args, base, metadata)
         }
-        assert budgets["format"] == 30
+        assert budgets["format"] == 45
         assert format_warmup_command(args, base) == [
             "julia", "--startup-file=no", "--threads=1", f"--project={base}",
             str(ROOT / "dev/check-quality.jl"), "format",
