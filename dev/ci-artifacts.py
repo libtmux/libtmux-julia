@@ -672,7 +672,7 @@ class ProfileReuse:
                 writer.write(chunk)
         if count != entry["safe_bytes"] or digest.hexdigest() != entry["safe_sha256"]:
             raise ValueError("profile reuse source differs from immutable proof")
-        build.verified_outputs[str(destination.resolve())] = entry["safe_sha256"]
+        build.verified_outputs[str(destination.absolute())] = entry["safe_sha256"]
         mapping.redacted_paths += entry["redacted_paths"]
         build.hits += 1
         copied = dict(entry["record"]) | dict(file=filename)
@@ -794,12 +794,21 @@ def copy_profiles(processes, event_paths, *, invocation, source_digest, mapping,
             # Sample words are validated UInt64 values, so only metadata needs path mapping.
             redaction_before = mapping.redacted_paths
             safe = mapping.value({key: value for key, value in payload.items() if key not in ("data", "lookup")})
-            safe["data"] = payload["data"]
+            safe.pop("data", None)
             safe["lookup"] = {address: mapping.value(frames) for address, frames in payload["lookup"].items()}
             # Do not trust a producer-supplied decoder verdict.
             safe["decoder_status"] = "RAW_PRESERVED_NATIVE_DECODER_UNVERIFIED"
             safe["measurement_scope"] = "cumulative_checkpoint; checkpoints overlap"
-            (output / filename).write_text(json.dumps(safe, sort_keys=True, separators=(",", ":")) + "\n")
+            metadata_text = json.dumps(safe, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            if any(PRIVATE_PATH_REJECT.search(value) or ABSOLUTE_PATH.search(value)
+                   for value in json_strings(parse_json(json_privacy_view(metadata_text)))):
+                raise ValueError("export reject scan found an absolute path in profile metadata")
+            # Add only validated UInt64 words to the exact metadata bytes scanned above.
+            encoded = (metadata_text[:-1] + ',"data":' +
+                       json.dumps(payload["data"], separators=(",", ":")) + "}\n").encode()
+            profile_path = output / filename
+            profile_path.write_bytes(encoded)
+            build.verified_outputs[str(profile_path.absolute())] = hashlib.sha256(encoded).hexdigest()
             record.update(observations, file=filename, status="RAW_PRESERVED", capture_status=payload["status"],
                           input_sha256=digest, data_words=len(payload["data"]), lookup_addresses=len(payload["lookup"]),
                           julia=payload["julia"], threads=payload["threads"],
@@ -1133,32 +1142,35 @@ def _json_privacy_tokens():
 JSON_PRIVACY_TOKENS = _json_privacy_tokens()
 
 
+def json_strings(value):
+    """Yield string keys and values from decoded JSON."""
+    kind = type(value)
+    if kind is str:
+        yield value
+    elif kind is list:
+        if not set(map(type, value)) & {str, list, dict}:
+            return
+        for item in value:
+            if type(item) is str:
+                yield item
+            elif type(item) is list or type(item) is dict:
+                yield from json_strings(item)
+    elif kind is dict:
+        for key, item in value.items():
+            yield key
+            if type(item) is str:
+                yield item
+            elif type(item) is list or type(item) is dict:
+                yield from json_strings(item)
+
+
 def export_strings(path):
     """Inspect decoded values so XML syntax and JSON escapes cannot hide paths."""
-    def strings(value):
-        kind = type(value)
-        if kind is str:
-            yield value
-        elif kind is list:
-            if not set(map(type, value)) & {str, list, dict}:
-                return
-            for item in value:
-                if type(item) is str:
-                    yield item
-                elif type(item) is list or type(item) is dict:
-                    yield from strings(item)
-        elif kind is dict:
-            for key, item in value.items():
-                yield key
-                if type(item) is str:
-                    yield item
-                elif type(item) is list or type(item) is dict:
-                    yield from strings(item)
     if path.suffix == ".json":
-        yield from strings(parse_json(json_privacy_view(path.read_text())))
+        yield from json_strings(parse_json(json_privacy_view(path.read_text())))
     elif path.suffix == ".jsonl":
         for line in path.read_text().splitlines():
-            yield from strings(parse_json(line))
+            yield from json_strings(parse_json(line))
     elif path.suffix == ".xml":
         for node in ET.fromstring(path.read_text()).iter():
             yield from node.attrib.values()
@@ -1174,18 +1186,18 @@ def export_strings(path):
         for line in path.read_text().split("\n"):
             packet = decoded_progress(line)
             if packet is not None:
-                yield from strings(packet)
+                yield from json_strings(packet)
             elif line.startswith(PROGRESS_PREFIX):
                 raise ValueError("unparsed diagnostic progress")
             else:
                 yield line
 
 
-def unsafe_export(path, *, reused_profile_sha256=None):
-    if reused_profile_sha256 is not None:
-        return (not isinstance(reused_profile_sha256, str) or not SHA256.fullmatch(reused_profile_sha256)
+def unsafe_export(path, *, verified_profile_sha256=None):
+    if verified_profile_sha256 is not None:
+        return (not isinstance(verified_profile_sha256, str) or not SHA256.fullmatch(verified_profile_sha256)
             or path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_PROFILE_BYTES
-            or hashlib.sha256(path.read_bytes()).hexdigest() != reused_profile_sha256)
+            or hashlib.sha256(path.read_bytes()).hexdigest() != verified_profile_sha256)
     try:
         return any(PRIVATE_PATH_REJECT.search(value) or ABSOLUTE_PATH.search(value) for value in export_strings(path))
     except (ValueError, UnicodeError, RecursionError, ET.ParseError):
@@ -1367,13 +1379,18 @@ def write_bundle(evidence, event_paths, *, invocation, expected_source_digest, m
     write_profile_cache_index(profile_cache_build, output, mapping, invocation, expected_source_digest, report.get("phase") or report.get("snapshot_binding", {}).get("phase"))
     manifest = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in output.iterdir() if path.is_file()}
     (output / "manifest.json").write_text(json.dumps(dict(schema=1, invocation=invocation, source_digest=expected_source_digest, files=manifest), indent=2, sort_keys=True) + "\n")
-    unsafe = [path.name for path in output.iterdir() if unsafe_export(path,
-        reused_profile_sha256=profile_cache_build.verified_outputs.get(str(path.resolve())))]
+    verified = profile_cache_build.verified_outputs
+    unsafe = {Path(filename).name for filename, digest in verified.items()
+              if unsafe_export(Path(filename), verified_profile_sha256=digest)}
+    unsafe.update(path.name for path in output.iterdir()
+                  if str(path.absolute()) not in verified and unsafe_export(path))
     if unsafe:
         # A rejected export keeps no uploadable unsafe payload.
         for filename in unsafe:
-            (output / filename).unlink()
-        raise ValueError("export reject scan found an absolute path")
+            rejected = output / filename
+            if rejected.is_symlink() or rejected.is_file():
+                rejected.unlink()
+        raise ValueError("export reject scan found an absolute path or modified profile")
     return report
 
 
@@ -2089,6 +2106,11 @@ def self_test():
         assert retained["data"] == payload["data"] and retained["lookup"]["0"] == [None]
         assert retained["decoder_status"] == "RAW_PRESERVED_NATIVE_DECODER_UNVERIFIED"
         assert retained["lookup"]["123"][0]["file"] == "prefixredacted-path"
+        write(profile_events(payload | {str(root): ["extension-value"]}))
+        result = assemble([source], invocation="current", expected_source_digest=digest,
+            source_roots=[(root, "data")], output=root / "mapped-sample-key", supervisor_path=receipt)
+        retained = parse_json((root / "mapped-sample-key" / result["profile_records"][0]["file"]).read_bytes())
+        assert retained["data"] == [0, 123, 0], "mapped metadata displaced validated sample words"
         partial_payload = payload | dict(symbolization_status="partial", unresolved_addresses=1, buffer_full=False,
             truncated=False, lookup={"0": [None], "123": None})
         complete_payload = payload | dict(checkpoint_seq=2, symbolization_status="complete", unresolved_addresses=0,
@@ -2231,6 +2253,44 @@ def self_test():
             raise AssertionError("cache accepted changed sanitized profile bytes")
         safe_path.write_bytes(safe_before)
         from unittest.mock import patch
+        original_capture = globals()["capture_profile_cache_entry"]
+        original_reuse_copy = ProfileReuse.copy
+        def change_exported_profile(path, corruption):
+            if corruption == "bytes":
+                path.write_bytes(path.read_bytes().replace(b'"data":[0,', b'"data":[1,'))
+            elif corruption == "symlink":
+                target = root / "replacement-profile.json"
+                target.write_bytes(path.read_bytes())
+                path.unlink()
+                path.symlink_to(target)
+            elif corruption == "removed":
+                path.unlink()
+            elif corruption == "renamed":
+                path.rename(path.with_name("renamed.json"))
+            elif corruption == "directory":
+                path.unlink()
+                path.mkdir()
+                (path / "replacement.json").write_text('{"data":[42]}\n')
+        for reused in (False, True):
+            for corruption in ("bytes", "symlink", "removed", "renamed", "directory"):
+                name = "profile-post-copy-" + str(reused) + "-" + corruption
+                def corrupt_capture(build, process, checkpoint, raw, path, record, redactions):
+                    original_capture(build, process, checkpoint, raw, path, record, redactions)
+                    change_exported_profile(path, corruption)
+                def corrupt_reuse(self, process, start, checkpoint, raw, output, filename, mapping, build):
+                    record = original_reuse_copy(self, process, start, checkpoint, raw, output, filename, mapping, build)
+                    change_exported_profile(output / filename, corruption)
+                    return record
+                with patch.dict(globals(), capture_profile_cache_entry=corrupt_capture), \
+                        patch.object(ProfileReuse, "copy", corrupt_reuse):
+                    try:
+                        checkpoint_run(name, profile_reuse=approval if reused else None)
+                    except ValueError:
+                        pass
+                    else:
+                        raise AssertionError("published modified profile: " + name)
+                assert not (root / name).exists(), "rejected profile bundle was published"
+                assert not list(root.glob(".artifact-build-*")), "rejected private build survived cleanup"
         with patch("pathlib.Path.home", return_value=root.parent):
             first_map = SourceMap([(root, "owned")])
         with patch("pathlib.Path.home", return_value=root / "another-home"):
