@@ -270,6 +270,58 @@
             end
             @test !isopen(hooked)
 
+            if Sys.islinux()
+                # Outer tier: hold stderr through the bounded drainage deadline.
+                @testset "exited clients retain drainage failures" begin
+                    retired = Ref{LibTmux.ControlConnection}()
+                    failure = try
+                        LibTmux.open_control(server, session) do draining
+                            retired[] = draining
+                            descriptor =
+                                reinterpret(Int32, Base._fd(draining.errors.out))
+                            writer = open(
+                                "/proc/self/fd/$descriptor";
+                                read=false,
+                                write=true,
+                                create=false,
+                                truncate=false,
+                            )
+                            try
+                                LibTmux._control_stop!(draining, :closed_by_caller)
+                                wait(draining.supervisor)
+                            finally
+                                close(writer)
+                            end
+                        end
+                        nothing
+                    catch error
+                        error
+                    end
+                    @test failure isa LibTmux.ControlCleanupError
+                    if failure isa LibTmux.ControlCleanupError
+                        @test failure.reason === :local_retirement_timeout
+                    end
+                    draining = retired[]
+                    if draining isa LibTmux.ControlConnection
+                        @test process_exited(draining.process) &&
+                              draining.process.termsignal != Base.SIGKILL
+                        @test process_exited(draining.cleanup.process)
+                        @test all(
+                            istaskdone,
+                            (
+                                draining.workers...,
+                                draining.cleanup.workers...,
+                                draining.supervisor,
+                                draining.cleanup.supervisor,
+                                draining.cleanup_worker,
+                                draining.stop_timer_task,
+                                draining.cleanup.stop_timer_task,
+                            ),
+                        )
+                    end
+                end
+            end
+
             concurrent = LibTmux.open_control(server, session; capacity=4)
             try
                 jobs = map(1:8) do index

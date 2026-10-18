@@ -38,12 +38,12 @@ struct ControlConnectionError <: LibTmuxError
     reason::Symbol
     sent::Bool
 end
-"""Local resources closed, but retirement of submitted backend work was not proved."""
+"""Owned resource cleanup or retirement of submitted backend work was not proved."""
 struct ControlCleanupError <: LibTmuxError
     reason::Symbol
 end
 Base.showerror(io::IO, error::ControlCleanupError) =
-    print(io, "tmux control cleanup could not confirm remote retirement: ", error.reason)
+    print(io, "tmux control cleanup could not confirm retirement: ", error.reason)
 "An exact control target did not resolve; no fallback observation is returned."
 struct ControlTargetError <: LibTmuxError
     target::String
@@ -189,7 +189,10 @@ function _control_stop!(connection::ControlConnection, reason::Symbol)
         end
         connection.stop_timer, connection.stop_timer_task = _owned_timer(0.9) do
             lock(connection.lock) do
-                connection.cleanup_error = ControlCleanupError(:forced_client_termination)
+                cleanup_reason =
+                    process_running(connection.process) ? :client_stop_timeout :
+                    :local_retirement_timeout
+                connection.cleanup_error = ControlCleanupError(cleanup_reason)
             end
             try
                 process_running(connection.process) &&
