@@ -614,7 +614,9 @@ A returned Julia wait does not measure the kernel's earlier reap time or prove
 descendant retirement.
 
 CI consumer drivers publish their own bound progress and retain prefixes from
-admitted child journals. Child prefixes contain complete records observed
+admitted child journals. The collector follows each matched bootstrap's child
+admissions and records the immediate parent and depth. A pending bootstrap
+cannot admit deeper journals. Child prefixes contain complete records observed
 during assembly; they do not describe one shared instant. These artifacts keep
 partial coverage and do not add diagnostic records to application streams.
 

@@ -1436,85 +1436,100 @@ def assemble(event_paths, *, invocation, expected_source_digest, source_roots, o
 
 def checkpoint_child_prefixes(event_paths, evidence, admission, *, invocation,
                               source_digest, source_roots, mapping):
-    """Attach bounded child observations only after positive parent admission."""
-    parent = evidence["processes"][0]
-    admitted, tokens = {}, set()
-    for record in parent["events"]:
-        if record["event"] != "child_admitted":
-            continue
-        pid, token, birth = (record.get(key) for key in
-                             ("child_pid", "child_token", "child_process_birth_id"))
-        if (type(pid) is not int or pid <= 0 or pid == admission["pid"]
-                or not isinstance(token, str) or not IDENTIFIER.fullmatch(token)
-                or token == admission["process_token"] or birth != f"{token}-{pid}"
-                or not IDENTIFIER.fullmatch(birth) or birth in admitted or token in tokens
-                or type(record.get("profile_injected")) is not bool):
-            raise ValueError("checkpoint child admission is invalid or ambiguous")
-        admitted[birth] = record
-        tokens.add(token)
-    marker = parent["events"][-1]
-    if marker["event"] in ("child_admitted", "child_exit_observed"):
-        selected = admitted.get(marker.get("child_process_birth_id"))
-        if (selected is None or type(marker.get("child_pid")) is not int
-                or marker["child_pid"] != selected["child_pid"]):
-            raise ValueError("checkpoint child marker has no matching admission")
-    expected = {f"events-{birth}.jsonl": record for birth, record in admitted.items()
-                if record["profile_injected"]}
+    """Follow bounded positive parent chains without certifying full coverage."""
+    direct = evidence["processes"][0]
+    births, tokens = {direct["process_id"]}, {admission["process_token"]}
+    available = {}
+    for path in event_paths[1:]:
+        if (path.is_symlink() or not path.is_file() or not mapping.owns(path)
+                or path.parent.resolve() != event_paths[0].parent.resolve()):
+            raise ValueError("checkpoint child stream is unavailable or outside the phase")
+        if path.name in available:
+            raise ValueError("checkpoint child stream identity is ambiguous")
+        available[path.name] = path
     accepted = [event_paths[0]]
     result = dict(child_prefixes=[], unadmitted_child_streams=[], pending_child_streams=[])
+    parents = [(direct, 0)]
     with tempfile.TemporaryDirectory(prefix=".child-checkpoint-input-", dir=event_paths[0].parent) as temporary:
-        for path in event_paths[1:]:
-            if (path.is_symlink() or not path.is_file() or not mapping.owns(path)
-                    or path.parent.resolve() != event_paths[0].parent.resolve()):
-                raise ValueError("checkpoint child stream is unavailable or outside the phase")
-            record = expected.pop(path.name, None)
-            if record is None:
-                result["unadmitted_child_streams"].append(path.name)
-                continue
-            issues = []
-            raw = input_bytes(path, mapping, issues)
-            if issues:
-                raise ValueError("checkpoint child input exceeds its bound or is unavailable")
-            pending = bool(raw) and not raw.endswith(b"\n")
-            if pending:
-                index = raw.rfind(b"\n")
-                raw = raw[:index + 1] if index >= 0 else b""
-            if not raw:
-                result["pending_child_streams"].append(record["child_process_birth_id"])
-                continue
-            copied = Path(temporary) / path.name
-            copied.write_bytes(raw)
-            child_evidence = collect_process_evidence([copied], invocation=invocation,
-                expected_source_digest=source_digest, source_roots=source_roots,
-                expected_phase=parent["phase"])
-            child = child_evidence["processes"][0]
-            if (child_evidence["issues"] or any(item["severe"] for item in child["issues"])
-                    or not child["source_bound"] or child["phase"] != parent["phase"]
-                    or child["process_id"] != record["child_process_birth_id"]
-                    or child["pid"] != record["child_pid"]):
-                raise ValueError("checkpoint child stream differs from parent admission")
-            start = child["events"][0]
-            if "parent_pid" in start and (type(start["parent_pid"]) is not int
-                    or start["parent_pid"] != admission["pid"]):
-                raise ValueError("checkpoint child process start contradicts parent admission")
-            starts = [item for item in child["events"] if item["event"] == "child_bootstrap_start"]
-            if len(starts) > 1 or starts and (
-                    starts[0].get("child_token") != record["child_token"]
-                    or starts[0].get("parent_process_birth_id") != parent["process_id"]
-                    or type(starts[0].get("parent_pid")) is not int
-                    or starts[0]["parent_pid"] != admission["pid"]):
-                raise ValueError("checkpoint child bootstrap contradicts parent admission")
-            child.update(input_name=mapping.text(path.name), input_ordinal=len(accepted) + 1)
-            evidence["processes"].append(child)
-            evidence["process_birth_ids"].append(child["process_id"])
-            evidence["redacted_absolute_paths"] += child_evidence["redacted_absolute_paths"]
-            accepted.append(path)
-            result["child_prefixes"].append(dict(process_birth_id=child["process_id"],
-                pid=child["pid"], parent_admission_sequence=record["seq"],
-                through_sequence=child["events"][-1]["seq"],
-                event_prefix_bytes=len(raw), event_prefix_sha256=hashlib.sha256(raw).hexdigest(),
-                trailing_record_pending=pending, bootstrap_status="MATCHED" if starts else "PENDING"))
-    result["pending_child_streams"].extend(record["child_process_birth_id"] for record in expected.values())
+        # At most one parent per supplied stream; the caller bounds that inventory.
+        for parent, depth in parents:
+            admitted = {}
+            for record in parent["events"]:
+                if record["event"] != "child_admitted":
+                    continue
+                pid, token, birth = (record.get(key) for key in
+                                     ("child_pid", "child_token", "child_process_birth_id"))
+                if (type(pid) is not int or pid <= 0 or pid in (admission["pid"], parent["pid"])
+                        or not isinstance(token, str) or not IDENTIFIER.fullmatch(token)
+                        or birth != f"{token}-{pid}" or not IDENTIFIER.fullmatch(birth)
+                        or birth in births or token in tokens
+                        or type(record.get("profile_injected")) is not bool):
+                    raise ValueError("checkpoint child admission is invalid or ambiguous")
+                admitted[birth] = record
+                births.add(birth)
+                tokens.add(token)
+            marker = parent["events"][-1]
+            if marker["event"] in ("child_admitted", "child_exit_observed"):
+                selected = admitted.get(marker.get("child_process_birth_id"))
+                if (selected is None or type(marker.get("child_pid")) is not int
+                        or marker["child_pid"] != selected["child_pid"]):
+                    raise ValueError("checkpoint child marker has no matching admission")
+            expected = {f"events-{birth}.jsonl": record for birth, record in admitted.items()
+                        if record["profile_injected"]}
+            for name, path in tuple(available.items()):
+                record = expected.pop(name, None)
+                if record is None:
+                    continue
+                del available[name]
+                issues = []
+                raw = input_bytes(path, mapping, issues)
+                if issues:
+                    raise ValueError("checkpoint child input exceeds its bound or is unavailable")
+                pending = bool(raw) and not raw.endswith(b"\n")
+                if pending:
+                    index = raw.rfind(b"\n")
+                    raw = raw[:index + 1] if index >= 0 else b""
+                if not raw:
+                    result["pending_child_streams"].append(record["child_process_birth_id"])
+                    continue
+                copied = Path(temporary) / name
+                copied.write_bytes(raw)
+                child_evidence = collect_process_evidence([copied], invocation=invocation,
+                    expected_source_digest=source_digest, source_roots=source_roots,
+                    expected_phase=parent["phase"])
+                child = child_evidence["processes"][0]
+                if (child_evidence["issues"] or any(item["severe"] for item in child["issues"])
+                        or not child["source_bound"] or child["phase"] != parent["phase"]
+                        or child["process_id"] != record["child_process_birth_id"]
+                        or child["pid"] != record["child_pid"]):
+                    raise ValueError("checkpoint child stream differs from parent admission")
+                start = child["events"][0]
+                if "parent_pid" in start and (type(start["parent_pid"]) is not int
+                        or start["parent_pid"] != parent["pid"]):
+                    raise ValueError("checkpoint child process start contradicts parent admission")
+                starts = [item for item in child["events"] if item["event"] == "child_bootstrap_start"]
+                if len(starts) > 1 or starts and (
+                        starts[0].get("child_token") != record["child_token"]
+                        or starts[0].get("parent_process_birth_id") != parent["process_id"]
+                        or type(starts[0].get("parent_pid")) is not int
+                        or starts[0]["parent_pid"] != parent["pid"]):
+                    raise ValueError("checkpoint child bootstrap contradicts parent admission")
+                child.update(input_name=mapping.text(name), input_ordinal=len(accepted) + 1)
+                evidence["processes"].append(child)
+                evidence["process_birth_ids"].append(child["process_id"])
+                evidence["redacted_absolute_paths"] += child_evidence["redacted_absolute_paths"]
+                accepted.append(path)
+                result["child_prefixes"].append(dict(process_birth_id=child["process_id"],
+                    pid=child["pid"], parent_process_birth_id=parent["process_id"],
+                    parent_pid=parent["pid"], depth=depth + 1,
+                    parent_admission_sequence=record["seq"], through_sequence=child["events"][-1]["seq"],
+                    event_prefix_bytes=len(raw), event_prefix_sha256=hashlib.sha256(raw).hexdigest(),
+                    trailing_record_pending=pending, bootstrap_status="MATCHED" if starts else "PENDING"))
+                # An observed child prefix cannot admit descendants before bootstrap binding.
+                if starts:
+                    parents.append((child, depth + 1))
+            result["pending_child_streams"].extend(record["child_process_birth_id"] for record in expected.values())
+    result["unadmitted_child_streams"].extend(available)
     return tuple(accepted), result
 
 
@@ -2345,6 +2360,96 @@ def self_test():
         reused_children = checkpoint_run("live-admitted-children-reused", profile_reuse=child_approval, **child_args)
         assert reused_children["profile_reuse_counts"]["reused"] == 2
         assert reused_children["assertion_counts"] == children["assertion_counts"]
+        grandchild_path = root / "events-application-126.jsonl"
+        grandchild_profile = root / "application-profile.json"
+        grandchild_profile.write_text(json.dumps(payload | dict(process_birth_id="application-126", pid=126)) + "\n")
+        grandchild_events = [
+            event("process_start", 1, phase="tests", julia="1.13.0", threads=1, parent_pid=124),
+            event("child_bootstrap_start", 2, child_token="application", parent_pid=124,
+                  parent_process_birth_id="consumer-124"),
+            event("profile_checkpoint", 3, checkpoint_seq=1, mode="cpu", status="captured",
+                  file=grandchild_profile.name, input_sha256=hashlib.sha256(grandchild_profile.read_bytes()).hexdigest(),
+                  data_words=3, capture_seconds=.01),
+            event("testset_start", 4, testset_id=1, parent_id=None, description="nested child failure",
+                  file="test/runtests.jl", line=30),
+            event("assertion_problem", 5, testset_id=1, result_type="Fail", problem_kind="test",
+                  file="test/runtests.jl", line=31, detail="Expression: 1 == 2"),
+        ]
+        grandchild_events = [item | dict(pid=126, process_birth_id="application-126") for item in grandchild_events]
+        nested_admission = child_events[0] | dict(event="child_admitted", child_pid=126,
+            child_token="application", child_process_birth_id="application-126", profile_injected=True)
+        nested_events = child_events + [nested_admission]
+
+        def write_child_prefix(path, items, tail=b""):
+            raw = "".join(json.dumps(item | dict(seq=index, elapsed_ns=index)) + "\n"
+                          for index, item in enumerate(items, 1)).encode()
+            path.write_bytes(raw + tail)
+            return raw
+
+        nested_raw = write_child_prefix(child_path, nested_events, b'{"concurrent_tail":')
+        write_child_prefix(grandchild_path, grandchild_events, b'{"unfinished":')
+        nested_args = child_args | dict(child_paths=[grandchild_path, child_path, future_path])
+        nested = checkpoint_run("live-admitted-grandchild", **nested_args)
+        assert nested["profile_checkpoint_counts"] == dict(attempted=3, copied=3)
+        assert {item["process_id"] for item in nested["processes"]} == {
+            "direct-123", "consumer-124", "application-126"}
+        assert nested["test_status"] == nested["check_status"] == "FAIL"
+        assert nested["assertion_counts"]["failed"] == 1 and not nested["test_inventory_complete"]
+        assert nested["coverage_status"] == "PARTIAL" and not nested["diagnostics_complete"]
+        nested_binding = {item["process_birth_id"]: item for item in nested["snapshot_binding"]["child_prefixes"]}
+        assert nested_binding["consumer-124"]["parent_process_birth_id"] == "direct-123"
+        assert nested_binding["consumer-124"]["depth"] == 1
+        assert nested_binding["application-126"]["parent_process_birth_id"] == "consumer-124"
+        assert nested_binding["application-126"]["parent_pid"] == 124
+        assert nested_binding["application-126"]["depth"] == 2
+        assert nested_binding["consumer-124"]["event_prefix_sha256"] == hashlib.sha256(nested_raw).hexdigest()
+        assert nested_binding["application-126"]["trailing_record_pending"]
+        assert nested["snapshot_binding"]["unadmitted_child_streams"] == [future_path.name]
+        nested_public = root / "live-admitted-grandchild"
+        nested_approval = dict(index_path=nested_public / "profile-cache-index.json",
+            approved_manifest_sha256=hashlib.sha256((nested_public / "manifest.json").read_bytes()).hexdigest())
+        nested_reused = checkpoint_run("live-admitted-grandchild-reused", profile_reuse=nested_approval, **nested_args)
+        assert nested_reused["profile_reuse_counts"]["reused"] == 3
+        assert nested_reused["assertion_counts"] == nested["assertion_counts"]
+
+        def reject_nested(label, parent_items, leaf_items):
+            write_child_prefix(child_path, parent_items)
+            write_child_prefix(grandchild_path, leaf_items)
+            output = "live-grandchild-reject-" + label
+            try:
+                checkpoint_run(output, **nested_args)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("checkpoint accepted invalid recursive child " + label)
+            assert not (root / output).exists()
+
+        for label, key, value in (("start-parent", "parent_pid", 123),
+                                  ("source", "source_digest", "b" * 64),
+                                  ("invocation", "invocation", "older")):
+            reject_nested(label, nested_events, [grandchild_events[0] | {key: value}, *grandchild_events[1:]])
+        for label, change in (("bootstrap-parent", dict(parent_process_birth_id="direct-123")),
+                               ("bootstrap-pid", dict(parent_pid=123)),
+                               ("bootstrap-token", dict(child_token="different"))):
+            reject_nested(label, nested_events,
+                          [grandchild_events[0], grandchild_events[1] | change, *grandchild_events[2:]])
+        reject_nested("duplicate-admission", nested_events + [nested_admission], grandchild_events)
+        reject_nested("duplicate-token", child_events + [nested_admission | dict(
+            child_token="consumer", child_process_birth_id="consumer-126")], grandchild_events)
+        cycle = grandchild_events[0] | dict(event="child_admitted", child_pid=123,
+            child_token="cycle", child_process_birth_id="cycle-123", profile_injected=True)
+        reject_nested("root-pid", nested_events, grandchild_events + [cycle])
+        cycle = cycle | dict(child_token="direct", child_process_birth_id="direct-123")
+        reject_nested("root-birth", nested_events, grandchild_events + [cycle])
+        write_child_prefix(child_path, [item for item in nested_events if item["event"] != "child_bootstrap_start"])
+        write_child_prefix(grandchild_path, grandchild_events)
+        pending_parent = checkpoint_run("live-grandchild-pending-parent-bootstrap", **nested_args)
+        assert pending_parent["profile_checkpoint_counts"] == dict(attempted=2, copied=2)
+        assert pending_parent["check_status"] == "UNKNOWN"
+        assert {item["process_id"] for item in pending_parent["processes"]} == {"direct-123", "consumer-124"}
+        assert pending_parent["snapshot_binding"]["child_prefixes"][0]["bootstrap_status"] == "PENDING"
+        assert pending_parent["snapshot_binding"]["unadmitted_child_streams"] == [grandchild_path.name, future_path.name]
+        child_path.write_bytes(child_raw)
         for name, broken in (("parent", child_raw.replace(b'direct-123', b'other-parent')),
                              ("birth", child_raw.replace(b'consumer-124', b'other-child')),
                              ("start-parent", child_raw.replace(b'"parent_pid": 123', b'"parent_pid": 999', 1))):
