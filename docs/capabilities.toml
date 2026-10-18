@@ -19,7 +19,7 @@ verified_product_cells = [
 ]
 
 [required]
-packages = "partial: core, MCP and workspace external imports, extensions and installed applications pass in recorded cells; v0.1.0-alpha.1 is a Git tag, not a registry package"
+packages = "partial: core, MCP and workspace external imports, extensions and installed applications pass in recorded cells; v0.1.0-alpha.2 is a Git tag, not a registry package"
 server_selection = "implemented: explicit selectors and opt-in ambient discovery"
 entities_links_identity = "partial: physical entities and links verified; strict identity admission pending"
 snapshots_coverage = "partial: captured graph and explicit coverage verified; topology/restart adversaries pending"

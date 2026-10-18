@@ -15,7 +15,7 @@ same public Git tag:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.2"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
 ```
 
 The following executable source example needs a checkout and its own consumer
@@ -23,7 +23,7 @@ environment. Clone the same tag, then enter the checkout:
 
 ```console
 $ git clone \
-    --branch v0.1.0-alpha.1 \
+    --branch v0.1.0-alpha.2 \
     --depth 1 \
     https://github.com/libtmux/libtmux-julia.git
 ```
@@ -37,7 +37,7 @@ Create a local environment for the example:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate(".workspace-env"); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
+    -e 'using Pkg; Pkg.activate(".workspace-env"); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.2"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
 ```
 
 It loads two panes, checks their layout and focus, freezes the supported

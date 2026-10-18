@@ -16,7 +16,7 @@ range. Their project files do not depend on sibling development paths.
 Documentation and benchmark environments remain separate from runtime
 dependencies.
 
-The `v0.1.0-alpha.1` tag is installable through `Pkg.PackageSpec(url=..., rev=...)`.
+The `v0.1.0-alpha.2` tag is installable through `Pkg.PackageSpec(url=..., rev=...)`.
 It is not a registry package. Before registration, close the required
 compatibility, external installation, example, benchmark and DX gates. Retain
 the exact source revision, dependency resolution, raw results and package-tree

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0-alpha.2 - 2026-10-18
+
 #### Report refused tmux releases
 
 A tool called against a tmux server below 3.3a, or one that reports no known

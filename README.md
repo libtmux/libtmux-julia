@@ -47,13 +47,13 @@ workspace configuration:
 
 ## Quick start
 
-`v0.1.0-alpha.1` is an unregistered source release. From your Julia project's
+`v0.1.0-alpha.2` is an unregistered source release. From your Julia project's
 directory, add the core from its public Git tag:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); Pkg.add(Pkg.PackageSpec(url="https://github.com/libtmux/libtmux-julia.git", rev="v0.1.0-alpha.1"))'
+    -e 'using Pkg; Pkg.activate("."); Pkg.add(Pkg.PackageSpec(url="https://github.com/libtmux/libtmux-julia.git", rev="v0.1.0-alpha.2"))'
 ```
 
 Have `tmux` on your `PATH`, then open Julia in that project:
@@ -258,7 +258,7 @@ To run the programs, clone the source:
 
 ```console
 $ git clone \
-    --branch v0.1.0-alpha.1 \
+    --branch v0.1.0-alpha.2 \
     --depth 1 \
     https://github.com/libtmux/libtmux-julia.git
 ```
@@ -408,7 +408,7 @@ The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
 
 ## Support and status
 
-- **Alpha.** `v0.1.0-alpha.1` is an unregistered source release, and its APIs
+- **Alpha.** `v0.1.0-alpha.2` is an unregistered source release, and its APIs
   may change. Pkg records the requested revision and package tree in your
   `Manifest.toml`.
 - **Standard library only.** The core imports only Julia standard libraries.

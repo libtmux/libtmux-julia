@@ -34,13 +34,13 @@ share the same operations.
 
 ## Quick start
 
-`v0.1.0-alpha.1` is an unregistered source release. From a consumer project
+`v0.1.0-alpha.2` is an unregistered source release. From a consumer project
 directory, add the core and workspace package from the same public Git tag:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.2"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
 ```
 
 Install a launcher bound to that environment with
@@ -473,7 +473,7 @@ lists the defaults and what `validate` copies.
 
 ## Support and status
 
-- **Alpha.** `v0.1.0-alpha.1` is an unregistered source release, and its APIs
+- **Alpha.** `v0.1.0-alpha.2` is an unregistered source release, and its APIs
   may change.
 - **Dependencies.** The package depends on the public
   [`LibTmux`][libtmux] package, JSON 1.9, YAML 0.4.17 and PrecompileTools. The

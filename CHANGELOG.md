@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0-alpha.2 - 2026-10-18
+
 #### Require tmux 3.3a
 
 `LibTmux` requires tmux 3.3a or newer, judged by the running tmux server's

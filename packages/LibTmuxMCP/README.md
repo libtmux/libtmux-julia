@@ -33,13 +33,13 @@ leaves it running.
 
 ## Quick start
 
-`v0.1.0-alpha.1` is an unregistered source release. From a consumer project
+`v0.1.0-alpha.2` is an unregistered source release. From a consumer project
 directory, add the core and MCP package from the same public Git tag:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxMCP")])'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.2"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxMCP")])'
 ```
 
 Install a launcher bound to that environment with
@@ -301,7 +301,7 @@ ownership.
 
 ## Support and status
 
-- **Alpha.** `v0.1.0-alpha.1` is an unregistered source release. Registry
+- **Alpha.** `v0.1.0-alpha.2` is an unregistered source release. Registry
   publication and full compatibility support are pending.
 - **Protocol.** Modern discovery uses `2026-07-28`. The legacy initialize
   profile is `2025-11-25`.
