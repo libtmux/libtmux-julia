@@ -102,16 +102,33 @@ isdefined(@__MODULE__, :TEST_CACHE_DEFINITIONS_ONLY) ||
 function test_script_worker_interrupt_remains_cancellation()
     isdefined(@__MODULE__, :TEST_CACHE_ENTRIES) && (TEST_CACHE_ENTRIES[] += 1)
     @testset "worker interrupt remains cancellation" begin
+        callback_entered = Ref(UInt64(0))
+        started = time_ns()
         failure = try
             run_before_script(
                 "/bin/echo ready";
                 base_directory=tempdir(),
-                on_output=(stream, bytes) -> throw(InterruptException()),
+                on_output=(stream, bytes) -> begin
+                    callback_entered[] = time_ns()
+                    throw(InterruptException())
+                end,
             )
         catch error
             error
         end
-        @test (failure isa BeforeScriptError ? failure.code : typeof(failure)) == :cancelled
+        call_seconds = (time_ns() - started) / 1e9
+        outcome = failure isa BeforeScriptError ? failure.code : typeof(failure)
+        if outcome != :cancelled
+            @error(
+                "worker cancellation timing",
+                code=outcome,
+                callback_observed=callback_entered[] != 0,
+                callback_enter_seconds=callback_entered[] == 0 ? nothing :
+                                       (callback_entered[] - started) / 1e9,
+                call_seconds=call_seconds,
+            )
+        end
+        @test outcome == :cancelled
         @test ccall(:kill, Cint, (Cint, Cint), failure.result.pid, 0) == -1
     end
 end
