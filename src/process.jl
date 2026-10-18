@@ -549,12 +549,14 @@ function run_command(
     check::Bool=true,
     env::AbstractDict=ENV,
     _checked::Union{Nothing,Base.RefValue{Any}}=nothing,
+    _version_guard=nothing,
     kwargs...,
 )
     started = time_ns()
     isempty(args) &&
         throw(ArgumentError("supply a tmux command; implicit attach is not supported"))
-    sum(ncodeunits(arg) + 1 for arg in _argv(server, collect(args))) <= 14 * 1024 || throw(
+    arguments = collect(args)
+    sum(ncodeunits(arg) + 1 for arg in _argv(server, arguments)) <= 14 * 1024 || throw(
         ArgumentError(
             "command exceeds the conservative 14 KiB limit; use a buffer/input operation for large data",
         ),
@@ -582,8 +584,9 @@ function run_command(
             )
         # An absent endpoint has nothing to stop, so cleanup is complete.
         checked.version === nothing && return CommandResult(UInt8[], UInt8[], 0, 0)
+        _version_guard === nothing || _version_guard(checked.version)
         marker = _version_marker()
-        argv = _fenced_argv(server, args, checked, marker)
+        argv = _fenced_argv(server, arguments, checked, marker)
         result = _run_process(setenv(Cmd(argv), environment); _started=started, kwargs...)
         mismatch = _fence_failed(result, marker)
         vanished =

@@ -18,26 +18,29 @@ The library and installed CLI share the same public operations.
 
 </div>
 
-[Install](#install-v010-alpha1) · [Quick start](#quick-start) ·
+[Install](#install-from-source) · [Quick start](#quick-start) ·
 [Inspect](#inspect-a-workspace) · [Configuration](#version-1-configuration) ·
 [Apply](#apply-and-inspect-partial-effects) · [CLI](#install-and-use-the-cli) ·
 [API reference](https://libtmux.org/en/julia/latest/workspace/reference/) ·
 [Guide](https://libtmux.org/en/julia/latest/workspace/source-guide/)
+
+This companion is experimental. Freeze reconstructs the documented subset;
+full tmuxp compatibility and complete timing checks remain open.
 
 The consumer package depends on the public [`LibTmux`][libtmux] package, JSON
 1.9 and YAML 0.4.17, and PrecompileTools. The core does not depend on this
 package or these consumer dependencies. Precompilation covers inert
 configuration and CLI reporting; it never starts processes or contacts tmux.
 
-## Install v0.1.0-alpha.1
+## Install from source
 
 From a consumer project directory, add the core and workspace package from the
-same public Git tag:
+same public source revision:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="029c58b8a45e6d7abe87e83557b8b93980def42f"; Pkg.add([Pkg.PackageSpec(url=repo, rev=revision), Pkg.PackageSpec(url=repo, rev=revision, subdir="packages/LibTmuxWorkspace")])'
 ```
 
 Install a launcher bound to that environment with
@@ -171,7 +174,7 @@ $ workspace_stage=$(mktemp -d "${TMPDIR:-/tmp}/ltj-workspace.XXXXXX")
 $ julia \
     --startup-file=no \
     --project="$workspace_stage" \
-    -e 'using Pkg; Pkg.develop([PackageSpec(path="../.."), PackageSpec(path=".")]); Pkg.precompile()'
+    -e 'using Pkg; Pkg.develop([PackageSpec(path=abspath("../..")), PackageSpec(path=abspath("."))]); Pkg.precompile()'
 ```
 
 ## Inspect a workspace

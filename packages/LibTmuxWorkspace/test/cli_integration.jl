@@ -276,4 +276,8 @@ end
     end
 end
 
-include("cli_backpressure.jl")
+if isdefined(Main, :include_test_file)
+    Main.include_test_file(@__MODULE__, joinpath(@__DIR__, "cli_backpressure.jl"))
+else
+    include("cli_backpressure.jl")
+end

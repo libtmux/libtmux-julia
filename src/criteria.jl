@@ -166,7 +166,133 @@ function _check_entity(q::Criterion, Type)
         throw(ArgumentError("criterion for $(expected) cannot evaluate $(Type)"))
 end
 
-function _preflight(q::Criterion, item)
+const _BuiltinCriterion = Union{
+    ClientWhere,
+    PaneWhere,
+    SessionWhere,
+    WindowWhere,
+    WindowLinkWhere,
+    Filters.AllOf,
+    Filters.AnyOf,
+    Filters.Not,
+}
+const _CriterionSnapshot =
+    Union{SessionSnapshot,WindowSnapshot,PaneSnapshot,ClientSnapshot,WindowLink}
+const _CriterionMemoKey = Tuple{Symbol,Int,Criterion}
+const _CriterionPreflightMemo = IdDict{Snapshot,Dict{_CriterionMemoKey,Nothing}}
+const _CriterionResultMemo = IdDict{Snapshot,Union{Nothing,Dict{_CriterionMemoKey,Bool}}}
+mutable struct _CriterionTraversal{C}
+    checkpoint::C
+    visits::Int
+    memo::Union{Nothing,_CriterionPreflightMemo}
+    results::Union{Nothing,_CriterionResultMemo}
+end
+
+_criterion_checkpoint!(::Nothing; force::Bool=false) = nothing
+function _criterion_checkpoint!(control::_CriterionTraversal; force::Bool=false)
+    control.checkpoint === nothing && return nothing
+    control.visits += 1
+    if force || control.visits >= 128
+        control.visits = 0
+        yield()
+        control.checkpoint()
+    end
+    nothing
+end
+
+function _criterion_has_relations(q::Criterion)
+    for clause in getfield(q, :_clauses)
+        _CRITERIA_FIELDS[(_criterion_entity(q), clause.field)].relation !== :scalar &&
+            return true
+    end
+    false
+end
+_criterion_has_relations(q::Union{Filters.AllOf,Filters.AnyOf}) =
+    any(_criterion_has_relations, q.criteria)
+_criterion_has_relations(q::Filters.Not) = _criterion_has_relations(q.criterion)
+_criterion_memo_safe(::Criterion) = false
+function _criterion_memo_safe(
+    q::Union{ClientWhere,PaneWhere,SessionWhere,WindowWhere,WindowLinkWhere},
+)
+    all(getfield(q, :_clauses)) do clause
+        constraint = clause.constraint
+        if constraint isa Filters.Related
+            constraint isa Union{Filters.AnyRelated,Filters.AllRelated,Filters.NoRelated} ||
+                return false
+            return _criterion_memo_safe(constraint.criterion)
+        end
+        constraint isa Criterion && return _criterion_memo_safe(constraint)
+        true
+    end
+end
+_criterion_memo_safe(q::Union{Filters.AllOf,Filters.AnyOf}) =
+    all(_criterion_memo_safe, q.criteria)
+_criterion_memo_safe(q::Filters.Not) = _criterion_memo_safe(q.criterion)
+function _criterion_memo(q, xs)
+    eltype(xs) <: _CriterionSnapshot &&
+    _criterion_memo_safe(q) &&
+    _criterion_has_relations(q) ? _CriterionPreflightMemo() : nothing
+end
+
+_criterion_builtin_operand(value) =
+    !(value isa Real) || value isa Union{Bool,Base.BitInteger,Float16,Float32,Float64}
+_criterion_builtin_operator(
+    op::Union{
+        Filters.EqualTo,
+        Filters.NotEqualTo,
+        Filters.AtLeast,
+        Filters.AtMost,
+        Filters.GreaterThan,
+        Filters.LessThan,
+    },
+) = _criterion_builtin_operand(op.value)
+_criterion_builtin_operator(op::Filters.OneOf) = all(_criterion_builtin_operand, op.values)
+_criterion_builtin_operator(::Union{Filters.Contains,Filters.StartsWith,Filters.EndsWith}) =
+    true
+_criterion_builtin_operator(::Filters.Operator) = false
+function _criterion_builtin_operator(
+    op::Union{Filters.AnyRelated,Filters.AllRelated,Filters.NoRelated},
+)
+    _criterion_results_safe(op.criterion)
+end
+_criterion_builtin_operator(q::Criterion) = _criterion_results_safe(q)
+function _criterion_results_safe(
+    q::Union{ClientWhere,PaneWhere,SessionWhere,WindowWhere,WindowLinkWhere},
+)
+    all(clause -> _criterion_builtin_operator(clause.constraint), getfield(q, :_clauses))
+end
+_criterion_results_safe(q::Union{Filters.AllOf,Filters.AnyOf}) =
+    all(_criterion_results_safe, q.criteria)
+_criterion_results_safe(q::Filters.Not) = _criterion_results_safe(q.criterion)
+_criterion_results_safe(::Criterion) = false
+function _criterion_builtin_numbers(::Type{Snapshot{SI,WI,PI,CI,LI}}) where {SI,WI,PI,CI,LI}
+    for schema in (SI, WI, PI, CI, LI), index = 1:fieldcount(schema)
+        fieldtype(schema, index) <: Base.BitInteger || return false
+    end
+    true
+end
+_criterion_results(q, memo) =
+    memo === nothing || !_criterion_results_safe(q) ? nothing : _CriterionResultMemo()
+
+_preflight(q::Criterion, item) = _preflight_body(q, item, nothing)
+function _preflight(q::Criterion, item, control)
+    _criterion_checkpoint!(control)
+    q isa _BuiltinCriterion || return _preflight(q, item)
+    if control !== nothing && control.memo !== nothing && item isa _CriterionSnapshot
+        captured = snapshotof(item)
+        known = get!(control.memo, captured) do
+            Dict{Tuple{Symbol,Int,Criterion},Nothing}()
+        end
+        key = (_kind(item), getfield(item, :_index), q)
+        haskey(known, key) && return nothing
+        _preflight_body(q, item, control)
+        known[key] = nothing
+        return nothing
+    end
+    _preflight_body(q, item, control)
+end
+
+function _preflight_body(q::Criterion, item, control)
     _check_entity(q, typeof(item))
     for clause in getfield(q, :_clauses)
         value = getproperty(item, clause.field)
@@ -179,22 +305,22 @@ function _preflight(q::Criterion, item)
             )
         elseif clause.constraint isa Filters.Related
             for related in value
-                _preflight(clause.constraint.criterion, related)
+                _preflight(clause.constraint.criterion, related, control)
             end
         elseif clause.constraint isa Criterion && value !== nothing
-            _preflight(clause.constraint, value)
+            _preflight(clause.constraint, value, control)
         end
     end
     nothing
 end
-function _preflight(q::Union{Filters.AllOf,Filters.AnyOf}, item)
+function _preflight_body(q::Union{Filters.AllOf,Filters.AnyOf}, item, control)
     _check_entity(q, typeof(item))
     for child in q.criteria
-        _preflight(child, item)
+        _preflight(child, item, control)
     end
     nothing
 end
-_preflight(q::Filters.Not, item) = _preflight(q.criterion, item)
+_preflight_body(q::Filters.Not, item, control) = _preflight(q.criterion, item, control)
 
 function _ascii_fold(text::String)
     bytes = Vector{UInt8}(codeunits(text))
@@ -219,6 +345,55 @@ function _matches(op::Union{Filters.Contains,Filters.StartsWith,Filters.EndsWith
     op isa Filters.StartsWith && return startswith(haystack, needle)
     endswith(haystack, needle)
 end
+# Ordinary native queries retain their original matcher. The MCP checkpoint
+# path bounds work on captured strings; wire operands are limited separately.
+function _ascii_fold(text::String, control::_CriterionTraversal)
+    bytes = Vector{UInt8}(codeunits(text))
+    for start = 1:4096:length(bytes)
+        for index = start:min(start+4095, length(bytes))
+            UInt8('A') <= bytes[index] <= UInt8('Z') && (bytes[index] += 0x20)
+        end
+        _criterion_checkpoint!(control; force=true)
+    end
+    String(bytes)
+end
+function _contains_checkpointed(haystack::String, needle::String, control)
+    # Base's String search differs from SubString search for malformed UTF-8.
+    isvalid(needle) || return occursin(needle, haystack)
+    isempty(needle) && return true
+    length = ncodeunits(haystack)
+    ncodeunits(needle) > length && return false
+    start = firstindex(haystack)
+    while start <= length
+        edge = prevind(haystack, min(start + 32768, length + 1))
+        next = nextind(haystack, edge)
+        stop = prevind(haystack, min(next + ncodeunits(needle), length + 1))
+        matched = occursin(needle, SubString(haystack, start, stop))
+        _criterion_checkpoint!(control; force=true)
+        matched && return true
+        start = next
+    end
+    false
+end
+function _matches(
+    op::Union{Filters.Contains,Filters.StartsWith,Filters.EndsWith},
+    value,
+    control,
+)
+    (control === nothing || control.checkpoint === nothing) && return _matches(op, value)
+    value === nothing && return false
+    value isa String || return _matches(op, value)
+    haystack, needle =
+        op.case === :sensitive ? (value, op.value) :
+        (_ascii_fold(value, control), _ascii_fold(op.value, control))
+    op isa Filters.Contains && return _contains_checkpointed(haystack, needle, control)
+    matched =
+        op isa Filters.StartsWith ? startswith(haystack, needle) :
+        endswith(haystack, needle)
+    _criterion_checkpoint!(control; force=true)
+    matched
+end
+_matches(op::Filters.Operator, value, control) = _matches(op, value)
 _matches(q::Criterion, value) = value !== nothing && _evaluate(q, value)
 _matches(q::Filters.AnyRelated, values) =
     any(value -> _evaluate(q.criterion, value), values)
@@ -226,29 +401,82 @@ _matches(q::Filters.AllRelated, values) =
     all(value -> _evaluate(q.criterion, value), values)
 _matches(q::Filters.NoRelated, values) =
     !any(value -> _evaluate(q.criterion, value), values)
-_evaluate(q::Criterion, item) = all(
-    clause -> _matches(clause.constraint, getproperty(item, clause.field)),
-    getfield(q, :_clauses),
-)
-_evaluate(q::Filters.AllOf, item) = all(child -> _evaluate(child, item), q.criteria)
-_evaluate(q::Filters.AnyOf, item) = any(child -> _evaluate(child, item), q.criteria)
-_evaluate(q::Filters.Not, item) = !_evaluate(q.criterion, item)
+_matches(q::Criterion, value, control) =
+    q isa _BuiltinCriterion ? value !== nothing && _evaluate(q, value, control) :
+    _matches(q, value)
+_matches(q::Filters.AnyRelated, values, control) =
+    any(value -> _evaluate(q.criterion, value, control), values)
+_matches(q::Filters.AllRelated, values, control) =
+    all(value -> _evaluate(q.criterion, value, control), values)
+_matches(q::Filters.NoRelated, values, control) =
+    !any(value -> _evaluate(q.criterion, value, control), values)
+_evaluate(q::Criterion, item) = _evaluate_body(q, item, nothing)
+function _evaluate(q::Criterion, item, control)
+    _criterion_checkpoint!(control)
+    q isa _BuiltinCriterion || return _evaluate(q, item)
+    if control !== nothing && control.results !== nothing && item isa _CriterionSnapshot
+        known = get!(control.results, snapshotof(item)) do
+            _criterion_builtin_numbers(typeof(snapshotof(item))) ?
+            Dict{_CriterionMemoKey,Bool}() : nothing
+        end
+        if known !== nothing
+            key = (_kind(item), getfield(item, :_index), q)
+            haskey(known, key) && return known[key]
+            result = _evaluate_body(q, item, control)
+            known[key] = result
+            return result
+        end
+    end
+    _evaluate_body(q, item, control)
+end
+function _evaluate_body(q::Criterion, item, control)
+    all(
+        clause -> _matches(clause.constraint, getproperty(item, clause.field), control),
+        getfield(q, :_clauses),
+    )
+end
+function _evaluate_body(q::Filters.AllOf, item, control)
+    all(child -> _evaluate(child, item, control), q.criteria)
+end
+function _evaluate_body(q::Filters.AnyOf, item, control)
+    any(child -> _evaluate(child, item, control), q.criteria)
+end
+function _evaluate_body(q::Filters.Not, item, control)
+    !_evaluate(q.criterion, item, control)
+end
 
 function (q::Criterion)(item)::Bool
     _preflight(q, item)
     _evaluate(q, item)
 end
 
-function Base.filter(q::Criterion, xs::Selection{T}) where {T}
+function _filter_where(q::Criterion, xs::Selection{T}, control) where {T}
+    _criterion_checkpoint!(control; force=true)
     _check_entity(q, T)
     for item in xs
-        _preflight(q, item)
+        _preflight(q, item, control)
     end
     items = T[]
     for item in xs
-        _evaluate(q, item) && push!(items, item)
+        _evaluate(q, item, control) && push!(items, item)
     end
+    _criterion_checkpoint!(control; force=true)
     Selection{T}(items, snapshotof(xs))
+end
+function Base.filter(q::Criterion, xs::Selection)
+    memo = _criterion_memo(q, xs)
+    control =
+        memo === nothing ? nothing :
+        _CriterionTraversal{Nothing}(nothing, 0, memo, _criterion_results(q, memo))
+    _filter_where(q, xs, control)
+end
+function _filter_where(q::Criterion, xs::Selection, checkpoint::Function)
+    memo = _criterion_memo(q, xs)
+    _filter_where(
+        q,
+        xs,
+        _CriterionTraversal{Function}(checkpoint, 0, memo, _criterion_results(q, memo)),
+    )
 end
 
 "An exact-cardinality criterion matched no items in its source."

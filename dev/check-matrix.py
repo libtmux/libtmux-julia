@@ -4,14 +4,21 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
+import ctypes
+import errno
+from functools import cache
 import hashlib
+import importlib.util
 import json
+import math
 import os
 import re
 from pathlib import Path
 import platform
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -36,7 +43,67 @@ TOOL_PREFERENCES = "[JuliaFormatter]\nprecompile_workload = false\n"
 DELIVERY_PHASES = frozenset(("extensions", "docs", "doc-snippets", "doc-contextual",
                             "imports", "external-examples", "external-launchers",
                             "readme-commands"))
+PROFILE_CONSUMER_PHASES = frozenset(("imports", "external-examples", "external-launchers"))
 SUITES = ("runtime", "delivery")
+LOOP_BUDGETS = {"mid": 10, "outer": 200}
+HARD_LIMITS = {"mid": 30, "outer": 240}
+CLEANUP_SECONDS = 2.0
+DIAGNOSTIC_FINALIZATION_SECONDS = 2.0
+WORKER_RETIREMENT_SECONDS = CLEANUP_SECONDS * 2 + DIAGNOSTIC_FINALIZATION_SECONDS
+TEST_RUNNERS = frozenset(("test/runtests.jl", "packages/LibTmuxWorkspace/test/runtests.jl",
+                          "packages/LibTmuxMCP/test/runtests.jl"))
+DIAGNOSTIC_BINDINGS = ("LIBTMUX_CI_DIAGNOSTICS_DIR", "LIBTMUX_CI_DIAGNOSTICS_ROOT",
+                       "LIBTMUX_CI_INVOCATION", "LIBTMUX_CI_SOURCE_DIGEST", "LIBTMUX_CI_PHASE",
+                       "LIBTMUX_CI_PROCESS_TOKEN", "LIBTMUX_CI_TEST_FILE_INVENTORY", "LIBTMUX_CI_STAGE",
+                       "LIBTMUX_CI_SOURCE_ROOT", "LIBTMUX_CI_CHILD_TOKEN", "LIBTMUX_CI_PARENT_PROCESS_BIRTH_ID",
+                       "LIBTMUX_CI_CHILD_HELPER_PROJECT", "LIBTMUX_CI_CHILD_HELPER_DEPOT",
+                       "LIBTMUX_CI_CONSUMER_DIAGNOSTICS",
+                       "LIBTMUX_CI_TEST_CONSOLE", "LIBTMUX_CI_TEST_CONTINUE")
+
+
+DIAGNOSTIC_MODULES = {}
+DIAGNOSTIC_MODULE_LOCK = threading.Lock()
+
+
+def diagnostic_module(name):
+    with DIAGNOSTIC_MODULE_LOCK:
+        if name not in DIAGNOSTIC_MODULES:
+            path = Path(__file__).resolve().parent / (name.replace("_", "-") + ".py")
+            spec = importlib.util.spec_from_file_location("libtmux_" + name, path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            DIAGNOSTIC_MODULES[name] = module
+        return DIAGNOSTIC_MODULES[name]
+
+
+def remaining(deadline):
+    return max(0.0, deadline - time.monotonic())
+
+
+def sampling_configuration(env):
+    mode = env.get("LIBTMUX_CI_PROFILE", "off")
+    symbolization = env.get("LIBTMUX_CI_PROFILE_SYMBOLIZATION", "native")
+    if mode not in ("off", "cpu", "wall") or symbolization not in ("native", "deferred"):
+        raise ValueError("sampler mode or symbolization policy is unsupported")
+    return dict(mode=mode, symbolization=symbolization)
+
+
+def phase_profile_request(name, inventory, configuration):
+    selected = inventory.get(name)
+    mode = configuration["mode"] if (selected is not None and not name.endswith("-unit")
+                                     or name in PROFILE_CONSUMER_PHASES) else "off"
+    return dict(mode=mode, symbolization=configuration["symbolization"],
+                require_direct_native=selected is not None and mode != "off")
+
+
+def worker_sampling_configuration(args, env):
+    mode = getattr(args, "worker_sampler_mode", None)
+    policy = getattr(args, "worker_sampler_symbolization", None)
+    if (mode is None) != (policy is None) or mode is not None and not getattr(args, "worker", False):
+        raise ValueError("private sampler transport needs a worker and both policy arguments")
+    return sampling_configuration(env if mode is None else dict(
+        LIBTMUX_CI_PROFILE=mode, LIBTMUX_CI_PROFILE_SYMBOLIZATION=policy))
 
 TMUX_SHA256 = {
     "3.0a": "4ad1df28b4afa969e59c08061b45082fdc49ff512f30fc8e43217d7b0e5f8db9",
@@ -103,10 +170,11 @@ def qa_cells():
         label = f"{os_name}-{arch}-julia{julia}-tmux{tmux}-t{threads}"
         cells.append(dict(label=label, os=os_name, runner=runner, arch=arch,
                           julia=julia, tmux=tmux, threads=threads, suites=tuple(suites),
-                          status="NOT RUN"))
+                          optional=os_name != "Linux", status="NOT RUN"))
 
-    add("Linux", "ubuntu-24.04", "x86_64", "1.10.0", MINIMUM_TMUX, suites=("all",))
-    add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.7c", 4, ("all",))
+    for julia, tmux in (("1.10.0", MINIMUM_TMUX), ("1.13.1", "3.7c")):
+        for threads in (1, 4):
+            add("Linux", "ubuntu-24.04", "x86_64", julia, tmux, threads, ("all",))
     add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.8", 1, ("all",))
     for runner, arch in (("macos-15", "arm64"), ("macos-15-intel", "x86_64")):
         add("Darwin", runner, arch, "1.13.1", "3.7c", suites=("all",))
@@ -123,7 +191,8 @@ def rejection_cells():
 
 def source_digest():
     digest = hashlib.sha256()
-    inputs = ("Project.toml", "README.md", "LICENSE", ".github/workflows",
+    inputs = ("Project.toml", "README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "WRITING.md", "AGENTS.md",
+              ".github/workflows",
               "src", "ext", "test", "schema", "docs", "examples", "packages",
               "dev", "benchmark")
     for base in inputs:
@@ -167,54 +236,1056 @@ def signal_group(process, number):
     except ProcessLookupError:
         # Exit may win the race between the waiter deadline and signal delivery.
         pass
-    except PermissionError:
-        # macOS refuses to signal a group whose leader has exited; the leader
-        # is reaped by the waiter either way.
-        if sys.platform != "darwin":
-            raise
 
 
-def phase(name, argv, *, cwd, env, log, budget):
+class _DarwinBSDInfo(ctypes.Structure):
+    # libproc's PROC_PIDTBSDINFO ABI, including its microsecond start identity.
+    _fields_ = [("flags", ctypes.c_uint32), ("state", ctypes.c_uint32),
+                ("exit_status", ctypes.c_uint32), ("pid", ctypes.c_uint32),
+                ("parent", ctypes.c_uint32), ("credentials", ctypes.c_uint32 * 7),
+                ("command", ctypes.c_char * 16), ("name", ctypes.c_char * 32),
+                ("files", ctypes.c_uint32), ("group", ctypes.c_uint32),
+                ("job_control", ctypes.c_uint32 * 3), ("nice", ctypes.c_int32),
+                ("start_seconds", ctypes.c_uint64), ("start_microseconds", ctypes.c_uint64)]
+
+
+@cache
+def _darwin_libproc():
+    library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    library.proc_pidinfo.argtypes = (ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                    ctypes.c_void_p, ctypes.c_int)
+    library.proc_listpids.argtypes = (ctypes.c_uint32, ctypes.c_uint32,
+                                    ctypes.c_void_p, ctypes.c_int)
+    library.proc_pidinfo.restype = library.proc_listpids.restype = ctypes.c_int
+    return library
+
+
+def _darwin_process_info(pid):
+    info = _DarwinBSDInfo()
+    ctypes.set_errno(0)
+    # The nonzero argument also admits unreaped zombies to PROC_PIDTBSDINFO.
+    size = _darwin_libproc().proc_pidinfo(pid, 3, 1, ctypes.byref(info), ctypes.sizeof(info))
+    if size != ctypes.sizeof(info):
+        raise OSError(ctypes.get_errno() or errno.EIO, "incomplete Darwin process identity")
+    return dict(pid=info.pid, parent=info.parent, group=info.group, state=info.state,
+                start=(info.start_seconds, info.start_microseconds))
+
+
+def _darwin_group_pids(group):
+    library = _darwin_libproc()
+    ctypes.set_errno(0)
+    required = library.proc_listpids(2, group, None, 0)
+    item_size = ctypes.sizeof(ctypes.c_int)
+    if required <= 0 or required % item_size:
+        raise OSError(ctypes.get_errno() or errno.EIO, "unknown Darwin process group")
+    buffer = (ctypes.c_int * (required // item_size + 16))()
+    ctypes.set_errno(0)
+    filled = library.proc_listpids(2, group, buffer, ctypes.sizeof(buffer))
+    if (filled < 0 or filled >= ctypes.sizeof(buffer) or filled % item_size or
+            (filled == 0 and ctypes.get_errno())):
+        raise OSError(ctypes.get_errno() or errno.EIO, "incomplete Darwin process group")
+    members = tuple(sorted(buffer[:filled // item_size]))
+    if len(set(members)) != len(members) or any(pid <= 0 for pid in members):
+        raise OSError(errno.EIO, "invalid Darwin process group members")
+    return members
+
+
+class PhaseGroup:
+    """Keep child identities reserved until signalling and final reap finish."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.processes = set()
+        self.identities = {}
+        self.cancelled = False
+        self.escalation = None
+
+    def add(self, process):
+        with self.lock:
+            self.processes.add(process)
+            if sys.platform == "darwin":
+                info = _darwin_process_info(process.pid)
+                if (info["pid"] != process.pid or info["parent"] != os.getpid() or
+                        info["group"] != process.pid or info["start"][0] <= 0 or
+                        not 0 <= info["start"][1] < 1000000):
+                    raise RuntimeError("Darwin phase leader identity is not owned")
+                self.identities[process] = {key: info[key]
+                                            for key in ("pid", "parent", "group", "start")}
+            if self.cancelled:
+                self._signal(process, signal.SIGKILL)
+
+    def _zombie_group(self, process):
+        identity = self.identities.get(process)
+        if (not self.lock.locked() or process not in self.processes or
+                identity is None or process.returncode is not None):
+            return False
+        try:
+            observed = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+            if observed is None or observed.si_pid != process.pid:
+                return False
+            leader = _darwin_process_info(process.pid)
+            if leader["state"] != 5 or any(leader[key] != value for key, value in identity.items()):
+                return False
+            members = _darwin_group_pids(process.pid)
+            if process.pid not in members:
+                return False
+            infos = [_darwin_process_info(pid) for pid in members]
+            if any(info["pid"] != pid or info["group"] != process.pid or info["state"] != 5
+                   for pid, info in zip(members, infos)):
+                return False
+            return (all(_darwin_process_info(pid) == info for pid, info in zip(members, infos))
+                    and _darwin_group_pids(process.pid) == members)
+        except OSError:
+            return False
+
+    def _signal(self, process, number):
+        try:
+            signal_group(process, number)
+        except PermissionError as error:
+            # XNU skips SZOMB members and returns EPERM when none can be signalled.
+            if error.errno != errno.EPERM or sys.platform != "darwin" or not self._zombie_group(process):
+                raise
+
+    def reap(self, process, *, retire_group=False):
+        # Call only after WNOWAIT observed exit, so wait cannot block this lock.
+        with self.lock:
+            if retire_group or self.cancelled:
+                self._signal(process, signal.SIGKILL)
+            code = process.wait()
+            self.processes.discard(process)
+            self.identities.pop(process, None)
+            return code
+
+    def signal(self, number, process=None):
+        with self.lock:
+            targets = self.processes if process is None else (process,)
+            for child in targets:
+                if child in self.processes:
+                    self._signal(child, number)
+
+    def cancel(self):
+        with self.lock:
+            if self.cancelled:
+                return
+            self.cancelled = True
+            for process in self.processes:
+                self._signal(process, signal.SIGINT)
+            # Retire nested groups before the supervisor's 900 ms worker grace ends.
+            escalation = None
+            try:
+                escalation = threading.Timer(0.8, self.signal, (signal.SIGKILL,))
+                escalation.daemon = True
+                escalation.start()
+            except BaseException:
+                if escalation is not None and escalation.ident is not None:
+                    self.escalation = escalation
+                for process in self.processes:
+                    self._signal(process, signal.SIGKILL)
+                raise
+            self.escalation = escalation
+
+    def close(self, deadline=None):
+        deadline = time.monotonic() + CLEANUP_SECONDS if deadline is None else deadline
+        if not self.lock.acquire(timeout=remaining(deadline)):
+            return False
+        try:
+            if self.cancelled:
+                for process in self.processes:
+                    self._signal(process, signal.SIGKILL)
+            escalation = self.escalation
+            if escalation is not None:
+                escalation.cancel()
+        finally:
+            self.lock.release()
+        if escalation is None:
+            return True
+        escalation.join(timeout=remaining(deadline))
+        return not escalation.is_alive()
+
+
+def phase(name, argv, *, cwd, env, log, budget, group=None, soft_budget=None, deadline=None,
+          cleanup_seconds=None, interrupt_grace=0.9, progress_path=None, live_phases=()):
     """Wait on a child-exit event; retire only this run's process group."""
+    if not callable(getattr(os, "waitid", None)) or not hasattr(os, "WNOWAIT"):
+        raise RuntimeError("owned process retirement needs waitid/WNOWAIT; use Python 3.13+ on macOS")
+    if not math.isfinite(budget) or budget < 0:
+        raise ValueError("hard allowance must be finite and nonnegative")
+    if soft_budget is not None and (not math.isfinite(soft_budget) or soft_budget < 0):
+        raise ValueError("soft allowance must be finite and nonnegative")
+    configuration = sampling_configuration(env)
+    symbolization = configuration["symbolization"]
+    cleanup_seconds = CLEANUP_SECONDS if cleanup_seconds is None else cleanup_seconds
     start = time.monotonic()
+    deadline = min(start + budget, deadline) if deadline is not None else start + budget
     log.parent.mkdir(parents=True, exist_ok=True)
-    answer = dict(name=name, command=argv, status="NOT RUN", budget_seconds=budget)
+    answer = dict(name=name, command=argv, status="NOT RUN", budget_seconds=budget,
+                  started=False, soft_limit_seconds=soft_budget, soft_limit_exceeded=False,
+                  hard_deadline=deadline, direct_child_reaped=False, cleanup_status="NOT NEEDED",
+                  coverage_complete=False, test_inventory_complete=False,
+                  diagnostics_status="UNAVAILABLE", test_process_birth_ids=[],
+                  profile_request=dict(mode="off", symbolization=symbolization, require_direct_native=False),
+                  profile_request_status="NOT_REQUESTED",
+                  timings=dict(first_output_byte=dict(status="UNAVAILABLE",
+                      reason="phase has not produced observed output")))
+    for field, key in (("invocation", "LIBTMUX_CI_INVOCATION"), ("source_digest", "LIBTMUX_CI_SOURCE_DIGEST")):
+        if key in env:
+            answer[field] = env[key]
+    owned_group = group or PhaseGroup()
     process = None
     waiter = None
     done = threading.Event()
+    observed_exit = threading.Event()
+    observer_errors = []
+    output_pump = None
+    checkpoint_publisher = None
+    cleanup_deadline = None
+    diagnostic_receipt = Path(progress_path) if progress_path is not None else None
+
+    def save_progress():
+        if diagnostic_receipt is None:
+            return
+        try:
+            temporary = diagnostic_receipt.with_suffix(".tmp")
+            snapshot = answer | dict(timings=answer["timings"].copy(), seconds=time.monotonic() - start)
+            temporary.write_text(json.dumps(snapshot, indent=2) + "\n")
+            temporary.replace(diagnostic_receipt)
+        except OSError as error:
+            answer.update(diagnostics_status="FAIL", diagnostic_write_error=type(error).__name__)
+
+    def bind_diagnostics():
+        nonlocal diagnostic_receipt
+        child_env = env.copy()
+        child_env.update(LIBTMUX_CI_PROFILE="off", LIBTMUX_CI_PROFILE_SYMBOLIZATION=symbolization)
+        child_env.pop("LIBTMUX_CI_CONSUMER_DIAGNOSTICS", None)
+        child_env.pop("LIBTMUX_CI_TEST_CONTINUE", None)
+        root = child_env.get("LIBTMUX_CI_DIAGNOSTICS_ROOT")
+        if root is None:
+            return child_env
+        invocation = child_env.get("LIBTMUX_CI_INVOCATION", "")
+        digest = child_env.get("LIBTMUX_CI_SOURCE_DIGEST", "")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", name) or name in (".", ".."):
+            raise ValueError("diagnostic phase names must be portable path segments")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", invocation) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("diagnostics require an invocation and SHA256 source digest")
+        directory = Path(root).resolve() / name
+        stage = child_env.get("LIBTMUX_CI_STAGE")
+        if stage is not None and Path(stage).resolve() not in directory.parents:
+            raise ValueError("diagnostics directory escaped its owned matrix stage")
+        directory.mkdir(parents=True, exist_ok=False)
+        token = uuid.uuid4().hex
+        for binding in ("LIBTMUX_CI_CHILD_TOKEN", "LIBTMUX_CI_PARENT_PROCESS_BIRTH_ID", "LIBTMUX_CI_TEST_CONSOLE",
+                        "LIBTMUX_CI_TEST_CONTINUE"):
+            child_env.pop(binding, None)
+        child_env.update(LIBTMUX_CI_DIAGNOSTICS_DIR=str(directory), LIBTMUX_CI_PHASE=name,
+                         LIBTMUX_CI_PROCESS_TOKEN=token, LIBTMUX_CI_SOURCE_ROOT=str(ROOT))
+        inventory = json.loads(child_env.get("LIBTMUX_CI_TEST_FILE_INVENTORY", "{}"))
+        selected = inventory.get(name)
+        request = phase_profile_request(name, inventory, configuration)
+        mode = request["mode"]
+        child_env["LIBTMUX_CI_PROFILE"] = mode
+        consumer = name in PROFILE_CONSUMER_PHASES
+        if selected is not None or consumer:
+            child_env["LIBTMUX_CI_TEST_CONSOLE"] = "1"
+        if consumer:
+            child_env["LIBTMUX_CI_CONSUMER_DIAGNOSTICS"] = "1"
+        if selected is not None:
+            child_env["LIBTMUX_CI_TEST_CONTINUE"] = "1"
+        answer.update(invocation=invocation, source_digest=digest,
+                      diagnostics_directory=str(directory), diagnostics_status="PARTIAL" if selected is not None or consumer else "UNAVAILABLE",
+                      diagnostics_scope="native_runner" if selected is not None else "consumer_driver" if consumer else "process_receipt_only",
+                      process_token=token, expected_test_file_inventory=selected,
+                      profile_request=request,
+                      profile_request_status="NOT_REQUESTED" if mode == "off" else "UNVERIFIED",
+                      test_inventory_status="PARTIAL_CHILD_ADMISSION_UNAVAILABLE" if selected is not None
+                                            else "UNAVAILABLE_NATIVE_INVENTORY")
+        diagnostic_receipt = directory / "phase.json"
+        save_progress()
+        return child_env
+
+    def cleanup_time():
+        nonlocal cleanup_deadline
+        if cleanup_deadline is None:
+            cleanup_deadline = min(time.monotonic() + cleanup_seconds, deadline + cleanup_seconds)
+        return remaining(cleanup_deadline)
+
+    def observe_exit():
+        try:
+            observed = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+            if observed is None or observed.si_pid != process.pid:
+                raise RuntimeError("owned leader exit identity was not observed")
+            answer["timings"]["exit_observed_seconds"] = time.monotonic() - start
+            observed_exit.set()
+        except BaseException as error:
+            observer_errors.append(error)
+        finally:
+            done.set()
+
+    def unretired(reason):
+        answer.update(status="UNRETIRED", semantic_status="UNRETIRED",
+                      cleanup_status="UNRETIRED", reason=reason,
+                      owned_identity_reserved=process in owned_group.processes,
+                      leader_exit_observed=observed_exit.is_set())
+
     try:
-        with log.open("wb") as output:
-            process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                                       stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
-            def reap():
-                try:
-                    process.wait()
-                finally:
-                    done.set()
-            waiter = threading.Thread(target=reap, name=f"matrix-{name}")
+        if owned_group.cancelled:
+            answer["status"] = "CANCELLED"
+            return answer
+        with log.open("wb", buffering=0) as output:
+            if remaining(deadline) == 0:
+                answer["reason"] = "hard deadline expired before phase admission"
+                return answer
+            child_env = bind_diagnostics()
+            if remaining(deadline) == 0:
+                answer["reason"] = "hard deadline expired before phase admission"
+                return answer
+            launch_started = time.monotonic()
+            process = subprocess.Popen(argv, cwd=cwd, env=child_env, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+            answer["timings"].update(process_launch_seconds=time.monotonic() - start,
+                                     popen_seconds=time.monotonic() - launch_started)
+            answer["started"] = True
+            answer.update(pid=process.pid, process_group=process.pid)
+            owned_group.add(process)
+            answer.update(owned_identity_reserved=True,
+                          owned_identity=owned_group.identities.get(process, dict(
+                              pid=process.pid, parent=os.getpid(), group=process.pid,
+                              reservation="direct child retained until WNOWAIT reap")))
+            native = answer.get("expected_test_file_inventory") is not None
+            consumer = answer.get("diagnostics_scope") == "consumer_driver"
+            birth = f"{answer['process_token']}-{process.pid}" if native or consumer else None
+            if native:
+                answer["test_process_birth_ids"] = [birth]
+            save_progress()
+            streams = diagnostic_module("ci_streams")
+            decoder = None
+            if native or consumer or live_phases:
+                decoder = streams.ProgressDecoder(
+                    artifacts=diagnostic_module("ci_artifacts"), source_roots=[(ROOT.resolve(), "repository")],
+                    invocation=answer.get("invocation"), source_digest=answer.get("source_digest"),
+                    phases=(name,) if native or consumer else live_phases,
+                    direct_pid=process.pid if native or consumer else None,
+                    direct_birth=birth)
+            if native or consumer:
+                checkpoint_publisher = CheckpointPublisher(answer, env=env, deadline=deadline)
+            output_pump = streams.PhaseLogPump(process.stdout, output.fileno(), started=start, decoder=decoder,
+                on_progress=checkpoint_publisher.notify if checkpoint_publisher is not None else None)
+            output_pump.start()
+            waiter = threading.Thread(target=observe_exit, name=f"matrix-{name}", daemon=True)
             waiter.start()
-            timed_out = not done.wait(budget)
+            if soft_budget is not None:
+                soft_deadline = start + soft_budget
+                if not done.wait(min(remaining(deadline), remaining(soft_deadline))):
+                    answer["soft_limit_exceeded"] = time.monotonic() >= soft_deadline
+                    if answer["soft_limit_exceeded"]:
+                        record = json.dumps(dict(event="soft-limit", phase=name, pid=process.pid,
+                            seconds=time.monotonic() - start, soft_limit_seconds=soft_budget,
+                            hard_deadline=deadline, invocation=answer.get("invocation"),
+                            source_digest=answer.get("source_digest")))
+                        output.write((record + "\n").encode())
+                        output.flush()
+                        streams.write_console((record + "\n").encode())
+                        save_progress()
+            timed_out = not done.wait(remaining(deadline))
             if timed_out:
-                signal_group(process, signal.SIGINT)
-                if not done.wait(0.9):
-                    signal_group(process, signal.SIGKILL)
-                    done.wait()
-            waiter.join()
-            answer.update(status="TIMEOUT" if timed_out else "PASS" if process.returncode == 0 else "FAIL",
-                          exit_code=process.returncode, direct_child_reaped=True)
+                owned_group.signal(signal.SIGINT, process)
+                if not done.wait(min(interrupt_grace, cleanup_time())):
+                    owned_group.signal(signal.SIGKILL, process)
+                    if not done.wait(cleanup_time()):
+                        unretired("owned leader exit was not observed after SIGKILL")
+                        return answer
+            waiter.join(timeout=cleanup_time())
+            if waiter.is_alive():
+                unretired("owned exit observer exceeded its cleanup allowance")
+                return answer
+            if observer_errors:
+                raise observer_errors[0]
+            if not observed_exit.is_set():
+                raise RuntimeError("cannot reap an unobserved owned leader")
+            code = owned_group.reap(process, retire_group=timed_out)
+            answer["timings"]["reaped_seconds"] = time.monotonic() - start
+            status = ("TIMEOUT" if timed_out else "CANCELLED" if owned_group.cancelled
+                      else "PASS" if code == 0 else "FAIL")
+            answer.update(status=status, semantic_status=status,
+                          exit_code=code, direct_child_reaped=True, cleanup_status="REAPED",
+                          owned_identity_reserved=False, leader_exit_observed=True)
             if timed_out:
                 answer["cleanup"] = "owned process group signalled; escaped descendants not proved retired"
     except FileNotFoundError:
         answer["reason"] = "required executable is unavailable"
+    except BaseException as error:
+        answer.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
+                      error_type=type(error).__name__)
+        if process is not None and process.returncode is None and waiter is not None:
+            # Let an owned worker retire its separately grouped children and receipt.
+            owned_group.signal(signal.SIGINT, process)
+            done.wait(min(interrupt_grace, cleanup_time()))
+        raise
     finally:
-        if process is not None and process.poll() is None:
-            signal_group(process, signal.SIGKILL)
-            process.wait()
+        if process is not None and process.returncode is None and answer["status"] != "UNRETIRED":
+            owned_group.signal(signal.SIGKILL, process)
+            if waiter is None:
+                waiter = threading.Thread(target=observe_exit, name=f"matrix-{name}", daemon=True)
+                waiter.start()
+            if done.wait(cleanup_time()) and observed_exit.is_set() and not observer_errors:
+                owned_group.reap(process)
+                answer["timings"]["reaped_seconds"] = time.monotonic() - start
+                answer.update(direct_child_reaped=True, cleanup_status="REAPED",
+                              owned_identity_reserved=False, leader_exit_observed=True)
+            else:
+                unretired("owned identity remains reserved after bounded cleanup")
         if waiter is not None:
-            waiter.join()
+            waiter.join(timeout=cleanup_time())
+            answer["exit_observer_retired"] = not waiter.is_alive()
+        if group is None:
+            cleanup_time()
+            if not owned_group.close(cleanup_deadline):
+                unretired("owned escalation timer did not retire before cleanup expired")
+        if output_pump is not None:
+            cleanup_time()
+            answer["output_observer"] = output_pump.finish(cleanup_deadline)
+            answer["timings"]["first_output_byte"] = answer["output_observer"]["first_output_byte"]
+            if (answer["output_observer"]["status"] != "PASS"
+                    or answer["output_observer"]["rejected_records"]
+                    or answer["output_observer"]["oversized_progress_lines"]
+                    or answer["output_observer"]["partial_progress_lines"]):
+                answer.update(diagnostics_status="FAIL", output_observation_complete=False)
+        elif process is not None and process.stdout is not None:
+            process.stdout.close()
+        if checkpoint_publisher is not None:
+            cleanup_time()
+            answer["checkpoint_publication"] = checkpoint_publisher.finish(cleanup_deadline)
+            if answer["checkpoint_publication"]["status"] in ("FAIL", "UNRETIRED"):
+                answer.update(diagnostics_status="FAIL", checkpoint_publication_failed=True)
         answer["seconds"] = time.monotonic() - start
         answer["log"] = str(log)
+        if soft_budget is not None and answer["seconds"] >= soft_budget:
+            answer["soft_limit_exceeded"] = True
+            if answer["status"] == "PASS":
+                answer["status"] = "FAIL"
+        save_progress()
+        try:
+            if diagnostic_receipt is not None and answer.get("diagnostics_directory"):
+                finalize_diagnostics(answer, env=env)
+        finally:
+            answer["seconds"] = time.monotonic() - start
+            if (answer.get("observed_native_failure") is True or answer.get("observed_file_failure") is True) and answer["status"] == "PASS":
+                answer.update(status="FAIL", reason="test assertions, errors or file execution failed")
+            if answer.get("output_observation_complete") is False:
+                answer["diagnostics_status"] = "FAIL"
+            if answer.get("checkpoint_publication_failed") is True:
+                answer["diagnostics_status"] = "FAIL"
+            if answer["diagnostics_status"] == "FAIL" and answer["status"] == "PASS":
+                answer.update(status="FAIL", reason="diagnostic evidence could not be published")
+            if soft_budget is not None and answer["seconds"] >= soft_budget:
+                answer["soft_limit_exceeded"] = True
+                if answer["status"] == "PASS":
+                    answer["status"] = "FAIL"
+            save_progress()
     return answer
+
+
+def version_probe(name, argv, *, env, log, deadline):
+    answer = phase(name, argv, cwd=ROOT, env=env, log=log,
+                   budget=remaining(deadline), deadline=deadline)
+    if answer["status"] == "PASS":
+        answer["version"] = log.read_text().strip()
+    return answer
+
+
+DIAGNOSTIC_FINALIZER = r'''
+import importlib.util
+import json
+from pathlib import Path
+import sys
+helper, directory, invocation, digest, phase_name, direct_birth, stage, reuse = sys.argv[1:]
+directory = Path(directory)
+spec = importlib.util.spec_from_file_location("libtmux_ci_artifacts", helper)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+report = module.assemble_phase(sorted(directory.glob("events-*.jsonl")),
+    invocation=invocation, expected_source_digest=digest,
+    source_roots=[(Path(helper).resolve().parent.parent, "repository"),
+                  (Path(stage), "stage"), (directory, "diagnostics")],
+    output=directory / "public", phase_path=directory / "phase.json",
+    expected_phase=phase_name, expected_direct_birth=direct_birth or None, profile_reuse=json.loads(reuse))
+proof = dict(schema=1, invocation=invocation, source_digest=digest, phase=phase_name,
+    profile_request=report["profile_request"], profile_request_status=report["profile_request_status"],
+    observed_assertion_counts=report["assertion_counts"],
+    observed_native_failure=(report["assertion_counts"]["failed"] + report["assertion_counts"]["errored"] > 0
+        or any(process["assertion_problems"] for process in report["processes"])),
+    observed_file_failure=any(process.get("file_exceptions") for process in report["processes"]),
+    observed_file_exception_count=sum(len(process.get("file_exceptions", [])) for process in report["processes"]),
+    observed_direct_native_complete=any(process["process_id"] == report["direct_process_birth_id"]
+        and process["test_bodies_complete"] for process in report["processes"]),
+    observed_file_coverage_complete=report["observed_file_coverage_complete"],
+    expected_file_inventory_matches=report["expected_file_inventory_matches"],
+    observed_process_birth_ids=report["observed_process_birth_ids"],
+    issues=report["issues"], process_issues=report["process_issues"],
+    artifact_export_status=report["export_status"], artifact_directory="public",
+    original_logs=report["original_logs"],
+    test_inventory_complete=False, child_inventory_status="UNPROVED")
+temporary = directory / "diagnostics-proof.tmp"
+temporary.write_text(json.dumps(proof, indent=2) + "\n")
+temporary.replace(directory / "diagnostics-proof.json")
+'''
+
+
+CHECKPOINT_EXPORTER = r'''
+import importlib.util
+import json
+from pathlib import Path
+import sys
+helper, directory, invocation, digest, phase_name, direct_birth, stage, ordinal, sequence, reuse = sys.argv[1:]
+directory = Path(directory)
+spec = importlib.util.spec_from_file_location("libtmux_checkpoint_artifacts", helper)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+direct = directory / f"events-{direct_birth}.jsonl"
+module.assemble_checkpoint([direct, *sorted(path for path in directory.glob("events-*.jsonl") if path != direct)],
+    invocation=invocation, expected_source_digest=digest,
+    source_roots=[(Path(helper).resolve().parent.parent, "repository"),
+                  (Path(stage), "stage"), (directory, "diagnostics")],
+    output=directory / "checkpoints" / f"{int(ordinal):04d}-seq-{int(sequence)}" / "public",
+    admission_path=directory / "checkpoint-admission.json",
+    expected_phase=phase_name, expected_direct_birth=direct_birth,
+    snapshot_ordinal=int(ordinal), through_sequence=int(sequence), profile_reuse=json.loads(reuse))
+'''
+
+
+class CheckpointPublisher:
+    """Coalesce admitted prefixes without blocking command-output admission."""
+
+    def __init__(self, answer, *, env, deadline):
+        self.directory = Path(answer["diagnostics_directory"])
+        self.invocation = answer["invocation"]
+        self.digest = answer["source_digest"]
+        self.name = answer["name"]
+        self.pid = answer["pid"]
+        self.birth = f"{answer['process_token']}-{self.pid}"
+        self.stage = env.get("LIBTMUX_CI_STAGE", str(self.directory))
+        self.env = env.copy()
+        for key in DIAGNOSTIC_BINDINGS:
+            self.env.pop(key, None)
+        self.env.update(LIBTMUX_CI_INVOCATION=self.invocation, LIBTMUX_CI_SOURCE_DIGEST=self.digest)
+        admission = {key: answer[key] for key in
+                     ("name", "started", "pid", "process_token", "invocation", "source_digest")}
+        admission_raw = (json.dumps(admission) + "\n").encode()
+        self.admission_sha256 = hashlib.sha256(admission_raw).hexdigest()
+        (self.directory / "checkpoint-admission.json").write_bytes(admission_raw)
+        self.deadline = deadline
+        self.group = PhaseGroup()
+        self.condition = threading.Condition()
+        self.pending = None
+        self.closing = False
+        self.records = []
+        self.coalesced = 0
+        self.dropped = 0
+        self.active = None
+        self.error_type = None
+        self.profile_reuse = None
+        self.thread = threading.Thread(target=self._run, name="matrix-checkpoint", daemon=True)
+        self.thread.start()
+
+    def notify(self, record):
+        if (record["event"] not in ("process_start", "profile_checkpoint", "assertion_problem",
+                                   "child_admitted", "child_exit_observed")
+                and not (record["event"] == "coverage_incomplete"
+                         and record.get("reason") == "test_file_aborted"
+                         and isinstance(record.get("file_exception"), dict))):
+            return
+        with self.condition:
+            if self.closing or remaining(self.deadline) == 0:
+                self.dropped += 1
+                return
+            if self.pending is not None:
+                self.coalesced += 1
+            self.pending = record["seq"]
+            self.condition.notify()
+
+    def validate_publication(self, generation, ordinal, sequence):
+        public = generation / "public"
+        artifacts = diagnostic_module("ci_artifacts")
+        if public.is_symlink() or not public.is_dir():
+            raise ValueError("checkpoint public bundle is unavailable")
+        manifest_path = public / "manifest.json"
+        if (manifest_path.is_symlink() or not manifest_path.is_file()
+                or manifest_path.stat().st_size > 64 * 1024):
+            raise ValueError("checkpoint manifest is unavailable or exceeds its bound")
+        manifest_raw = manifest_path.read_bytes()
+        manifest = artifacts.parse_json(manifest_raw)
+        if (not isinstance(manifest, dict) or type(manifest.get("schema")) is not int
+                or manifest["schema"] != 1 or manifest.get("invocation") != self.invocation
+                or manifest.get("source_digest") != self.digest or not isinstance(manifest.get("files"), dict)
+                or not 1 <= len(manifest["files"]) <= 128
+                or not {"diagnostics.json", "summary.txt", "timings.csv", "junit.xml",
+                        "partial-progress.jsonl"}.issubset(manifest["files"])):
+            raise ValueError("checkpoint manifest differs from admission")
+        total = 0
+        report_raw = bytearray()
+        for name, expected in manifest["files"].items():
+            if (not isinstance(name, str) or not artifacts.IDENTIFIER.fullmatch(name)
+                    or name in (".", "..", "manifest.json") or not isinstance(expected, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", expected)):
+                raise ValueError("checkpoint manifest has an invalid file identity")
+            path = public / name
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 32 * 1024 * 1024:
+                raise ValueError("checkpoint file is missing, unsafe or exceeds its bound")
+            digest = hashlib.sha256()
+            with path.open("rb") as stream:
+                while chunk := stream.read(64 * 1024):
+                    total += len(chunk)
+                    if total > 128 * 1024 * 1024:
+                        raise ValueError("checkpoint bundle exceeds its validation bound")
+                    digest.update(chunk)
+                    if name == "diagnostics.json":
+                        report_raw.extend(chunk)
+                        if len(report_raw) > 8 * 1024 * 1024:
+                            raise ValueError("checkpoint report exceeds its validation bound")
+            if digest.hexdigest() != expected:
+                raise ValueError("checkpoint file hash differs from manifest")
+        report = artifacts.parse_json(report_raw)
+        binding = report.get("snapshot_binding", {}) if isinstance(report, dict) else {}
+        if (not isinstance(binding, dict) or report.get("invocation") != self.invocation
+                or report.get("source_digest") != self.digest or report.get("snapshot_kind") != "LIVE_PREFIX"
+                or report.get("export_status") != "PASS" or report.get("coverage_status") != "PARTIAL"
+                or report.get("test_status") not in ("UNKNOWN", "FAIL")
+                or binding.get("phase") != self.name or binding.get("process_birth_id") != self.birth
+                or any(type(binding.get(key)) is not int for key in ("pid", "snapshot_ordinal", "through_sequence"))
+                or binding.get("pid") != self.pid or binding.get("snapshot_ordinal") != ordinal
+                or binding.get("through_sequence") != sequence
+                or binding.get("admission_sha256") != self.admission_sha256):
+            raise ValueError("checkpoint report differs from the admitted prefix")
+        manifest_sha256 = hashlib.sha256(manifest_raw).hexdigest()
+        reuse = (dict(index_path=str(public / "profile-cache-index.json"),
+                      approved_manifest_sha256=manifest_sha256)
+                 if "profile-cache-index.json" in manifest["files"] else None)
+        return dict(manifest_sha256=manifest_sha256,
+                    validated_bytes=total, snapshot_binding=binding, profile_reuse=reuse)
+
+    def _run(self):
+        try:
+            while True:
+                with self.condition:
+                    self.condition.wait_for(lambda: self.pending is not None or self.closing)
+                    if self.pending is None:
+                        return
+                    sequence, self.pending = self.pending, None
+                    if remaining(self.deadline) == 0:
+                        self.dropped += 1
+                        return
+                ordinal = len(self.records) + 1
+                generation = self.directory / "checkpoints" / f"{ordinal:04d}-seq-{sequence}"
+                generation.mkdir(parents=True, exist_ok=False)
+                self.active = dict(snapshot_ordinal=ordinal, through_sequence=sequence,
+                                   generation=str(generation))
+                argv = [sys.executable, "-c", CHECKPOINT_EXPORTER, str(ROOT / "dev/ci-artifacts.py"),
+                        str(self.directory), self.invocation, self.digest, self.name, self.birth,
+                        self.stage, str(ordinal), str(sequence), json.dumps(self.profile_reuse)]
+                receipt = phase("checkpoint-exporter", argv, cwd=ROOT, env=self.env,
+                    log=generation / "export.log", budget=DIAGNOSTIC_FINALIZATION_SECONDS,
+                    deadline=self.deadline, group=self.group, progress_path=generation / "phase.json")
+                item = self.active | dict(exporter=receipt, artifact_directory=None, publication_status="FAIL")
+                self.records.append(item)
+                if receipt["status"] == "PASS" and receipt["direct_child_reaped"]:
+                    started = time.monotonic()
+                    item.update(self.validate_publication(generation, ordinal, sequence),
+                                artifact_directory=str(generation / "public"), publication_status="PASS")
+                    item["validation_seconds"] = time.monotonic() - started
+                    self.profile_reuse = item["profile_reuse"]
+                self.active = None
+        except BaseException as error:
+            self.error_type = type(error).__name__
+            with self.condition:
+                self.closing = True
+                if self.pending is not None:
+                    self.dropped += 1
+                    self.pending = None
+            self.group.cancel()
+        finally:
+            if not self.group.close(time.monotonic() + CLEANUP_SECONDS):
+                self.error_type = self.error_type or "EscalationUnretired"
+
+    def finish(self, deadline):
+        with self.condition:
+            self.closing = True
+            self.condition.notify()
+        if remaining(self.deadline) == 0:
+            self.group.cancel()
+        self.thread.join(timeout=remaining(deadline))
+        retired = not self.thread.is_alive()
+        if not retired:
+            self.group.cancel()
+        failed = self.error_type is not None or any(
+            item["publication_status"] != "PASS" or not item["exporter"]["direct_child_reaped"]
+            for item in self.records)
+        reserved = []
+        captured = self.group.lock.acquire(timeout=remaining(deadline))
+        if captured:
+            try:
+                reserved = [dict(pid=process.pid, process_group=process.pid, identity_reserved=True,
+                    owned_identity=self.group.identities.get(process),
+                    descendant_inventory="UNPROVED") for process in self.group.processes]
+            finally:
+                self.group.lock.release()
+        return dict(status="UNRETIRED" if not retired else "FAIL" if failed else
+                    "PASS" if self.records else "UNAVAILABLE", publisher_retired=retired,
+                    snapshots=self.records.copy(), active_snapshot=self.active,
+                    profile_reuse=self.profile_reuse,
+                    coalesced_markers=self.coalesced, dropped_markers=self.dropped,
+                    reserved_exporters=reserved, reserved_exporter_snapshot="OBSERVED" if captured else "UNAVAILABLE_LOCK",
+                    error_type=self.error_type, admission_scope="admitted_direct_process_and_bound_child_prefixes",
+                    child_sampling_coverage="UNPROVED", completion_verdict="UNPROVED")
+
+
+def finalize_diagnostics(answer, *, env):
+    """Retire an owned decoder independently; preserve the test's original verdict."""
+    directory = Path(answer["diagnostics_directory"])
+    child_env = env.copy()
+    for key in DIAGNOSTIC_BINDINGS:
+        child_env.pop(key, None)
+    child_env.update(LIBTMUX_CI_INVOCATION=answer["invocation"], LIBTMUX_CI_SOURCE_DIGEST=answer["source_digest"])
+    answer["diagnostic_finalizer_progress"] = str(directory / "finalization-phase.json")
+    started = time.monotonic()
+    try:
+        argv = [sys.executable, "-c", DIAGNOSTIC_FINALIZER, str(ROOT / "dev/ci-artifacts.py"),
+                str(directory), answer["invocation"], answer["source_digest"], answer["name"],
+                f"{answer['process_token']}-{answer['pid']}" if answer.get("started") else "",
+                env.get("LIBTMUX_CI_STAGE", str(directory)),
+                json.dumps(answer.get("checkpoint_publication", {}).get("profile_reuse"))]
+        decoder = phase("diagnostic-finalizer", argv, cwd=ROOT, env=child_env,
+                        log=directory / "finalization.log", budget=DIAGNOSTIC_FINALIZATION_SECONDS,
+                        progress_path=directory / "finalization-phase.json")
+        answer["diagnostic_finalizer"] = decoder
+        if decoder["status"] != "PASS" or not decoder["direct_child_reaped"]:
+            answer.update(diagnostics_status="FAIL", diagnostic_error="owned diagnostic finalizer did not retire successfully")
+            return
+        path = directory / "diagnostics-proof.json"
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 256 * 1024:
+            raise ValueError("diagnostic finalizer proof is unavailable or exceeds its bound")
+        proof = json.loads(path.read_text())
+        if (not isinstance(proof, dict) or proof.get("invocation") != answer["invocation"]
+                or proof.get("source_digest") != answer["source_digest"] or proof.get("phase") != answer["name"]):
+            raise ValueError("diagnostic finalizer proof differs from the admitted phase")
+        request = proof.get("profile_request")
+        profile_status = proof.get("profile_request_status")
+        if (not isinstance(request, dict) or type(request.get("require_direct_native")) is not bool
+                or request != answer["profile_request"]
+                or (request["mode"] == "off" and profile_status != "NOT_REQUESTED")
+                or (request["mode"] != "off" and request["require_direct_native"]
+                    and profile_status not in ("CAPTURED", "EMPTY", "FAIL"))
+                or (request["mode"] != "off" and not request["require_direct_native"]
+                    and profile_status != "UNVERIFIED")):
+            raise ValueError("diagnostic sampler proof differs from the admitted request")
+        file_failure = proof.get("observed_file_failure")
+        file_exception_count = proof.get("observed_file_exception_count")
+        if (type(file_failure) is not bool or type(file_exception_count) is not int
+                or file_exception_count < 0 or file_failure != (file_exception_count > 0)):
+            raise ValueError("diagnostic file-failure proof is missing or contradictory")
+        answer["diagnostics_proof"] = proof
+        answer["profile_request_status"] = profile_status
+        answer["observed_native_failure"] = proof.get("observed_native_failure") is True
+        answer["observed_file_failure"] = proof.get("observed_file_failure") is True
+        answer["observed_file_exception_count"] = proof.get("observed_file_exception_count")
+        answer["observed_assertion_counts"] = proof.get("observed_assertion_counts")
+        manifest_path = directory / "public" / "manifest.json"
+        if manifest_path.is_symlink() or not manifest_path.is_file() or manifest_path.stat().st_size > 64 * 1024:
+            raise ValueError("sanitized diagnostic bundle manifest is unavailable")
+        manifest = json.loads(manifest_path.read_text())
+        if (manifest.get("invocation") != answer["invocation"]
+                or manifest.get("source_digest") != answer["source_digest"]):
+            raise ValueError("sanitized diagnostic bundle differs from the admitted source")
+        answer["diagnostic_artifact_directory"] = str(directory / "public")
+        if proof.get("original_logs"):
+            answer["log_sha256"] = proof["original_logs"][0]["input_sha256"]
+            answer["log_binding_scope"] = proof["original_logs"][0]["binding_scope"]
+        native_incomplete = (answer.get("expected_test_file_inventory") is not None
+            and (proof.get("observed_direct_native_complete") is not True
+                 or proof.get("expected_file_inventory_matches") is not True))
+        answer["diagnostics_status"] = "FAIL" if (proof.get("artifact_export_status") != "PASS"
+            or profile_status == "FAIL" or native_incomplete) else "PASS" if (profile_status not in ("EMPTY", "UNVERIFIED")
+            and proof.get("observed_file_coverage_complete") is True
+            and proof.get("expected_file_inventory_matches") is True and not proof.get("issues")
+            and not proof.get("process_issues")) else "PARTIAL"
+    except BaseException as error:
+        answer.update(diagnostics_status="FAIL", diagnostic_error=type(error).__name__)
+        if isinstance(error, (KeyboardInterrupt, SystemExit)):
+            raise
+    finally:
+        answer["timings"]["diagnostic_finalization_seconds"] = time.monotonic() - started
+
+
+JOB_ARTIFACT_FINALIZER = r'''
+import importlib.util
+import json
+from pathlib import Path
+import sys
+helper, stage, receipt, directory, invocation, digest = sys.argv[1:]
+stage, directory = Path(stage), Path(directory)
+spec = importlib.util.spec_from_file_location("libtmux_ci_artifacts", helper)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+options = dict(invocation=invocation, expected_source_digest=digest,
+    source_roots=[(Path(helper).resolve().parent.parent, "repository"), (stage, "stage")],
+    output=directory / "public")
+report = (module.assemble_job(supervisor_path=Path(receipt), **options) if receipt else
+          module.assemble_preparation(stage=stage,
+              reason="No final supervisor receipt; setup or work incomplete", **options))
+proof = dict(schema=1, invocation=invocation, source_digest=digest,
+    artifact_export_status=report["export_status"], check_status=report["check_status"],
+    artifact_directory="public")
+temporary = directory / "job-artifact-proof.tmp"
+temporary.write_text(json.dumps(proof, indent=2) + "\n")
+temporary.replace(directory / "job-artifact-proof.json")
+'''
+
+
+def finalize_artifacts(args):
+    """Publish the final verdict after work stops, under a separate owned guard."""
+    started = time.monotonic()
+    stage = checked_stage(args.stage, create=True)
+    receipt = result_path(stage, args)
+    digest = source_digest()
+    missing = not receipt.exists()
+    if missing:
+        result = dict(invocation=uuid.uuid4().hex, source_digest=digest, status="UNVERIFIED")
+    else:
+        if receipt.is_symlink() or not receipt.is_file() or receipt.stat().st_size > 8 * 1024 * 1024:
+            raise ValueError("job receipt is unavailable or exceeds its bound")
+        result = json.loads(receipt.read_text())
+        if not isinstance(result, dict):
+            raise ValueError("job receipt must be an object")
+    invocation = result.get("invocation")
+    if (not isinstance(invocation, str) or invocation in (".", "..")
+            or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", invocation)
+            or result.get("source_digest") != digest):
+        raise ValueError("job receipt differs from current invocation or source")
+    directory = stage / "diagnostics" / invocation / "job"
+    directory.mkdir(parents=True, exist_ok=False)
+    env = os.environ.copy()
+    for key in DIAGNOSTIC_BINDINGS:
+        env.pop(key, None)
+    env.update(LIBTMUX_CI_INVOCATION=invocation, LIBTMUX_CI_SOURCE_DIGEST=digest)
+    argv = [sys.executable, "-c", JOB_ARTIFACT_FINALIZER, str(ROOT / "dev/ci-artifacts.py"),
+            str(stage), "" if missing else str(receipt), str(directory), invocation, digest]
+    exporter = phase("job-artifact-finalizer", argv, cwd=ROOT, env=env,
+                     log=directory / "finalization.log", budget=DIAGNOSTIC_FINALIZATION_SECONDS,
+                     progress_path=directory / "finalization-phase.json")
+    status = "FAIL"
+    check_status = result.get("status", "UNKNOWN")
+    known_statuses = {"PASS", "FAIL", "NOT RUN", "RUNNING", "STALE", "INTERRUPTED",
+                      "TIMEOUT", "CANCELLED", "UNRETIRED", "UNKNOWN", "UNVERIFIED"}
+    if not isinstance(check_status, str) or check_status not in known_statuses:
+        check_status = "UNKNOWN"
+    proof_path = directory / "job-artifact-proof.json"
+    proof_status = "UNAVAILABLE"
+    if exporter["status"] == "PASS" and exporter["direct_child_reaped"]:
+        try:
+            if proof_path.is_symlink() or not proof_path.is_file() or proof_path.stat().st_size > 64 * 1024:
+                raise ValueError("exporter proof is unavailable or exceeds its bound")
+            proof = json.loads(proof_path.read_text())
+            if (not isinstance(proof, dict) or proof.get("invocation") != invocation
+                    or proof.get("source_digest") != digest):
+                raise ValueError("exporter proof differs from the admitted job")
+            proof_status = "BOUND"
+            if proof.get("artifact_export_status") == "PASS":
+                manifest_path = directory / "public" / "manifest.json"
+                if manifest_path.is_symlink() or not manifest_path.is_file() or manifest_path.stat().st_size > 64 * 1024:
+                    raise ValueError("published job manifest is unavailable")
+                manifest = json.loads(manifest_path.read_text())
+                if (not isinstance(manifest, dict) or manifest.get("invocation") != invocation
+                        or manifest.get("source_digest") != digest or not isinstance(manifest.get("files"), dict)):
+                    raise ValueError("published job manifest differs from the admitted source")
+                for filename in ("diagnostics.json", "summary.txt", "timings.csv", "junit.xml", "partial-progress.jsonl"):
+                    item = directory / "public" / filename
+                    file_digest = manifest["files"].get(filename)
+                    if (item.is_symlink() or not item.is_file() or not isinstance(file_digest, str)
+                            or not re.fullmatch(r"[0-9a-f]{64}", file_digest)):
+                        raise ValueError("published job bundle lacks a declared required file")
+                if isinstance(proof.get("check_status"), str) and proof["check_status"] in known_statuses:
+                    check_status = proof["check_status"]
+                status = "PASS"
+        except (OSError, ValueError, UnicodeError, RecursionError):
+            proof_status = "INVALID"
+    record = dict(schema=1, invocation=invocation, source_digest=digest,
+        artifact_status=status, check_status=check_status,
+        exporter_proof_status=proof_status,
+        exporter=exporter, seconds=time.monotonic() - started,
+        timing_boundary="artifact command entry through exporter retirement; excludes final receipt write and process exit")
+    (directory / "artifact-finalization.json").write_text(json.dumps(record, indent=2) + "\n")
+    retirement = dict(schema=1, invocation=invocation, source_digest=digest,
+        artifact_scope="job_exporter_retirement", artifact_status=status,
+        exporter_proof_status=proof_status,
+        check_status=record["check_status"], exporter_status=exporter["status"],
+        exporter_exit_code=exporter.get("exit_code"), pid=exporter.get("pid"),
+        direct_child_reaped=exporter["direct_child_reaped"], cleanup_status=exporter["cleanup_status"],
+        seconds=record["seconds"], timings=exporter["timings"],
+        python_version=platform.python_version(), timing_boundary=record["timing_boundary"],
+        cleanup_scope="owned direct exporter; escaped descendants remain unproved")
+    destination = directory / "retirement"
+    destination.mkdir()
+    with tempfile.TemporaryDirectory(prefix=".retirement-build-", dir=directory) as temporary:
+        bundle = Path(temporary) / "bundle"
+        bundle.mkdir()
+        payload = json.dumps(retirement, indent=2) + "\n"
+        (bundle / "retirement.json").write_text(payload)
+        (bundle / "manifest.json").write_text(json.dumps(dict(schema=1, invocation=invocation,
+            source_digest=digest, files={"retirement.json": hashlib.sha256(payload.encode()).hexdigest()}),
+            indent=2) + "\n")
+        bundle.replace(destination / "public")
+    print(f"{status} artifact publication; check outcome {record['check_status']}", flush=True)
+    return 0 if status == "PASS" else 1
+
+
+def parallel_mid(commands, *, stage, env, result, save, deadline=None):
+    """Run independent offline phases; receipts and cancellation stay with the worker."""
+    priority = {"core-unit": 0, "mcp-unit": 1, "workspace-unit": 2, "format": 3, "quality": 4}
+    ordered = sorted(commands, key=lambda item: priority.get(item[0], 4))
+    group = PhaseGroup()
+    pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="matrix-phase")
+    futures = {}
+    completed = set()
+    deadline = time.monotonic() + HARD_LIMITS["mid"] if deadline is None else deadline
+
+    def progress():
+        result["active_phases"] = [item[0] for future, item in futures.items()
+                                   if future.running() and not future.done()]
+        result["pending_phases"] = [item[0] for future, item in futures.items()
+                                    if not future.running() and not future.done()]
+        result["active_phase"] = ",".join(result["active_phases"]) or None
+        save()
+
+    try:
+        for name, argv, budget, _ in ordered:
+            if remaining(deadline) == 0:
+                result["phases"].append(dict(name=name, command=argv, status="NOT RUN",
+                    started=False, seconds=0.0, reason="hard deadline expired before phase admission"))
+                continue
+            future = pool.submit(phase, name, argv, cwd=ROOT, env=env,
+                                 log=stage / "logs" / f"{name}.log", budget=HARD_LIMITS["mid"],
+                                 soft_budget=budget, deadline=deadline, group=group)
+            futures[future] = (name, argv, budget)
+        progress()
+        for future in as_completed(futures):
+            item = future.result()
+            completed.add(future)
+            result["phases"].append(item)
+            progress()
+            diagnostic_module("ci_streams").write_console(
+                f"{item['status']} {item['name']} {item['seconds']:.3f}s\n".encode())
+    except BaseException:
+        group.cancel()
+        raise
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+        for future, (name, argv, budget) in futures.items():
+            if future in completed:
+                continue
+            if future.cancelled():
+                item = dict(name=name, command=argv, status="CANCELLED", started=False,
+                            budget_seconds=HARD_LIMITS["mid"], soft_limit_seconds=budget, seconds=0.0)
+            else:
+                try:
+                    item = future.result()
+                except BaseException as error:
+                    item = dict(name=name, command=argv, status="FAIL",
+                                error_type=type(error).__name__)
+            result["phases"].append(item)
+        progress()
+        if not group.close(deadline + CLEANUP_SECONDS):
+            result["cleanup_status"] = "UNRETIRED"
+        save()
+
+
+def parallel_outer(commands, *, stage, env, result, save, deadline=None):
+    priority = {"core-normal": 0, "workspace-normal": 1, "mcp-normal": 2, "imports": 3,
+                "external-examples": 3, "external-launchers": 3}
+    pending = sorted(commands, key=lambda item: priority.get(item[0], 4))
+    names = {item[0] for item in commands}
+    dependencies = {"external-examples": {"imports"} & names,
+                    "external-launchers": {"imports"} & names}
+    group = PhaseGroup()
+    pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="matrix-outer")
+    running, futures, completed, finished = {}, {}, set(), set()
+    deadline = time.monotonic() + HARD_LIMITS["outer"] if deadline is None else deadline
+
+    def progress():
+        result["active_phases"] = [item[0] for future, item in running.items()
+                                   if future.running() and not future.done()]
+        result["pending_phases"] = [item[0] for item in pending] + [
+            item[0] for future, item in running.items() if not future.running() and not future.done()]
+        result["active_phase"] = ",".join(result["active_phases"]) or None
+        save()
+
+    def admit():
+        while len(running) < 4:
+            if remaining(deadline) == 0:
+                for name, argv, _, _ in pending:
+                    result["phases"].append(dict(name=name, command=argv, status="NOT RUN",
+                        started=False, seconds=0.0, reason="hard deadline expired before phase admission"))
+                pending.clear()
+                if running:
+                    group.cancel()
+                break
+            index = next((i for i, item in enumerate(pending)
+                          if dependencies.get(item[0], set()) <= finished), None)
+            if index is None:
+                break
+            item = pending.pop(index)
+            name, argv, budget, _ = item
+            future = pool.submit(phase, name, argv, cwd=ROOT, env=env,
+                                 log=stage / "logs" / f"{name}.log", budget=HARD_LIMITS["outer"],
+                                 soft_budget=budget, deadline=deadline, group=group)
+            running[future] = futures[future] = item
+        progress()
+
+    try:
+        admit()
+        while running:
+            ready, _ = wait(running, timeout=remaining(deadline), return_when=FIRST_COMPLETED)
+            if not ready:
+                group.cancel()
+                break
+            for future in ready:
+                item = future.result()
+                completed.add(future)
+                finished.add(running.pop(future)[0])
+                result["phases"].append(item)
+                diagnostic_module("ci_streams").write_console(
+                    f"{item['status']} {item['name']} {item['seconds']:.3f}s\n".encode())
+            admit()
+        if pending and remaining(deadline) > 0:
+            raise RuntimeError("outer phase dependencies cannot be satisfied")
+    except BaseException:
+        group.cancel()
+        raise
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+        for future, (name, argv, budget, _) in futures.items():
+            if future in completed:
+                continue
+            if future.cancelled():
+                item = dict(name=name, command=argv, status="CANCELLED", started=False,
+                            budget_seconds=HARD_LIMITS["outer"], soft_limit_seconds=budget, seconds=0.0)
+            else:
+                try:
+                    item = future.result()
+                except BaseException as error:
+                    item = dict(name=name, command=argv, status="FAIL",
+                                error_type=type(error).__name__)
+            result["phases"].append(item)
+        for name, argv, budget, _ in pending:
+            result["phases"].append(dict(name=name, command=argv, status="CANCELLED",
+                                        started=False, budget_seconds=HARD_LIMITS["outer"],
+                                        soft_limit_seconds=budget, seconds=0.0))
+        running.clear()
+        pending.clear()
+        progress()
+        if not group.close(deadline + CLEANUP_SECONDS):
+            result["cleanup_status"] = "UNRETIRED"
+        save()
 
 
 PACKAGE_SPECIFICATIONS = r'''
@@ -230,7 +1301,12 @@ root, project = ARGS[1:2]
 Pkg.activate(project)
 Pkg.develop([PackageSpec(path=root),
              PackageSpec(path=joinpath(root, "packages", "LibTmuxWorkspace")),
-             PackageSpec(path=joinpath(root, "packages", "LibTmuxMCP"))])
+             PackageSpec(path=joinpath(root, "packages", "LibTmuxMCP")),
+             PackageSpec(path=joinpath(root, "dev", "LibTmuxTestDiagnostics")),
+             PackageSpec(path=joinpath(root, "dev", "LibTmuxCheckCompiler")),
+             PackageSpec(path=joinpath(root, "dev", "LibTmuxCoreCheckCompiler")),
+             PackageSpec(path=joinpath(root, "dev", "LibTmuxWorkspaceCheckCompiler")),
+             PackageSpec(path=joinpath(root, "dev", "LibTmuxQualityCheckCompiler"))])
 packages = package_specifications(ARGS[3:end])
 Pkg.add(packages)
 resolved = values(Pkg.dependencies())
@@ -246,6 +1322,9 @@ def environment(stage, *, offline):
     env = os.environ.copy()
     env.pop("TMUX", None)
     env.pop("TMUX_PANE", None)
+    for key in DIAGNOSTIC_BINDINGS:
+        env.pop(key, None)
+    env.pop("LIBTMUX_TEST_INVENTORY_ONLY", None)
     env.update(JULIA_DEPOT_PATH=str(stage / "depot"), JULIA_LOAD_PATH="@:@stdlib",
                JULIA_PKG_OFFLINE="true" if offline else "false", JULIA_PKG_PRECOMPILE_AUTO="0")
     return env
@@ -317,6 +1396,64 @@ def stdlib_cache_profile(julia, env):
     return dict(julia=lines[0], version=lines[1], modules=lines[2:])
 
 
+def prepare_test_inventory(args, stage, project, digest):
+    """Query each source-owned runner's selection without executing its files."""
+    env = environment(stage, offline=True)
+    env["LIBTMUX_TEST_INVENTORY_ONLY"] = "1"
+    inventory = {}
+    plan = command_plan(args, stage, dict(project=str(project), consumers="unused"))
+    for name, argv, _, _ in plan:
+        if not TEST_RUNNERS.intersection(argv):
+            continue
+        log = stage / "logs" / f"inventory-{name}.log"
+        query = phase(f"inventory-{name}", argv, cwd=ROOT, env=env, log=log,
+                      budget=HARD_LIMITS["outer"])
+        if query["status"] != "PASS" or not query.get("direct_child_reaped"):
+            raise ValueError(f"test inventory query did not finish: {name}")
+        paths = [line.removeprefix("LIBTMUX_TEST_FILE\t") for line in log.read_text().splitlines()
+                 if line.startswith("LIBTMUX_TEST_FILE\t")]
+        if not paths or len(paths) != len(set(paths)):
+            raise ValueError("test inventory must declare unique source-owned files")
+        files = []
+        for relative in paths:
+            path = Path(relative)
+            source = ROOT / path
+            if path.is_absolute() or ".." in path.parts or "\\" in relative or source.is_symlink() or not source.is_file() or ROOT.resolve() not in source.resolve().parents:
+                raise ValueError("test inventory must stay in regular checkout files")
+            files.append(dict(path=path.as_posix(), sha256=hashlib.sha256(source.read_bytes()).hexdigest()))
+        inventory[name] = dict(source_digest=digest, files=files, query=query)
+    return inventory
+
+
+def checked_test_inventory(metadata):
+    inventory = metadata.get("test_file_inventory", {})
+    if not isinstance(inventory, dict):
+        raise ValueError("prepared test inventory is malformed")
+    if metadata.get("schema_version", 1) >= 2 and set(inventory) != {
+            "core-unit", "workspace-unit", "mcp-unit", "core-normal", "workspace-normal", "mcp-normal"}:
+        raise ValueError("prepared test inventory does not cover the owned runners")
+    for name, declaration in inventory.items():
+        if not isinstance(name, str) or not isinstance(declaration, dict) or declaration.get("source_digest") != metadata["source_digest"]:
+            raise ValueError("prepared test inventory is not source-bound")
+        files = declaration.get("files")
+        if not isinstance(files, list) or not files:
+            raise ValueError("prepared test inventory has no files")
+        names = []
+        for item in files:
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                raise ValueError("prepared test inventory file is malformed")
+            relative = Path(item["path"])
+            source = ROOT / relative
+            if relative.is_absolute() or ".." in relative.parts or "\\" in item["path"] or source.is_symlink() or not source.is_file() or ROOT.resolve() not in source.resolve().parents:
+                raise ValueError("prepared test inventory escaped its source")
+            if item.get("sha256") != hashlib.sha256(source.read_bytes()).hexdigest():
+                raise ValueError("prepared test inventory file changed")
+            names.append(item["path"])
+        if len(names) != len(set(names)):
+            raise ValueError("prepared test inventory repeats files")
+    return inventory
+
+
 def prepare(args):
     stage = checked_stage(args.stage, create=True)
     initial_digest = source_digest()
@@ -334,6 +1471,16 @@ def prepare(args):
                    cwd=ROOT, env=env, check=True)
     subprocess.run(format_warmup_command(args, project), cwd=ROOT,
                    env=environment(stage, offline=True), check=True)
+    for package in ("LibTmuxCoreCheckCompiler", "LibTmuxWorkspaceCheckCompiler"):
+        script = f'using {package}; println("PREPARED test entries=", {package}.TEST_CACHE_ENTRIES[], "; fixture entries=", {package}.TEST_CACHE_FIXTURES[])'
+        subprocess.run([args.julia, "--startup-file=no", f"--threads={args.threads}",
+                        f"--project={project}", "-e", script], cwd=ROOT,
+                       env=environment(stage, offline=True), check=True)
+    subprocess.run([args.julia, "--startup-file=no", f"--threads={args.threads}",
+                    f"--project={project}", "-e", '''using LibTmuxQualityCheckCompiler
+println("PREPARED QA entries=", LibTmuxQualityCheckCompiler.QUALITY_ENTRIES[],
+        "; options entries=", LibTmuxQualityCheckCompiler.OPTIONS_ENTRIES[])'''],
+                   cwd=ROOT, env=environment(stage, offline=True), check=True)
     consumers = stage / ("consumers-" + uuid.uuid4().hex)
     started = time.monotonic()
     registry_files = seed_registry_cache(stage / "depot", consumers / "depot")
@@ -346,58 +1493,82 @@ def prepare(args):
     subprocess.run([args.julia, "--startup-file=no", "--compile=yes", "-O2",
                     str(ROOT / "dev/check-consumers.jl"), "prepare", str(consumers)],
                    cwd=ROOT, env=env, check=True)
+    inventory = prepare_test_inventory(args, stage, project, initial_digest)
     if initial_digest != source_digest():
         raise ValueError("source changed during preparation; rerun with stable source (dependency cache retained)")
-    metadata = dict(schema_version=1, source_digest=initial_digest, tools=PINNED_TOOLS,
+    metadata = dict(schema_version=2, source_digest=initial_digest, tools=PINNED_TOOLS,
                     consumers=str(consumers), project=str(project), registry_seed=registry_seed,
                     stdlib_seed=stdlib_seed,
-                    tool_preferences=tomllib.loads(TOOL_PREFERENCES))
+                    tool_preferences=tomllib.loads(TOOL_PREFERENCES), test_file_inventory=inventory)
     (stage / "prepared.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print("PASS prepared dependencies and immutable external consumers; no timed checks run")
 
 
 def format_warmup_command(args, project):
     return [args.julia, "--startup-file=no", f"--threads={args.threads}",
-            f"--project={project}", str(ROOT / "dev/check-quality.jl"), "format"]
+            f"--project={project}", "-e", '''using LibTmuxCheckCompiler
+println("PASS formatter compiler preparation; no source files checked")''']
 
 
 def command_plan(args, stage, metadata):
     project = metadata["project"]
     normal = [args.julia, "--startup-file=no", f"--threads={args.threads}", f"--project={project}"]
+    cache = os.environ.get("LIBTMUX_LOOP_NATIVE_TEST_CACHE", "1")
+    if cache not in ("0", "1"):
+        raise ValueError("native compiler cache control must be 0 or 1")
+    cached_normal = ["env", f"LIBTMUX_TEST_COMPILER_CACHE={cache}", *normal]
     minimal = [*normal, "--compile=min", "-O0"]
+    tools = [args.julia, "--startup-file=no", "--threads=1", f"--project={project}"]
+    qa_cache = os.environ.get("LIBTMUX_LOOP_QUALITY_CACHE", "1")
+    if qa_cache not in ("0", "1"):
+        raise ValueError("QA compiler cache control must be 0 or 1")
+    quality_command = ["env", f"LIBTMUX_QUALITY_COMPILER_CACHE={qa_cache}", *tools, "--compile=min", "-O0"]
     commands = []
+    outer_budget = LOOP_BUDGETS["outer"]
     def add(name, argv, budget, tier):
         commands.append((name, argv, budget, tier))
-    add("core-unit", [*minimal, "test/runtests.jl", "unit"], 30, "unit")
-    add("workspace-unit", [*minimal, "packages/LibTmuxWorkspace/test/runtests.jl", "unit"], 30, "unit")
-    add("mcp-unit", [*minimal, "packages/LibTmuxMCP/test/runtests.jl", "unit"], 30, "unit")
-    add("quality", [*minimal, "dev/check-quality.jl", "quality"], 30, "quality")
-    add("format", [*normal, "dev/check-quality.jl", "format"], 45, "quality")
-    add("generated", [*minimal, "dev/generate-criteria.jl", "--check"], 30, "quality")
-    add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 30, "quality")
-    add("consumer-diagnostics", [*minimal, "dev/check-consumers.jl", "--self-test"], 30, "quality")
-    add("example-inventory", [*minimal, "dev/check-doc-examples.jl", "check"], 30, "quality")
-    add("readme-links", [*minimal, "dev/check-readme-commands.jl", "static"], 30, "quality")
-    add("core-normal", [*normal, "test/runtests.jl", "all"], 300, "outer")
-    add("workspace-normal", [*normal, "packages/LibTmuxWorkspace/test/runtests.jl", "all"], 300, "outer")
-    add("mcp-normal", [*normal, "packages/LibTmuxMCP/test/runtests.jl", "all"], 300, "outer")
-    add("mcp-product", [*normal, "packages/LibTmuxMCP/test/product.jl"], 300, "outer")
+    add("core-unit", [*minimal, "test/runtests.jl", "unit"], 10, "unit")
+    add("workspace-unit", [*minimal, "packages/LibTmuxWorkspace/test/runtests.jl", "unit"], 10, "unit")
+    add("mcp-unit", [*minimal, "packages/LibTmuxMCP/test/runtests.jl", "unit"], 10, "unit")
+    add("quality", [*quality_command, "dev/check-quality.jl", "quality"], 10, "quality")
+    add("format", [*tools, "dev/check-quality.jl", "format"], 10, "quality")
+    add("generated", [*minimal, "dev/generate-criteria.jl", "--check"], 10, "quality")
+    add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 10, "quality")
+    add("consumer-diagnostics", [*minimal, "dev/check-consumers.jl", "--self-test"], 10, "quality")
+    add("example-inventory", [*minimal, "dev/check-doc-examples.jl", "check"], 10, "quality")
+    add("readme-links", [*minimal, "dev/check-readme-commands.jl", "static"], 10, "quality")
+    add("core-normal", [*cached_normal, "test/runtests.jl", "all"], outer_budget, "outer")
+    add("workspace-normal", [*cached_normal, "packages/LibTmuxWorkspace/test/runtests.jl", "all"], outer_budget, "outer")
+    add("mcp-normal", [*normal, "packages/LibTmuxMCP/test/runtests.jl", "all"], outer_budget, "outer")
+    add("mcp-product", [*normal, "packages/LibTmuxMCP/test/product.jl"], outer_budget, "outer")
     add("mcp-stopped-reader", [sys.executable, "packages/LibTmuxMCP/test/stdio_backpressure.py",
                               args.julia, project, "--compile", "normal", "--threads",
-                              str(args.threads)], 300, "outer")
+                              str(args.threads)], outer_budget, "outer")
     extensions = 'using Test, LibTmux; include("test/criteria.jl"); include("test/json_extension.jl"); include("test/tables_extension.jl")'
-    add("extensions", [*normal, "-e", extensions], 300, "outer")
-    add("docs", [*normal, "docs/make.jl"], 300, "outer")
-    add("doc-snippets", [*normal, "dev/check-doc-examples.jl", "doctest"], 300, "outer")
-    add("doc-contextual", [*normal, "dev/check-doc-examples.jl", "contextual"], 300, "outer")
-    add("imports", [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]], 300, "outer")
-    add("external-examples", [*minimal, "dev/check-consumers.jl", "examples", metadata["consumers"]], 300, "outer")
-    add("external-launchers", [*minimal, "dev/check-consumers.jl", "launchers", metadata["consumers"]], 300, "outer")
-    add("readme-commands", [*normal, "dev/check-readme-commands.jl", "commands"], 300, "outer")
+    add("extensions", [*normal, "-e", extensions], outer_budget, "outer")
+    add("docs", [*normal, "docs/make.jl"], outer_budget, "outer")
+    add("doc-snippets", [*normal, "dev/check-doc-examples.jl", "doctest"], outer_budget, "outer")
+    add("doc-contextual", [*normal, "dev/check-doc-examples.jl", "contextual"], outer_budget, "outer")
+    add("imports", [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]], outer_budget, "outer")
+    add("external-examples", [*minimal, "dev/check-consumers.jl", "examples", metadata["consumers"]], outer_budget, "outer")
+    add("external-launchers", [*minimal, "dev/check-consumers.jl", "launchers", metadata["consumers"]], outer_budget, "outer")
+    add("readme-commands", [*normal, "dev/check-readme-commands.jl", "commands"], outer_budget, "outer")
     return commands
 
 
-def run(args):
+def result_path(stage, args, *, worker=False):
+    suffix = "" if args.suite == "all" else f"-{args.suite}"
+    if worker:
+        suffix += "-worker-" + args.worker_phase
+    return stage / f"results-{args.tier}{suffix}-t{args.threads}.json"
+
+
+def run_checks(args):
+    command_started = time.monotonic()
+    batch = "outer" if getattr(args, "worker_phase", None) == "outer" or (
+        not getattr(args, "worker", False) and args.tier in ("all", "outer")) else "mid"
+    deadline = min(command_started + HARD_LIMITS[batch],
+                   getattr(args, "deadline", None) or command_started + HARD_LIMITS[batch])
     stage = checked_stage(args.stage)
     metadata = json.loads((stage / "prepared.json").read_text())
     if metadata["source_digest"] != source_digest():
@@ -406,17 +1577,34 @@ def run(args):
     if tomllib.loads(preferences.read_text()) != metadata["tool_preferences"]:
         raise ValueError("tool preferences changed since preparation; prepare a fresh stage")
     env = environment(stage, offline=True)
+    configuration = worker_sampling_configuration(args, env)
+    env.update(LIBTMUX_CI_PROFILE=configuration["mode"],
+               LIBTMUX_CI_PROFILE_SYMBOLIZATION=configuration["symbolization"])
+    invocation = getattr(args, "invocation", None) or uuid.uuid4().hex
+    inventory = checked_test_inventory(metadata)
+    declarations = {name: dict(source_digest=item["source_digest"], files=item["files"])
+                    for name, item in inventory.items()}
     env.update(LIBTMUX_TEST_TMUX=args.tmux, LIBTMUX_TEST_CLI_COMPILE="normal",
-               LIBTMUX_TEST_MINIMAL_CHILD="0")
-    result = dict(schema_version=2, source_digest=metadata["source_digest"],
+               LIBTMUX_TEST_MINIMAL_CHILD="0", LIBTMUX_CI_INVOCATION=invocation,
+               LIBTMUX_CI_SOURCE_DIGEST=metadata["source_digest"],
+               LIBTMUX_CI_STAGE=str(stage),
+               LIBTMUX_CI_DIAGNOSTICS_ROOT=str(stage / "diagnostics" / invocation / batch),
+               LIBTMUX_CI_TEST_FILE_INVENTORY=json.dumps(declarations))
+    result = dict(schema_version=4, source_digest=metadata["source_digest"],
                   platform=platform.system(), machine=platform.machine(), kernel=platform.release(),
                   wsl="microsoft" in platform.release().lower(), threads=args.threads,
                   tools=metadata["tools"], status="NOT RUN", phases=[], suite=args.suite,
-                  tier=args.tier, active_phase=None)
-    suffix = "" if args.suite == "all" else f"-{args.suite}"
-    destination = stage / f"results-{args.tier}{suffix}-t{args.threads}.json"
+                  tier=args.tier, active_phase=None, active_phases=[], pending_phases=[],
+                  planned_phases=[], probes=[], loops={}, completion_status="INCOMPLETE",
+                  invocation=invocation, coverage_complete=False, test_inventory_complete=False,
+                  test_inventory_status="PARTIAL_CHILD_ADMISSION_UNAVAILABLE", test_process_birth_ids=[],
+                  test_inventory_limits=["child admission is unproved", "commands outside native runners have process receipts only"],
+                  test_file_inventory=declarations, sampling_configuration=configuration)
+    destination = result_path(stage, args, worker=getattr(args, "worker", False))
 
     def save():
+        result["test_process_birth_ids"] = [identity for item in result["phases"]
+                                            for identity in item.get("test_process_birth_ids", [])]
         temporary = destination.with_suffix(".tmp")
         temporary.write_text(json.dumps(result, indent=2) + "\n")
         temporary.replace(destination)
@@ -424,11 +1612,31 @@ def run(args):
     save()
     for key, argv in (("julia", [args.julia, "--startup-file=no", "--version"]),
                       ("tmux", [args.tmux, "-V"])):
+        if remaining(deadline) == 0:
+            result.update(status="FAIL", reason="hard deadline expired before version probe admission")
+            break
         resolved = shutil.which(argv[0])
         if resolved is None:
             result["reason"] = f"{key} executable is unavailable"
             break
-        result[key] = subprocess.check_output(argv, env=env, text=True).strip()
+        result["active_phase"] = f"{key}-version"
+        save()
+        try:
+            probe = version_probe(result["active_phase"], argv, env=env,
+                log=stage / "logs" / f"{key}-version-{getattr(args, 'worker_phase', None) or 'direct'}.log",
+                deadline=deadline)
+            result["probes"].append(probe)
+            if probe["status"] != "PASS":
+                result.update(status="FAIL", reason=f"{key} version probe did not finish successfully")
+                break
+            result[key] = probe["version"]
+        except BaseException as error:
+            result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
+                          error_type=type(error).__name__)
+            raise
+        finally:
+            result["active_phase"] = None
+            save()
     else:
         expected = ((args.expected_julia, result["julia"].removeprefix("julia version "), "Julia"),
                     (args.expected_tmux, result["tmux"].removeprefix("tmux "), "tmux"),
@@ -439,37 +1647,595 @@ def run(args):
             result["reason"] = f"observed {mismatch} differs from the requested cell"
         else:
             commands = selected_commands(args, stage, metadata)
-            result.update(status="RUNNING", planned_phases=[item[0] for item in commands])
+            scope_args = argparse.Namespace(**(vars(args) | dict(worker=False)))
+            result.update(status="RUNNING", planned_phases=[item[0] for item in commands],
+                          required_phases=[item[0] for item in selected_commands(scope_args, stage, metadata)],
+                          expected_profile_requests={item[0]: phase_profile_request(item[0], inventory, configuration)
+                                                     for item in commands})
+            loop_started = command_started
+            active_loop = None
             try:
+                if getattr(args, "worker_phase", None) == "mid":
+                    active_loop = "mid"
+                    parallel_mid(commands, stage=stage, env=env, result=result, save=save, deadline=deadline)
+                    commands = []
+                elif getattr(args, "worker_phase", None) == "outer":
+                    active_loop = "outer"
+                    parallel_outer(commands, stage=stage, env=env, result=result, save=save, deadline=deadline)
+                    commands = []
                 for name, argv, budget, tier in commands:
+                    loop = "outer" if tier == "outer" else "mid"
+                    if active_loop is not None and loop != active_loop:
+                        result["loops"][active_loop] = loop_result(
+                            active_loop, time.monotonic() - loop_started, args)
+                        loop_started = command_started if loop == "outer" else time.monotonic()
+                    active_loop = loop
                     result["active_phase"] = name
                     save()
-                    item = phase(name, argv, cwd=ROOT, env=env, log=stage / "logs" / f"{name}.log", budget=budget)
+                    item = phase(name, argv, cwd=ROOT, env=env, log=stage / "logs" / f"{name}.log",
+                                 budget=HARD_LIMITS[loop], soft_budget=budget, deadline=deadline)
                     result["phases"].append(item)
                     result["active_phase"] = None
                     save()
-                    print(f"{item['status']} {name} {item['seconds']:.3f}s", flush=True)
+                    diagnostic_module("ci_streams").write_console(
+                        f"{item['status']} {name} {item['seconds']:.3f}s\n".encode())
                 result["status"] = "PASS" if result["phases"] and all(p["status"] == "PASS" for p in result["phases"]) else "FAIL"
                 if metadata["source_digest"] != source_digest():
                     result.update(status="STALE", reason="source changed during checks")
+                if active_loop is not None:
+                    result["loops"][active_loop] = loop_result(
+                        active_loop, time.monotonic() - loop_started, args)
+                if result["status"] == "PASS" and any(
+                        loop["status"] == "FAIL" for loop in result["loops"].values()):
+                    result.update(status="FAIL", reason="aggregate whole-command loop budget exceeded")
+                if result.get("cleanup_status") == "UNRETIRED":
+                    result.update(status="FAIL", reason="owned escalation timer did not retire")
             except BaseException as error:
                 result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
                               error_type=type(error).__name__)
                 raise
             finally:
+                result["completion_status"] = "COMPLETE" if phases_finished(
+                    result, result["planned_phases"]) else "INCOMPLETE"
                 save()
     save()
-    print(f"{result['status']} matrix result: {destination}")
+    diagnostic_module("ci_streams").write_console(
+        f"{result['status']} matrix result: {destination}\n".encode())
     return 0 if result["status"] == "PASS" else 1
+
+
+def loop_result(name, seconds, args):
+    complete = args.suite == "all" and (
+        args.tier in ("all", "mid", "outer") if name == "mid" else args.tier in ("all", "outer"))
+    return dict(seconds=seconds, budget_seconds=LOOP_BUDGETS[name], complete=complete,
+                status="PASS" if seconds < LOOP_BUDGETS[name] else "FAIL")
+
+
+def finish_matrix_console(args, code):
+    """Record bounded console retirement once, at the whole worker's CLI boundary."""
+    started = time.monotonic()
+    delivery = diagnostic_module("ci_streams").finish_console(started + CLEANUP_SECONDS)
+    elapsed = time.monotonic() - started
+    destination = result_path(Path(args.stage).resolve(), args, worker=args.worker)
+    if destination.is_file() and not destination.is_symlink():
+        result = json.loads(destination.read_text())
+        result.update(console_delivery=delivery, console_finalization_seconds=elapsed)
+        if code != 0 and result.get("status") == "PASS":
+            result.update(status="FAIL", reason="matrix command failed before console retirement")
+        if delivery["status"] != "PASS" and result.get("status") == "PASS":
+            result.update(status="FAIL", reason="console delivery did not retire successfully")
+        for name, loop in result.get("loops", {}).items():
+            if isinstance(loop, dict) and loop.get("seconds") is not None:
+                loop["seconds"] += elapsed
+                if loop["seconds"] >= LOOP_BUDGETS[name]:
+                    loop["status"] = "FAIL"
+                    if result.get("status") == "PASS":
+                        result.update(status="FAIL", reason="aggregate whole-command loop budget exceeded")
+        temporary = destination.with_suffix(".tmp")
+        temporary.write_text(json.dumps(result, indent=2) + "\n")
+        temporary.replace(destination)
+        if result.get("status") != "PASS":
+            code = 1
+    return code if delivery["status"] == "PASS" else 1
+
+
+def receipt_issues(details):
+    """Critical progress fields must be explicit before admitting more work."""
+    statuses = {"PASS", "FAIL", "NOT RUN", "RUNNING", "STALE", "INTERRUPTED",
+                "TIMEOUT", "CANCELLED", "UNRETIRED"}
+    issues = []
+    if not isinstance(details.get("status"), str) or details["status"] not in statuses:
+        issues.append("status")
+    if "active_phase" not in details or not (
+            details["active_phase"] is None or isinstance(details["active_phase"], str)):
+        issues.append("active_phase")
+    for field in ("active_phases", "pending_phases", "planned_phases"):
+        values = details.get(field)
+        if not isinstance(values, list) or any(not isinstance(value, str) or not value for value in values):
+            issues.append(field)
+        elif len(values) != len(set(values)):
+            issues.append(field)
+    phases = details.get("phases")
+    if not isinstance(phases, list) or any(not isinstance(item, dict)
+            or not isinstance(item.get("name"), str) or not item["name"]
+            or not isinstance(item.get("status"), str) or item["status"] not in statuses for item in phases):
+        issues.append("phases")
+    if isinstance(phases, list) and any(isinstance(item, dict) and (
+            not isinstance(item.get("test_process_birth_ids", []), list)
+            or any(not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", identity)
+                   for identity in item.get("test_process_birth_ids", []))) for item in phases):
+        issues.append("phase_process_inventory")
+    if details.get("schema_version") == 4:
+        if any(type(details.get(field)) is not bool for field in ("coverage_complete", "test_inventory_complete")):
+            issues.append("coverage_fields")
+        if not isinstance(details.get("test_process_birth_ids"), list) or any(
+                not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", identity)
+                for identity in details.get("test_process_birth_ids", [])):
+            issues.append("test_process_birth_ids")
+    return issues
+
+
+def phases_finished(details, expected):
+    """Every selected command finalized; assertion coverage is recorded separately."""
+    if details.get("receipt_status") == "INVALID" or receipt_issues(details):
+        return False
+    phases = details.get("phases", [])
+    names = [item.get("name") for item in phases]
+    return (details.get("status") in ("PASS", "FAIL")
+            and details.get("cleanup_status") != "UNRETIRED"
+            and details.get("active_phase") is None
+            and not details.get("active_phases") and not details.get("pending_phases")
+            and details.get("planned_phases") == expected
+            and len(names) == len(set(names)) == len(expected)
+            and set(names) == set(expected)
+            and all(item.get("status") in ("PASS", "FAIL")
+                    and item.get("started") is True and item.get("direct_child_reaped") is True
+                    and item.get("cleanup_status") != "UNRETIRED" for item in phases))
+
+
+def worker_receipt(path, invocation, digest):
+    """Read only this invocation's source-bound receipt."""
+    try:
+        details = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(details, dict) or details.get("invocation") != invocation or details.get("source_digest") != digest:
+        return {}
+    issues = receipt_issues(details)
+    if issues:
+        # Preserve named source-bound failures, but never use malformed progress to admit work.
+        phases = details.get("phases", [])
+        details["phases"] = [item for item in phases if isinstance(item, dict)
+                            and isinstance(item.get("name"), str) and item["name"]] \
+            if isinstance(phases, list) else []
+        details.update(status="FAIL", receipt_status="INVALID", receipt_errors=issues)
+        if "phase_process_inventory" in issues:
+            for item in details["phases"]:
+                identities = item.get("test_process_birth_ids", [])
+                item["test_process_birth_ids"] = [identity for identity in identities
+                    if isinstance(identity, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", identity)] \
+                    if isinstance(identities, list) else []
+        if "active_phase" in issues:
+            details["active_phase"] = None
+        for field in ("active_phases", "pending_phases", "planned_phases"):
+            if field in issues:
+                details.pop(field, None)
+    return details
 
 
 def selected_commands(args, stage, metadata):
     return [item for item in command_plan(args, stage, metadata)
-            if (args.tier == "all" or item[3] == args.tier)
+            if (args.tier in ("all", "outer") or item[3] == args.tier
+                or args.tier == "mid" and item[3] in ("unit", "quality"))
+            and (not getattr(args, "worker", False)
+                 or (item[3] == "outer") == (args.worker_phase == "outer"))
             and (args.suite == "all" or (item[0] in DELIVERY_PHASES) == (args.suite == "delivery"))]
 
 
+def cancelled_receipts(result, details):
+    """Keep source-bound names without guessing an unfinished worker's starts."""
+    retained = {item["name"] for item in result["phases"]}
+    planned = set(details.get("planned_phases", []))
+    for name in result["required_phases"]:
+        if name in retained:
+            continue
+        unstarted = name not in planned
+        result["phases"].append(dict(name=name,
+                                    status="NOT RUN" if unstarted else "CANCELLED",
+                                    started=False if unstarted else None,
+                                    seconds=0.0 if unstarted else None,
+                                    reason="complete loop stopped before final phase receipt"))
+
+
+def run(args):
+    """Measure complete workers through exit, including their final receipts."""
+    started = time.monotonic()
+    stage = checked_stage(args.stage)
+    metadata = json.loads((stage / "prepared.json").read_text())
+    if metadata["source_digest"] != source_digest():
+        raise ValueError("source changed since preparation; prepare again before checks")
+    plan = selected_commands(args, stage, metadata)
+    invocation = uuid.uuid4().hex
+    batches = ("mid", "outer") if args.tier in ("all", "outer") else ("mid",)
+    inventory = checked_test_inventory(metadata)
+    configuration = worker_sampling_configuration(args, os.environ)
+    expected_requests = {item[0]: phase_profile_request(item[0], inventory, configuration) for item in plan}
+    result = dict(schema_version=4, status="RUNNING", phases=[], loops={},
+                  tier=args.tier, suite=args.suite, threads=args.threads,
+                  invocation=invocation, workers=[], active_phase=None,
+                  source_digest=metadata["source_digest"],
+                  sampling_configuration=configuration, expected_profile_requests=expected_requests,
+                  sampling_request_status="NOT_REQUESTED" if configuration["mode"] == "off" else "UNVERIFIED",
+                  soft_limits=LOOP_BUDGETS, hard_limits=HARD_LIMITS, cleanup_seconds=CLEANUP_SECONDS,
+                  diagnostic_finalization_seconds=DIAGNOSTIC_FINALIZATION_SECONDS,
+                  worker_retirement_seconds=WORKER_RETIREMENT_SECONDS,
+                  coverage_complete=False, test_inventory_complete=False,
+                  test_inventory_status="PARTIAL_CHILD_ADMISSION_UNAVAILABLE", test_process_birth_ids=[],
+                  test_inventory_limits=["child admission is unproved", "commands outside native runners have process receipts only"],
+                  test_file_inventory={name: item for name, item in inventory.items()
+                                       if name in {command[0] for command in plan}},
+                  required_phases=[item[0] for item in plan],
+                  timing_boundary="worker launch through exit; outer includes supervisor orchestration")
+    destination = result_path(stage, args)
+    def save():
+        result["test_process_birth_ids"] = [identity for item in result["phases"]
+                                            for identity in item.get("test_process_birth_ids", [])]
+        temporary = destination.with_suffix(".tmp")
+        temporary.write_text(json.dumps(result, indent=2) + "\n")
+        temporary.replace(destination)
+    save()
+    for batch in batches:
+        deadline = started + HARD_LIMITS[batch]
+        cancellation = dict(planned_phases=[item[0] for item in plan
+                                           if (item[3] == "outer") == (batch == "outer")])
+        details = {}
+        if remaining(deadline) == 0:
+            result.update(status="FAIL", reason=f"hard deadline expired before {batch} admission")
+            for pending in batches[batches.index(batch):]:
+                result["loops"][pending] = dict(status="NOT RUN", complete=False, seconds=None,
+                    budget_seconds=LOOP_BUDGETS[pending], reason="hard deadline expired before admission")
+            cancellation["planned_phases"] = []
+            break
+        argv = [sys.executable, str(Path(__file__).resolve()), "run", str(stage),
+                "--julia", args.julia, "--tmux", args.tmux, "--threads", str(args.threads),
+                "--tier", args.tier, "--suite", args.suite, "--worker",
+                "--worker-phase", batch, "--invocation", invocation, "--deadline", repr(deadline),
+                "--worker-sampler-mode", configuration["mode"],
+                "--worker-sampler-symbolization", configuration["symbolization"]]
+        for name in ("julia", "tmux", "os", "arch"):
+            value = getattr(args, f"expected_{name}")
+            if value is not None:
+                argv.extend((f"--expected-{name}", value))
+        budget = remaining(deadline)
+        soft_budget = max(0.0, started + LOOP_BUDGETS[batch] - time.monotonic())
+        worker_args = argparse.Namespace(**(vars(args) | dict(worker=True, worker_phase=batch)))
+        receipt = result_path(stage, worker_args, worker=True)
+        worker_env = os.environ.copy()
+        for key in DIAGNOSTIC_BINDINGS:
+            worker_env.pop(key, None)
+        worker_env.update(LIBTMUX_CI_INVOCATION=invocation, LIBTMUX_CI_SOURCE_DIGEST=metadata["source_digest"])
+        try:
+            worker = phase(batch, argv, cwd=ROOT, env=worker_env,
+                           log=stage / "logs" / f"whole-{batch}-t{args.threads}.log",
+                           budget=budget, soft_budget=soft_budget, deadline=deadline,
+                           cleanup_seconds=WORKER_RETIREMENT_SECONDS,
+                           interrupt_grace=WORKER_RETIREMENT_SECONDS,
+                           live_phases=tuple(name for name in cancellation["planned_phases"]
+                                             if name in metadata.get("test_file_inventory", {})
+                                             or name in PROFILE_CONSUMER_PHASES))
+        except BaseException as error:
+            result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
+                          active_phase=batch, error_type=type(error).__name__,
+                          supervisor_seconds=time.monotonic() - started)
+            details = worker_receipt(receipt, invocation, metadata["source_digest"])
+            if details:
+                result["phases"].extend(details["phases"])
+                result["active_phase"] = details["active_phase"] or batch
+                cancelled_receipts(result, cancellation | details)
+            else:
+                cancelled_receipts(result, cancellation)
+            save()
+            raise
+        result["workers"].append(worker)
+        details = worker_receipt(receipt, invocation, metadata["source_digest"])
+        if details:
+            if configuration["mode"] != "off":
+                errors = []
+                if details.get("sampling_configuration") != configuration:
+                    errors.append("worker_sampling_configuration")
+                observed_requests = {item["name"]: item.get("profile_request") for item in details["phases"]}
+                for name in cancellation["planned_phases"]:
+                    if observed_requests.get(name) != expected_requests[name]:
+                        errors.append("phase_profile_request:" + name)
+                if errors:
+                    details["status"] = "FAIL"
+                    worker.update(status="FAIL", sampling_request_status="FAIL", sampling_request_errors=errors)
+                    result["sampling_request_status"] = "FAIL"
+                else:
+                    worker["sampling_request_status"] = "PASS"
+            result["phases"].extend(details["phases"])
+            result["active_phase"] = details["active_phase"]
+            for name in ("source_digest", "platform", "machine", "kernel", "wsl", "tools", "julia", "tmux"):
+                if name in details:
+                    result[name] = details[name]
+        else:
+            worker.update(status="FAIL", reason="worker did not retain a receipt for this invocation")
+        seconds = time.monotonic() - started
+        result["loops"][batch] = loop_result(batch, seconds, args)
+        complete = (worker["status"] in ("PASS", "FAIL")
+                    and worker.get("direct_child_reaped") is True
+                    and worker.get("cleanup_status") != "UNRETIRED"
+                    and phases_finished(details, cancellation["planned_phases"]))
+        result["loops"][batch]["complete"] &= complete
+        if worker["status"] != "PASS" or details.get("status") != "PASS" or any(
+                item.get("status") != "PASS" for item in details.get("phases", [])):
+            result["loops"][batch]["status"] = "FAIL"
+        if not complete:
+            result.update(status="FAIL", reason=f"complete {batch} worker failed or exceeded its budget")
+            for later in batches[batches.index(batch) + 1:]:
+                result["loops"][later] = dict(status="NOT RUN", complete=False,
+                    seconds=None, budget_seconds=LOOP_BUDGETS[later])
+            break
+        save()
+    else:
+        result["status"] = "PASS" if all(loop["status"] == "PASS" for loop in result["loops"].values()) \
+            and all(worker["status"] == "PASS" for worker in result["workers"]) else "FAIL"
+        if configuration["mode"] != "off" and result["sampling_request_status"] != "FAIL":
+            result["sampling_request_status"] = "PASS" if all(
+                worker.get("sampling_request_status") == "PASS" for worker in result["workers"]) else "UNVERIFIED"
+    if result["status"] != "PASS":
+        cancelled_receipts(result, cancellation | details
+                           if details else cancellation)
+    result["supervisor_seconds"] = time.monotonic() - started
+    save()
+    diagnostic_module("ci_streams").write_console(
+        f"{result['status']} supervised matrix result: {destination}\n".encode())
+    return 0 if result["status"] == "PASS" else 1
+
+
+def self_test_profile_transport(evidence_directory=None):
+    """Exercise the real supervisor and worker boundary without installed products."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from contextlib import nullcontext
+    retained = nullcontext(str(evidence_directory)) if evidence_directory is not None else \
+        tempfile.TemporaryDirectory(prefix="libtmux-profile-transport-")
+    with retained as directory:
+        base = Path(directory)
+        base.mkdir(parents=True, exist_ok=evidence_directory is None)
+        (base / ".libtmux-julia-matrix").touch()
+        (base / "LocalPreferences.toml").write_text(TOOL_PREFERENCES)
+        source = "test/runtests.jl"
+        metadata = dict(source_digest=source_digest(), project=str(base), tools={},
+            tool_preferences=tomllib.loads(TOOL_PREFERENCES), test_file_inventory={
+                "core-normal": dict(source_digest=source_digest(), files=[dict(path=source,
+                    sha256=hashlib.sha256((ROOT / source).read_bytes()).hexdigest())])})
+        (base / "prepared.json").write_text(json.dumps(metadata))
+        observed = base / "native-environment.json"
+        command = [sys.executable, "-c",
+            "import json,os,pathlib;pathlib.Path(" + repr(str(observed)) + ").write_text(json.dumps({"
+            "'mode':os.environ['LIBTMUX_CI_PROFILE'],"
+            "'symbolization':os.environ['LIBTMUX_CI_PROFILE_SYMBOLIZATION']}))"]
+        consumer_command = [sys.executable, "-c", """import json,os
+pid=os.getpid()
+record=dict(schema=2,event='process_start',invocation=os.environ['LIBTMUX_CI_INVOCATION'],
+    source_digest=os.environ['LIBTMUX_CI_SOURCE_DIGEST'],ci_phase=os.environ['LIBTMUX_CI_PHASE'],
+    pid=pid,thread=1,seq=1,elapsed_ns=1,
+    process_birth_id=os.environ['LIBTMUX_CI_PROCESS_TOKEN']+'-'+str(pid))
+print('LIBTMUX_TEST_PROGRESS '+json.dumps(record),flush=True)
+"""]
+        plan = [("core-normal", command, 1, "outer"),
+                ("imports", consumer_command, 1, "outer")]
+        helper = base / "worker.py"
+        helper.write_text("""import importlib.util,json,os,pathlib,sys
+spec=importlib.util.spec_from_file_location('transport_worker',sys.argv.pop(1))
+module=importlib.util.module_from_spec(spec)
+sys.modules[spec.name]=module
+spec.loader.exec_module(module)
+base=pathlib.Path(sys.argv[2])
+(base/'worker-environment.json').write_text(json.dumps({'mode':os.environ['LIBTMUX_CI_PROFILE']}))
+plan=json.loads((base/'transport-plan.json').read_text())
+module.command_plan=lambda *args: plan
+module.version_probe=lambda *args,**kwargs:dict(status='PASS',version='version')
+sys.argv[0]=str(pathlib.Path(module.__file__))
+raise SystemExit(module.main())
+""")
+        (base / "transport-plan.json").write_text(json.dumps(plan))
+        args = SimpleNamespace(stage=str(base), julia=sys.executable, tmux=sys.executable,
+            threads=1, tier="outer", suite="all", worker=False,
+            expected_julia=None, expected_tmux=None, expected_os=None, expected_arch=None)
+        real_phase = phase
+        def worker_phase(name, argv, **kwargs):
+            return real_phase(name, [argv[0], str(helper), argv[1], *argv[2:]], **kwargs)
+        with patch.dict(os.environ, {"LIBTMUX_CI_PROFILE": "cpu", "LIBTMUX_CI_PROFILE_SYMBOLIZATION": "deferred"}), \
+             patch(__name__ + ".command_plan", return_value=plan), \
+             patch(__name__ + ".phase", side_effect=worker_phase):
+            assert run(args) == 1, "synthetic native process must fail its absent requested profile capture"
+        assert json.loads((base / "worker-environment.json").read_text())["mode"] == "off"
+        assert json.loads(observed.read_text()) == dict(mode="cpu", symbolization="deferred"), \
+            "supervisor discarded the sampling request before native admission"
+        report = json.loads(result_path(base, args).read_text())
+        native = next(item for item in report["phases"] if item["name"] == "core-normal")
+        assert native["profile_request"] == dict(mode="cpu", symbolization="deferred", require_direct_native=True)
+        assert native["profile_request_status"] == "FAIL" and native["exit_code"] == 0
+        assert native["semantic_status"] == "PASS" and native["status"] == "FAIL"
+        assert all(item["profile_request"]["mode"] == "off" for item in report["workers"])
+        worker = next(item for item in report["workers"] if item["name"] == "outer")
+        assert worker["output_observer"]["rejected_records"] == 0, \
+            "supervisor rejected bound consumer progress forwarded by its worker"
+        assert worker["output_observer"]["forwarded_records"] == 1
+        consumer = next(item for item in report["phases"] if item["name"] == "imports")
+        assert consumer["test_inventory_status"] == "UNAVAILABLE_NATIVE_INVENTORY"
+        assert consumer["coverage_complete"] is False
+
+
+def self_test_profile_request_guard():
+    """A completed worker cannot silently discard a required sampling request."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory(prefix="libtmux-profile-request-") as directory:
+        base = Path(directory)
+        (base / ".libtmux-julia-matrix").touch()
+        source = "test/runtests.jl"
+        metadata = dict(source_digest=source_digest(), test_file_inventory={
+            "core-normal": dict(source_digest=source_digest(), files=[dict(path=source,
+                sha256=hashlib.sha256((ROOT / source).read_bytes()).hexdigest())])})
+        (base / "prepared.json").write_text(json.dumps(metadata))
+        args = SimpleNamespace(stage=str(base), julia=sys.executable, tmux=sys.executable,
+            threads=1, tier="outer", suite="runtime", worker=False,
+            expected_julia=None, expected_tmux=None, expected_os=None, expected_arch=None)
+        def contrary_worker(name, argv, **kwargs):
+            expected = [] if name == "mid" else ["core-normal"]
+            worker_args = SimpleNamespace(**(vars(args) | dict(worker_phase=name)))
+            result_path(base, worker_args, worker=True).write_text(json.dumps(dict(
+                invocation=argv[argv.index("--invocation") + 1], source_digest=metadata["source_digest"],
+                status="PASS", sampling_configuration=dict(mode="cpu", symbolization="deferred"),
+                phases=[dict(name=case, status="PASS", seconds=0.01, started=True, direct_child_reaped=True,
+                    profile_request=dict(mode="off", symbolization="deferred", require_direct_native=False),
+                    profile_request_status="NOT_REQUESTED") for case in expected],
+                active_phase=None, active_phases=[], pending_phases=[], planned_phases=expected)))
+            return dict(name=name, status="PASS", seconds=0.01, direct_child_reaped=True)
+        with patch.dict(os.environ, {"LIBTMUX_CI_PROFILE": "cpu", "LIBTMUX_CI_PROFILE_SYMBOLIZATION": "deferred"}), \
+             patch(__name__ + ".command_plan", return_value=[("core-normal", [], 1, "outer")]), \
+             patch(__name__ + ".phase", side_effect=contrary_worker):
+            assert run(args) == 1, "contrary worker receipt hid the required CPU request"
+        report = json.loads(result_path(base, args).read_text())
+        assert report["sampling_request_status"] == "FAIL"
+        assert report["workers"][-1]["sampling_request_errors"] == ["phase_profile_request:core-normal"]
+        assert report["phases"][0]["status"] == "PASS", "original phase verdict was overwritten"
+        for supplied in (dict(worker=False, worker_sampler_mode="cpu", worker_sampler_symbolization="deferred"),
+                         dict(worker=True, worker_sampler_mode="cpu", worker_sampler_symbolization=None),
+                         dict(worker=True, worker_sampler_mode="invalid", worker_sampler_symbolization="deferred")):
+            try:
+                worker_sampling_configuration(SimpleNamespace(**supplied), {})
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("invalid private worker transport was accepted")
+
+
+def self_test_cancellation_timer():
+    """Close cannot join an unstarted timer or discard owned escalation."""
+    import selectors
+    from unittest.mock import patch
+    real_timer, real_signal = threading.Timer, signal_group
+    receipts = []
+    for mode in ("stalled-start", "failed-start", "failed-after-start"):
+        group = PhaseGroup()
+        child = subprocess.Popen([sys.executable, "-c",
+            "import signal,sys,threading;signal.signal(signal.SIGINT,signal.SIG_IGN);"
+            "sys.stdout.buffer.write(b'r');sys.stdout.buffer.flush();threading.Event().wait()"],
+            stdout=subprocess.PIPE, start_new_session=True)
+        group.add(child)
+        entered, release = threading.Event(), threading.Event()
+        timers, errors, delivered = [], [], []
+        cancellation = None
+        class ControlledTimer(real_timer):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                timers.append(self)
+
+            def start(self):
+                if mode == "failed-start":
+                    raise RuntimeError("controlled timer start failure")
+                if mode == "failed-after-start":
+                    super().start()
+                    raise RuntimeError("controlled timer start failure")
+                entered.set()
+                assert release.wait(0.9), "timer-start barrier was not released"
+                super().start()
+
+        def checked_signal(process, number):
+            assert group.lock.locked() and process in group.processes
+            assert process.returncode is None, "signalling lost its reserved identity"
+            delivered.append(number)
+            real_signal(process, number)
+
+        def cancel():
+            try:
+                group.cancel()
+            except BaseException as error:
+                errors.append(error)
+
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(child.stdout, selectors.EVENT_READ)
+                assert selector.select(0.9), "owned child did not acknowledge SIGINT-ignore"
+                assert child.stdout.read(1) == b"r"
+            child.stdout.close()
+            with patch.object(threading, "Timer", ControlledTimer), \
+                 patch(__name__ + ".signal_group", side_effect=checked_signal):
+                if mode == "stalled-start":
+                    cancellation = threading.Thread(target=cancel, daemon=True)
+                    cancellation.start()
+                    assert entered.wait(0.9), "cancel did not enter timer start"
+                    try:
+                        assert group.close(time.monotonic()) is False, \
+                            "stalled timer start hid incomplete ownership-lock admission"
+                        assert group.escalation is None, "cancel published an unstarted timer"
+                    finally:
+                        release.set()
+                    cancellation.join(timeout=0.9)
+                    assert not cancellation.is_alive() and not errors, errors
+                    assert group.escalation is timers[0] and timers[0].ident is not None
+                else:
+                    cancel()
+                    assert len(errors) == 1 and str(errors[0]) == "controlled timer start failure", errors
+                    if mode == "failed-start":
+                        assert group.escalation is None, "failed timer start remained joinable"
+                    else:
+                        assert group.escalation is timers[0] and timers[0].ident is not None
+                    assert signal.SIGKILL in delivered, "timer start failure lost owned SIGKILL"
+                assert group.close(time.monotonic() + 0.9), "started timer did not retire"
+                assert signal.SIGINT in delivered and signal.SIGKILL in delivered, \
+                    "close cancelled the only remaining SIGKILL"
+                receipts.append(dict(control=mode, status="PASS", pid=child.pid,
+                    signals=list(delivered), timers_retired=all(not timer.is_alive() for timer in timers)))
+        finally:
+            release.set()
+            if cancellation is not None:
+                cancellation.join(timeout=0.9)
+                assert not cancellation.is_alive(), "cancel survived its released start barrier"
+            for timer in timers:
+                timer.cancel()
+                if timer.ident is not None:
+                    timer.join(timeout=0.9)
+                    assert not timer.is_alive(), "owned escalation timer survived cleanup"
+            group.signal(signal.SIGKILL)
+            exited, observation = threading.Event(), {}
+            def observe_exit():
+                try:
+                    observation["exit"] = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+                except BaseException as error:
+                    observation["error"] = error
+                finally:
+                    exited.set()
+            waiter = threading.Thread(target=observe_exit, daemon=True)
+            waiter.start()
+            assert exited.wait(0.9), "owned child did not exit after SIGKILL"
+            waiter.join(timeout=0.9)
+            assert "error" not in observation, observation
+            assert observation["exit"].si_pid == child.pid
+            code = group.reap(child)
+            assert code == -signal.SIGKILL
+            if not child.stdout.closed:
+                child.stdout.close()
+            assert not group.processes and not group.identities
+            if receipts and receipts[-1]["control"] == mode:
+                receipts[-1].update(exit_code=code, exit_observed_before_reap=True,
+                                    direct_child_reaped=True, owned_identities_retired=True)
+    return receipts
+
+
 def self_test(julia=None):
+    self_test_cancellation_timer()
+    self_test_profile_transport()
+    self_test_profile_request_guard()
+    diagnostic_module("ci_streams").self_test(diagnostic_module("ci_artifacts"), ROOT.resolve())
+    import unittest
+    console_tests = diagnostic_module("test_ci_streams")
+    controls = unittest.defaultTestLoader.loadTestsFromTestCase(console_tests.ConsoleControls)
+    assert unittest.TextTestRunner(verbosity=0).run(controls).wasSuccessful()
     if julia:
         script = PACKAGE_SPECIFICATIONS + r'''
 specifications = package_specifications(["Aqua=0.8.18", "JSON=1.9.0"])
@@ -549,21 +2315,387 @@ println("PASS admitted version arguments construct real Pkg specifications")
                    cwd=base, env=os.environ.copy(), log=base / "literal.log", budget=0.9)
         assert ok["status"] == "PASS" and (base / "literal.log").read_text().strip() == literal
         assert not (base / "must-not-exist").exists()
+        binary = phase("binary-output", [sys.executable, "-c",
+            "import os;os.write(1,bytes([0,127,255,10]));os.write(2,b'stderr\\n')"],
+            cwd=base, env=os.environ.copy(), log=base / "binary.log", budget=0.9)
+        assert binary["status"] == "PASS" and binary["direct_child_reaped"]
+        assert (base / "binary.log").read_bytes() == bytes((0, 127, 255, 10)) + b"stderr\n"
+        assert binary["timings"]["first_output_byte"]["status"] == "OBSERVED"
+        empty = phase("empty-output", [sys.executable, "-c", "pass"], cwd=base,
+                      env=os.environ.copy(), log=base / "empty.log", budget=0.9)
+        assert empty["status"] == "PASS" and empty["output_observer"]["eof_observed"]
+        assert empty["timings"]["first_output_byte"]["reason"] == "empty output"
+        diagnostic_env = os.environ.copy()
+        diagnostic_env.update(LIBTMUX_CI_DIAGNOSTICS_ROOT=str(base / "diagnostics"),
+                              LIBTMUX_CI_STAGE=str(base), LIBTMUX_CI_INVOCATION="control",
+                              LIBTMUX_CI_SOURCE_DIGEST="a" * 64,
+                              LIBTMUX_CI_DIAGNOSTICS_DIR="inherited-unowned-directory",
+                              LIBTMUX_CI_PROFILE="off", LIBTMUX_CI_PROFILE_SYMBOLIZATION="deferred",
+                              LIBTMUX_CI_TEST_CONTINUE="1")
+        profile_env = diagnostic_env | dict(LIBTMUX_CI_PROFILE="cpu",
+            LIBTMUX_CI_TEST_FILE_INVENTORY=json.dumps({name: dict(source_digest="a" * 64,
+                files=[dict(path="test/fixture.jl", sha256="b" * 64)])
+                for name in ("profile-normal", "profile-unit")}))
+        profile_probe = "import json,os;print(json.dumps([os.environ['LIBTMUX_CI_PROFILE'],os.environ['LIBTMUX_CI_PROFILE_SYMBOLIZATION'],os.environ.get('LIBTMUX_CI_TEST_CONTINUE')]))"
+        for name, mode, required in (("profile-normal", "cpu", True),
+                                     ("profile-unit", "off", False),
+                                     ("imports", "cpu", False),
+                                     ("profile-uninstrumented", "off", False)):
+            sampled = phase(name, [sys.executable, "-c", profile_probe], cwd=base,
+                env=profile_env, log=base / (name + ".log"), budget=0.9)
+            assert sampled["semantic_status"] == "PASS" and sampled["exit_code"] == 0
+            assert json.loads((base / (name + ".log")).read_text()) == [
+                mode, "deferred", "1" if name in ("profile-normal", "profile-unit") else None]
+            if name == "profile-unit":
+                assert sampled["status"] == sampled["diagnostics_status"] == "FAIL", "zero exit without native EOF passed"
+            assert sampled["profile_request"] == dict(mode=mode, symbolization="deferred",
+                                                       require_direct_native=required)
+            assert sampled["profile_request_status"] == ("FAIL" if required else
+                "NOT_REQUESTED" if mode == "off" else "UNVERIFIED")
+            if required:
+                assert sampled["status"] == sampled["diagnostics_status"] == "FAIL"
+                assert sampled["observed_assertion_counts"] == dict(passed=0, failed=0, errored=0, broken=0)
+        unbound_profile = phase("imports", [sys.executable, "-c", profile_probe], cwd=base,
+            env=os.environ.copy() | dict(LIBTMUX_CI_PROFILE="cpu", LIBTMUX_CI_PROFILE_SYMBOLIZATION="deferred"),
+            log=base / "unbound-profile.log", budget=0.9)
+        assert unbound_profile["status"] == "PASS"
+        assert json.loads((base / "unbound-profile.log").read_text()) == ["off", "deferred", None]
+        assert unbound_profile["profile_request"] == dict(mode="off", symbolization="deferred", require_direct_native=False)
+        from unittest.mock import patch
+        for binding, invalid in (("LIBTMUX_CI_PROFILE", "unknown"),
+                                 ("LIBTMUX_CI_PROFILE_SYMBOLIZATION", "unknown")):
+            with patch.object(subprocess, "Popen") as launch:
+                try:
+                    phase("invalid-profile", [], cwd=base, env=profile_env | {binding: invalid},
+                          log=base / "invalid-profile.log", budget=0.9)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("invalid sampler settings reached child admission")
+                launch.assert_not_called()
+        mismatched_profile_proof = DIAGNOSTIC_FINALIZER + "\nproof['profile_request']['mode']='cpu'\n(Path(directory)/'diagnostics-proof.json').write_text(json.dumps(proof))\n"
+        with patch(__name__ + ".DIAGNOSTIC_FINALIZER", mismatched_profile_proof):
+            mismatched = phase("profile-proof-mismatch", [sys.executable, "-c", "pass"],
+                cwd=base, env=diagnostic_env, log=base / "profile-proof-mismatch.log", budget=0.9)
+        assert mismatched["semantic_status"] == "PASS" and mismatched["exit_code"] == 0
+        assert mismatched["diagnostic_finalizer"]["exit_code"] == 0
+        assert mismatched["status"] == mismatched["diagnostics_status"] == "FAIL"
+        assert mismatched["diagnostic_error"] == "ValueError"
         failed = phase("failure", [sys.executable, "-c", "raise SystemExit(7)"],
-                       cwd=base, env=os.environ.copy(), log=base / "failure.log", budget=0.9)
+                       cwd=base, env=diagnostic_env, log=base / "failure.log", budget=0.9)
         assert failed["status"] == "FAIL" and failed["exit_code"] == 7
         absent = phase("missing", [str(base / "missing")], cwd=base,
                        env=os.environ.copy(), log=base / "missing.log", budget=0.9)
         assert absent["status"] == "NOT RUN"
         timed = phase("deadline", [sys.executable, "-c", "import threading; threading.Event().wait()"],
-                      cwd=base, env=os.environ.copy(), log=base / "deadline.log", budget=0.05)
+                      cwd=base, env=diagnostic_env, log=base / "deadline.log", budget=0.05)
         assert timed["status"] == "TIMEOUT" and timed["direct_child_reaped"]
+        soft = phase("soft-overrun", [sys.executable, "-c",
+            "import signal,sys,threading;signal.signal(signal.SIGINT,lambda *_:sys.exit(17));"
+            "threading.Event().wait(0.035);print('completed')"], cwd=base,
+            env=diagnostic_env, log=base / "soft.log", budget=0.4, soft_budget=0.01)
+        assert soft["status"] == "FAIL" and soft["semantic_status"] == "PASS", {
+            key: soft.get(key) for key in ("status", "semantic_status", "exit_code", "seconds", "timings")}
+        assert soft["soft_limit_exceeded"] and soft["exit_code"] == 0 and soft["direct_child_reaped"]
+        assert "completed" in (base / "soft.log").read_text().splitlines()
+        assert any(json.loads(line).get("event") == "soft-limit" for line in
+                   (base / "soft.log").read_text().splitlines() if line.startswith("{"))
+        for retained in (failed, timed, soft):
+            public = Path(retained["diagnostic_artifact_directory"])
+            report = json.loads((public / "diagnostics.json").read_text())
+            command = report["supervisor"]["phases"][0]
+            assert report["test_status"] == "FAIL" and report["coverage_status"] == "PARTIAL"
+            assert command["semantic_status"] == retained["semantic_status"]
+            assert command["exit_code"] == retained["exit_code"] and command["direct_child_reaped"]
+            assert (public / "junit.xml").is_file() and (public / "partial-progress.jsonl").is_file()
+        version = version_probe("julia-version", [sys.executable, "-c",
+            "print('julia version 1.13.0')"], env=os.environ.copy(),
+            log=base / "version.log", deadline=time.monotonic() + 0.9)
+        assert version["status"] == "PASS" and version["direct_child_reaped"]
+        assert version["version"] == "julia version 1.13.0"
+        from unittest.mock import patch
+        with patch.object(subprocess, "Popen") as launch:
+            expired = phase("expired", [], cwd=base, env={}, log=base / "expired.log",
+                            budget=1, deadline=time.monotonic() - 1)
+            launch.assert_not_called()
+        assert expired["status"] == "NOT RUN" and not expired["started"]
+        bound = phase("owned-diagnostics", [sys.executable, "-c",
+            "import os;print(os.environ['LIBTMUX_CI_DIAGNOSTICS_DIR']);print(os.environ['LIBTMUX_CI_PHASE'])"],
+            cwd=base, env=diagnostic_env, log=base / "bound.log", budget=0.9)
+        assert bound["status"] == "PASS" and bound["invocation"] == "control"
+        assert (base / "bound.log").read_text().splitlines() == [
+            str(base.resolve() / "diagnostics" / "owned-diagnostics"), "owned-diagnostics"]
+        assert bound["timings"]["first_output_byte"]["status"] == "OBSERVED"
+        assert bound["timings"]["first_output_byte"]["application_readiness"] == "UNPROVED"
+        assert bound["output_observer"]["reader_retired"] and bound["output_observer"]["eof_observed"]
+        assert bound["timings"]["reaped_seconds"] >= bound["timings"]["exit_observed_seconds"]
+        assert not bound["coverage_complete"] and not bound["test_inventory_complete"]
+        public = Path(bound["diagnostics_directory"]) / "public"
+        assert (public / "manifest.json").is_file(), "retired phases must publish sanitized evidence"
+        report = json.loads((public / "diagnostics.json").read_text())
+        assert report["export_status"] == "PASS" and report["coverage_status"] == "PARTIAL"
+        assert report["supervisor"]["phases"][0]["semantic_status"] == "PASS"
+        assert report["original_logs"][0]["input_sha256"] == bound["log_sha256"]
+        assert report["original_logs"][0]["binding_scope"] == "current_owned_log_snapshot"
+        assert str(base) not in (public / report["original_logs"][0]["file"]).read_text()
+        from types import SimpleNamespace
+        (base / ".libtmux-julia-matrix").touch()
+        artifact_args = SimpleNamespace(stage=str(base), threads=1, tier="all", suite="all")
+        receipt = result_path(base, artifact_args)
+        receipt.write_text(json.dumps(dict(schema_version=4, invocation="control", source_digest="a" * 64,
+            status="FAIL", phases=[soft], active_phase=None, required_phases=[soft["name"]],
+            coverage_complete=False, test_inventory_complete=False, test_process_birth_ids=[],
+            loops=dict(outer=dict(status="FAIL", complete=True, seconds=201.0, budget_seconds=200.0)))))
+        with patch(__name__ + ".source_digest", return_value="a" * 64):
+            assert finalize_artifacts(artifact_args) == 0
+        job_directory = base / "diagnostics" / "control" / "job"
+        job_report = json.loads((job_directory / "public" / "diagnostics.json").read_text())
+        assert job_report["check_status"] == job_report["test_status"] == "FAIL"
+        assert job_report["assertion_counts"] is None
+        assert job_report["phase_bundles"][0]["artifact_status"] == "PASS"
+        assert 'type="SoftLimit"' in (job_directory / "public" / "junit.xml").read_text()
+        retirement = json.loads((job_directory / "retirement" / "public" / "retirement.json").read_text())
+        assert retirement["artifact_status"] == "PASS" and retirement["check_status"] == "FAIL"
+        assert retirement["direct_child_reaped"] and retirement["exporter_exit_code"] == 0
+        assert str(base) not in json.dumps(retirement)
+        prefix_program = r'''
+import json, os, pathlib, sys, threading
+directory = pathlib.Path(os.environ["LIBTMUX_CI_DIAGNOSTICS_DIR"])
+birth = f"{os.environ['LIBTMUX_CI_PROCESS_TOKEN']}-{os.getpid()}"
+with (directory / f"events-{birth}.jsonl").open("w") as journal:
+    sequence = 0
+    def emit(name, **fields):
+        global sequence
+        sequence += 1
+        record = dict(schema=2, event=name, seq=sequence, pid=os.getpid(), thread=1,
+            elapsed_ns=sequence, invocation=os.environ["LIBTMUX_CI_INVOCATION"],
+            source_digest=os.environ["LIBTMUX_CI_SOURCE_DIGEST"], process_birth_id=birth, **fields)
+        journal.write(json.dumps(record) + "\n")
+        journal.flush()
+        if name in ("process_start", "assertion_problem"):
+            print("LIBTMUX_TEST_PROGRESS " + json.dumps(record | dict(ci_phase=os.environ["LIBTMUX_CI_PHASE"])), flush=True)
+    emit("process_start", phase=os.environ["LIBTMUX_CI_PHASE"], julia="1.13.0", threads=1,
+         tool_identity_scope="synthetic Python protocol control; no Julia execution claim")
+    emit("file_inventory", files=["test/fixture.jl"], scope="declared_files_only")
+    emit("span_start", kind="file", label="test/fixture.jl")
+    emit("testset_start", testset_id=1, parent_id=None, description="intentional prefix failure", file="test/fixture.jl", line=5)
+    emit("assertion_problem", testset_id=1, result_type="Fail", problem_kind="test",
+         file="test/fixture.jl", line=5, detail_status="rendered", detail="expected 1; observed 2")
+    if sys.argv[1] == "hard":
+        threading.Event().wait()
+    emit("testset_body_end", testset_id=1, body_outcome="returned")
+    emit("testset_finalize", testset_id=1, body_outcome="returned", native_finish="threw", seconds=.001,
+         counts=dict(passed=1, failed=1, errored=0, broken=0))
+    emit("span_finish", kind="file", label="test/fixture.jl", outcome="returned", seconds=.002)
+    emit("process_finish", outcome="returned", coverage_complete=True)
+'''
+        prefix_env = diagnostic_env | {"LIBTMUX_CI_TEST_FILE_INVENTORY": json.dumps({
+            name: dict(source_digest="a" * 64, files=[dict(path="test/fixture.jl", sha256="b" * 64)])
+            for name in ("prefix-failure", "prefix-hard")})}
+        for name, mode in (("prefix-failure", "complete"), ("prefix-hard", "hard")):
+            prefix = phase(name, [sys.executable, "-c", prefix_program, mode], cwd=base,
+                           env=prefix_env, log=base / (name + ".log"), budget=0.6)
+            assert prefix["status"] == ("FAIL" if mode == "complete" else "TIMEOUT")
+            assert prefix["semantic_status"] == ("PASS" if mode == "complete" else "TIMEOUT")
+            assert prefix["direct_child_reaped"] and prefix["exit_observer_retired"]
+            assert prefix["checkpoint_publication"]["publisher_retired"]
+            snapshots = prefix["checkpoint_publication"]["snapshots"]
+            assert snapshots and all(item["exporter"]["direct_child_reaped"] for item in snapshots)
+            partial_reports = [json.loads((Path(item["artifact_directory"]) / "diagnostics.json").read_text())
+                               for item in snapshots if item["artifact_directory"]]
+            assert partial_reports
+            for report in partial_reports:
+                assert report["snapshot_kind"] == "LIVE_PREFIX" and report["coverage_status"] == "PARTIAL"
+                assert report["test_status"] != "PASS"
+            if mode == "hard":
+                failure = next(report for report in partial_reports if report["test_status"] == "FAIL")
+            else:
+                failure = json.loads((Path(prefix["diagnostics_directory"]) / "public" / "diagnostics.json").read_text())
+                assert failure["test_status"] == "FAIL"
+            assert failure["processes"][0]["assertion_problems"][0]["detail"] == "expected 1; observed 2"
+        consumer_program = r'''
+import json, os, pathlib, subprocess, sys
+directory = pathlib.Path(os.environ["LIBTMUX_CI_DIAGNOSTICS_DIR"])
+birth = f"{os.environ['LIBTMUX_CI_PROCESS_TOKEN']}-{os.getpid()}"
+with (directory / f"events-{birth}.jsonl").open("w") as journal:
+    sequence = 0
+    def emit(name, **fields):
+        global sequence
+        sequence += 1
+        record = dict(schema=2, event=name, seq=sequence, pid=os.getpid(), thread=1,
+            elapsed_ns=sequence, invocation=os.environ["LIBTMUX_CI_INVOCATION"],
+            source_digest=os.environ["LIBTMUX_CI_SOURCE_DIGEST"], process_birth_id=birth, **fields)
+        journal.write(json.dumps(record) + "\n"); journal.flush()
+        if os.environ.get("LIBTMUX_CI_TEST_CONSOLE") == "1":
+            print("LIBTMUX_TEST_PROGRESS " + json.dumps(record | dict(ci_phase="imports")), flush=True)
+    emit("process_start", phase="imports", julia="1.13.1", threads=1,
+         tool_identity_scope="synthetic Python consumer transport; no sampling claim")
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    emit("child_admitted", child_pid=child.pid, child_token="control-child",
+         child_process_birth_id=f"control-child-{child.pid}", profile_injected=False)
+    child.wait()
+    emit("child_exit_observed", child_pid=child.pid, child_process_birth_id=f"control-child-{child.pid}",
+         exit_observed=True, wait_returned=True, exit_code=0, signal=0)
+    emit("process_finish", outcome="exit_nonzero", coverage_complete=False)
+raise SystemExit(7)
+'''
+        for mode in ("cpu", "off"):
+            consumer = phase("imports", [sys.executable, "-c", consumer_program], cwd=base,
+                env=diagnostic_env | dict(LIBTMUX_CI_PROFILE=mode, LIBTMUX_CI_TEST_FILE_INVENTORY="{}",
+                                         LIBTMUX_CI_DIAGNOSTICS_ROOT=str(base / ("consumer-diagnostics-" + mode))),
+                log=base / ("consumer-prefix-" + mode + ".log"), budget=0.9)
+            assert consumer["status"] == consumer["semantic_status"] == "FAIL" and consumer["exit_code"] == 7
+            assert consumer["checkpoint_publication"]["publisher_retired"] and consumer["direct_child_reaped"]
+            consumer_reports = [json.loads((Path(item["artifact_directory"]) / "diagnostics.json").read_text())
+                                for item in consumer["checkpoint_publication"]["snapshots"] if item["artifact_directory"]]
+            assert any(report["snapshot_binding"]["marker"] == "child_exit_observed" for report in consumer_reports)
+            assert all(report["test_status"] == "UNKNOWN" and report["coverage_status"] == "PARTIAL"
+                       and report["assertion_counts"] == dict(passed=0, failed=0, errored=0, broken=0)
+                       for report in consumer_reports)
+            assert consumer["expected_test_file_inventory"] is None and not consumer["test_inventory_complete"]
+        missing_directory = base / "missing-checkpoint"
+        missing_directory.mkdir()
+        missing_answer = dict(diagnostics_directory=str(missing_directory), invocation="control",
+            source_digest="a" * 64, name="missing-checkpoint", started=True, pid=os.getpid(),
+            process_token="missing-control", test_process_birth_ids=[f"missing-control-{os.getpid()}"])
+        with patch(__name__ + ".CHECKPOINT_EXPORTER", "pass"):
+            publisher = CheckpointPublisher(missing_answer, env=diagnostic_env, deadline=time.monotonic() + 0.9)
+            publisher.notify(dict(event="process_start", seq=1))
+            missing = publisher.finish(time.monotonic() + 0.9)
+        assert missing["status"] == "FAIL" and missing["publisher_retired"]
+        assert missing["snapshots"][0]["exporter"]["exit_code"] == 0
+        assert missing["snapshots"][0]["publication_status"] == "FAIL"
+        assert missing["snapshots"][0]["artifact_directory"] is None and not missing["reserved_exporters"]
+        incomplete = missing_directory / "incomplete-bundle"
+        public = incomplete / "public"
+        public.mkdir(parents=True)
+        report_raw = json.dumps(dict(invocation=publisher.invocation, source_digest=publisher.digest,
+            snapshot_kind="LIVE_PREFIX", export_status="PASS", coverage_status="PARTIAL", test_status="UNKNOWN",
+            snapshot_binding=dict(phase=publisher.name, process_birth_id=publisher.birth, pid=publisher.pid,
+                snapshot_ordinal=1, through_sequence=1, admission_sha256=publisher.admission_sha256))).encode()
+        (public / "diagnostics.json").write_bytes(report_raw)
+        (public / "manifest.json").write_text(json.dumps(dict(schema=1, invocation=publisher.invocation,
+            source_digest=publisher.digest, files={"diagnostics.json": hashlib.sha256(report_raw).hexdigest()})))
+        try:
+            publisher.validate_publication(incomplete, 1, 1)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("checkpoint accepted a bundle missing its required reports")
+        console_args = SimpleNamespace(stage=str(base), threads=1, tier="all", suite="all", worker=False)
+        console_result = result_path(base, console_args)
+        console_result.write_text(json.dumps(dict(status="PASS", loops={})))
+        with patch.object(diagnostic_module("ci_streams"), "finish_console", return_value=dict(status="PASS")):
+            assert finish_matrix_console(console_args, 1) == 1
+        assert json.loads(console_result.read_text())["status"] == "FAIL"
+        preparation_stage = base / "preparation-only"
+        with patch(__name__ + ".source_digest", return_value="a" * 64):
+            assert finalize_artifacts(SimpleNamespace(stage=str(preparation_stage), threads=1,
+                                                       tier="all", suite="all")) == 0
+        preparation_reports = list(preparation_stage.glob("diagnostics/*/job/public/diagnostics.json"))
+        assert len(preparation_reports) == 1
+        preparation = json.loads(preparation_reports[0].read_text())
+        assert preparation["check_status"] == "UNVERIFIED" and preparation["test_status"] == "UNKNOWN"
+        assert preparation["assertion_counts"] is None
+        with patch.object(subprocess, "Popen") as launch:
+            try:
+                phase("../escaped", [], cwd=base, env=diagnostic_env, log=base / "escaped.log", budget=0.9)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("diagnostic phase escaped its owned directory")
+            launch.assert_not_called()
+        decoder_root = base / "blocked-decoder"
+        helper = decoder_root / "dev" / "ci-artifacts.py"
+        helper.parent.mkdir(parents=True)
+        helper.write_text("import threading\ndef assemble_phase(*args, **kwargs):\n threading.Event().wait()\n"
+                          "def assemble_job(*args, **kwargs):\n threading.Event().wait()\n")
+        diagnostic_env["LIBTMUX_CI_TEST_FILE_INVENTORY"] = json.dumps({
+            "original-failure": dict(source_digest="a" * 64, files=[dict(path="test/fixture.jl", sha256="b" * 64)])})
+        with patch(__name__ + ".ROOT", decoder_root), \
+             patch(__name__ + ".DIAGNOSTIC_FINALIZATION_SECONDS", 0.04):
+            original = phase("original-failure", [sys.executable, "-c", "raise SystemExit(7)"],
+                cwd=base, env=diagnostic_env, log=base / "original.log", budget=0.9)
+        assert original["status"] == original["semantic_status"] == "FAIL" and original["exit_code"] == 7
+        assert original["direct_child_reaped"] and original["diagnostics_status"] == "FAIL"
+        assert original["diagnostic_finalizer"]["status"] == "TIMEOUT"
+        assert original["diagnostic_finalizer"]["direct_child_reaped"]
+        assert original["seconds"] < 0.5
+        blocked_stage = checked_stage(base / "blocked-job-artifact", create=True)
+        blocked_args = SimpleNamespace(stage=str(blocked_stage), threads=1, tier="all", suite="all")
+        blocked_receipt = result_path(blocked_stage, blocked_args)
+        blocked_receipt.write_text(json.dumps(dict(schema_version=4, invocation="blocked", source_digest="a" * 64,
+            status="FAIL", phases=[], active_phase=None, required_phases=[],
+            coverage_complete=False, test_inventory_complete=False, test_process_birth_ids=[])))
+        original_receipt = blocked_receipt.read_bytes()
+        with patch(__name__ + ".ROOT", decoder_root), \
+             patch(__name__ + ".source_digest", return_value="a" * 64), \
+             patch(__name__ + ".DIAGNOSTIC_FINALIZATION_SECONDS", 0.04):
+            assert finalize_artifacts(blocked_args) == 1
+        assert blocked_receipt.read_bytes() == original_receipt
+        retirement = json.loads((blocked_stage / "diagnostics/blocked/job/retirement/public/retirement.json").read_text())
+        assert retirement["artifact_status"] == "FAIL" and retirement["check_status"] == "FAIL"
+        assert retirement["exporter_status"] == "TIMEOUT" and retirement["direct_child_reaped"]
+        assert retirement["seconds"] < 0.5
+        missing_bundle_proof = json.dumps(dict(invocation="blocked", source_digest="a" * 64,
+            artifact_export_status="PASS", check_status="FAIL"))
+        for ordinal, invalid in enumerate(("[]", "{", missing_bundle_proof)):
+            malformed_stage = checked_stage(base / f"malformed-job-proof-{ordinal}", create=True)
+            malformed_args = SimpleNamespace(stage=str(malformed_stage), threads=1, tier="all", suite="all")
+            malformed_receipt = result_path(malformed_stage, malformed_args)
+            malformed_receipt.write_bytes(original_receipt)
+            bad_exporter = ("from pathlib import Path\nimport sys\n"
+                f"(Path(sys.argv[4]) / 'job-artifact-proof.json').write_text({invalid!r})\n")
+            with patch(__name__ + ".source_digest", return_value="a" * 64), \
+                 patch(__name__ + ".JOB_ARTIFACT_FINALIZER", bad_exporter):
+                assert finalize_artifacts(malformed_args) == 1
+            assert malformed_receipt.read_bytes() == original_receipt
+            retirement = json.loads((malformed_stage / "diagnostics/blocked/job/retirement/public/retirement.json").read_text())
+            assert retirement["artifact_status"] == "FAIL" and retirement["check_status"] == "FAIL"
+            assert retirement["exporter_proof_status"] == "INVALID"
+            assert retirement["exporter_exit_code"] == 0 and retirement["direct_child_reaped"]
+        release_observer, exit_seen = threading.Event(), threading.Event()
+        original_waitid = os.waitid
+        ownership = PhaseGroup()
+        owned = []
+        original_add = ownership.add
+        def remember(child):
+            original_add(child)
+            owned.append(child)
+        def stalled_waitid(kind, pid, flags):
+            if not flags & os.WNOHANG:
+                release_observer.wait()
+            observed = original_waitid(kind, pid, flags)
+            if not flags & os.WNOHANG:
+                exit_seen.set()
+            return observed
+        try:
+            with patch.object(ownership, "add", side_effect=remember), \
+                 patch.object(os, "waitid", side_effect=stalled_waitid), \
+                 patch(__name__ + ".CLEANUP_SECONDS", 0.08):
+                stalled = phase("stalled-observer", [sys.executable, "-c",
+                    "import signal,threading;signal.signal(signal.SIGINT,signal.SIG_IGN);"
+                    "threading.Event().wait()"], cwd=base, env=os.environ.copy(),
+                    log=base / "stalled.log", budget=0.03, group=ownership)
+            assert stalled["status"] == "UNRETIRED" and not stalled["direct_child_reaped"]
+            assert stalled["seconds"] < 0.5 and stalled["owned_identity_reserved"]
+            assert stalled["pid"] == owned[0].pid == stalled["process_group"]
+            assert stalled["owned_identity"]["pid"] == owned[0].pid
+            assert owned[0] in ownership.processes
+        finally:
+            release_observer.set()
+            assert exit_seen.wait(0.9), "control did not observe its owned child exit"
+            ownership.reap(owned[0], retire_group=True)
+            ownership.close()
+        assert not ownership.processes
         cells = qa_cells()
         assert [
             (cell["os"], cell["arch"], cell["julia"], cell["tmux"], cell["threads"])
             for cell in cells
         ] == [
             ("Linux", "x86_64", "1.10.0", "3.3a", 1),
+            ("Linux", "x86_64", "1.10.0", "3.3a", 4),
+            ("Linux", "x86_64", "1.13.1", "3.7c", 1),
             ("Linux", "x86_64", "1.13.1", "3.7c", 4),
             ("Linux", "x86_64", "1.13.1", "3.8", 1),
             ("Darwin", "arm64", "1.13.1", "3.7c", 1),
@@ -607,10 +2739,251 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert not {cell["tmux"] for cell in rejected} & {cell["tmux"] for cell in cells}
         assert all(cell["tmux"] != MINIMUM_TMUX for cell in rejected)
         assert len({cell["label"] for cell in rejected}) == len(rejected)
+        assert all(cell["optional"] == (cell["os"] != "Linux") for cell in cells)
         from types import SimpleNamespace
-        from unittest.mock import patch
         from contextlib import redirect_stdout
         from io import StringIO
+        assert ctypes.sizeof(_DarwinBSDInfo) == 136
+        assert (_DarwinBSDInfo.pid.offset, _DarwinBSDInfo.group.offset,
+                _DarwinBSDInfo.start_seconds.offset, _DarwinBSDInfo.start_microseconds.offset) == (12, 100, 120, 128)
+        zombie = dict(pid=4321, parent=os.getpid(), group=4321,
+                      start=(123, 456), state=5)
+        class OwnedChild:
+            pid = 4321
+            returncode = None
+            def wait(self):
+                self.returncode = 7
+                return 7
+        for members in ((4321,), (4321, 4322)):
+            child = OwnedChild()
+            def zombie_info(pid):
+                return dict(zombie, pid=pid, start=(123, pid))
+            with patch.object(sys, "platform", "darwin"), \
+                 patch(__name__ + "._darwin_process_info", side_effect=zombie_info), \
+                 patch(__name__ + "._darwin_group_pids", return_value=members), \
+                 patch.object(os, "waitid", return_value=SimpleNamespace(si_pid=4321)), \
+                 patch.object(os, "killpg", side_effect=PermissionError(errno.EPERM, "denied")):
+                zombies = PhaseGroup()
+                zombies.add(child)
+                assert zombies.reap(child, retire_group=True) == 7
+                assert child.returncode == 7 and not zombies.processes and not zombies.identities
+        for case in ("live-leader", "live-member", "unknown-member", "unknown-group",
+                     "changed-start", "changed-member-start", "changed-inventory",
+                     "unobserved", "reaped", "other-os", "other-error"):
+            child = OwnedChild()
+            member_reads = 0
+            def member_info(pid):
+                nonlocal member_reads
+                if pid == 4321:
+                    return zombie
+                if case == "unknown-member":
+                    raise ProcessLookupError(errno.ESRCH, "member disappeared")
+                if case == "changed-member-start":
+                    member_reads += 1
+                    return dict(zombie, pid=pid, parent=4321, start=(123, member_reads))
+                return dict(zombie, pid=pid, parent=4321, state=1)
+            members = (4321, 4322) if case in ("live-member", "unknown-member", "changed-member-start") else (4321,)
+            error = PermissionError(errno.EACCES if case == "other-error" else errno.EPERM, "denied")
+            with patch.object(sys, "platform", "linux" if case == "other-os" else "darwin"), \
+                 patch(__name__ + "._darwin_process_info", side_effect=member_info), \
+                 patch(__name__ + "._darwin_group_pids", return_value=members) as inventory, \
+                 patch.object(os, "waitid", return_value=None if case == "unobserved"
+                              else SimpleNamespace(si_pid=4321)), \
+                 patch.object(os, "killpg", side_effect=error):
+                zombies = PhaseGroup()
+                zombies.add(child)
+                if case == "live-leader":
+                    zombie["state"] = 1
+                elif case == "changed-start":
+                    zombie["start"] = (123, 457)
+                elif case == "unknown-group":
+                    inventory.side_effect = OSError(errno.EIO, "inventory truncated")
+                elif case == "changed-inventory":
+                    inventory.side_effect = [members, (4321, 4322)]
+                elif case == "reaped":
+                    child.returncode = 7
+                try:
+                    zombies.signal(signal.SIGKILL)
+                except PermissionError as observed:
+                    assert observed is error
+                else:
+                    raise AssertionError("Darwin retirement accepted " + case)
+                finally:
+                    zombie.update(state=5, start=(123, 456))
+        with patch.object(os, "waitid", None), patch.object(subprocess, "Popen") as spawn:
+            try:
+                phase("unsupported", [], cwd=base, env={}, log=base / "unsupported.log", budget=0.9)
+            except RuntimeError as error:
+                assert "Python 3.13+ on macOS" in str(error)
+            else:
+                raise AssertionError("missing WNOWAIT support was accepted")
+            spawn.assert_not_called()
+        barrier = threading.Barrier(4)
+        counter_lock = threading.Lock()
+        counters = dict(active=0, peak=0)
+        def concurrent_phase(name, argv, **kwargs):
+            with counter_lock:
+                counters["active"] += 1
+                counters["peak"] = max(counters["peak"], counters["active"])
+            try:
+                if int(name[1:]) < 4:
+                    barrier.wait(0.9)
+                return dict(name=name, status="FAIL" if name == "p7" else "PASS", seconds=0.01)
+            finally:
+                with counter_lock:
+                    counters["active"] -= 1
+        parallel_result = dict(phases=[])
+        with patch(__name__ + ".phase", side_effect=concurrent_phase), \
+             redirect_stdout(StringIO()):
+            parallel_mid([(f"p{i}", [], 10, "unit") for i in range(9)], stage=base,
+                         env={}, result=parallel_result, save=lambda: None)
+        assert counters == dict(active=0, peak=4)
+        assert {item["name"] for item in parallel_result["phases"]} == {f"p{i}" for i in range(9)}
+        assert [item["name"] for item in parallel_result["phases"] if item["status"] == "FAIL"] == ["p7"]
+        assert not parallel_result["active_phases"] and not parallel_result["pending_phases"]
+        launchers_started = threading.Event()
+        def installed_phase(name, argv, **kwargs):
+            if name == "external-examples":
+                assert launchers_started.wait(0.2), "independent launcher blocked behind examples"
+            elif name == "external-launchers":
+                launchers_started.set()
+            return dict(name=name, status="PASS", seconds=0.0)
+        installed_result = dict(phases=[])
+        installed_names = ("imports", "external-examples", "external-launchers")
+        with patch(__name__ + ".phase", side_effect=installed_phase), \
+             redirect_stdout(StringIO()):
+            parallel_outer([(name, [], LOOP_BUDGETS["outer"], "outer") for name in installed_names],
+                           stage=base, env={}, result=installed_result, save=lambda: None)
+        assert {item["name"] for item in installed_result["phases"]} == set(installed_names)
+        assert all(item["status"] == "PASS" for item in installed_result["phases"])
+        assert not installed_result["active_phases"] and not installed_result["pending_phases"]
+        def interrupted_phase(name, argv, **kwargs):
+            if name == "second":
+                raise KeyboardInterrupt()
+            return dict(name=name, status="FAIL", seconds=0.01)
+        interrupted_result = dict(phases=[])
+        with patch(__name__ + ".phase", side_effect=interrupted_phase), \
+             redirect_stdout(StringIO()):
+            try:
+                parallel_mid([("first", [], 10, "unit"), ("second", [], 10, "unit")],
+                             stage=base, env={}, result=interrupted_result, save=lambda: None)
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("parallel interruption was swallowed")
+        assert {item["name"] for item in interrupted_result["phases"]} == {"first", "second"}
+        assert all(item["status"] == "FAIL" for item in interrupted_result["phases"])
+        assert next(item for item in interrupted_result["phases"]
+                    if item["name"] == "second")["error_type"] == "KeyboardInterrupt"
+        release = threading.Event()
+        started = threading.Barrier(5)
+        class InterruptedPool(ThreadPoolExecutor):
+            def shutdown(self, wait=True, *, cancel_futures=False):
+                super().shutdown(wait=False, cancel_futures=cancel_futures)
+                release.set()
+                if wait:
+                    super().shutdown(wait=True, cancel_futures=cancel_futures)
+        def held_phase(name, argv, **kwargs):
+            started.wait(0.9)
+            assert release.wait(0.9)
+            return dict(name=name, status="CANCELLED", started=True, seconds=0.01)
+        def interrupt_pending(futures):
+            started.wait(0.9)
+            raise KeyboardInterrupt()
+        queued_result = dict(phases=[])
+        with patch(__name__ + ".ThreadPoolExecutor", InterruptedPool), \
+             patch(__name__ + ".phase", side_effect=held_phase), \
+             patch(__name__ + ".as_completed", side_effect=interrupt_pending):
+            try:
+                parallel_mid([(f"q{i}", [], 10, "unit") for i in range(9)], stage=base,
+                             env={}, result=queued_result, save=lambda: None)
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("queued interruption was swallowed")
+        assert {item["name"] for item in queued_result["phases"]} == {f"q{i}" for i in range(9)}
+        assert all(item["status"] == "CANCELLED" for item in queued_result["phases"])
+        assert sum(not item["started"] for item in queued_result["phases"]) == 5
+        assert not queued_result["active_phases"] and not queued_result["pending_phases"]
+        # Exit observation reserves the leader PID; signals and final reap share a lock.
+        reserved = subprocess.Popen([sys.executable, "-c", "raise SystemExit(7)"],
+                                    start_new_session=True)
+        ownership = PhaseGroup()
+        ownership.add(reserved)
+        observed = os.waitid(os.P_PID, reserved.pid, os.WEXITED | os.WNOWAIT)
+        assert observed.si_pid == reserved.pid and reserved.returncode is None
+        assert os.waitid(os.P_PID, reserved.pid, os.WEXITED | os.WNOWAIT).si_pid == reserved.pid
+        deliveries = []
+        def guarded_signal(child, number):
+            assert ownership.lock.locked() and child in ownership.processes
+            assert child.returncode is None
+            deliveries.append((child.pid, number))
+        original_wait = reserved.wait
+        def guarded_reap():
+            assert ownership.lock.locked() and reserved in ownership.processes
+            return original_wait()
+        with patch(__name__ + ".signal_group", side_effect=guarded_signal), \
+             patch.object(reserved, "wait", side_effect=guarded_reap):
+            ownership.signal(signal.SIGINT)
+            with ownership.lock:
+                ownership.cancelled = True
+            assert ownership.reap(reserved) == 7
+            ownership.signal(signal.SIGKILL)
+        assert deliveries == [(reserved.pid, signal.SIGINT), (reserved.pid, signal.SIGKILL)]
+        assert not ownership.processes
+        group = PhaseGroup()
+        registered = threading.Event()
+        original_add = group.add
+        def register_child(process):
+            original_add(process)
+            registered.set()
+        with patch.object(group, "add", side_effect=register_child):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(phase, "cancelled", [
+                    sys.executable, "-c", "import threading; threading.Event().wait()"],
+                    cwd=base, env=os.environ.copy(), log=base / "cancelled.log",
+                    budget=0.9, group=group)
+                assert registered.wait(0.9)
+                group.cancel()
+                cancelled = future.result(timeout=0.9)
+        group.close()
+        assert cancelled["status"] == "CANCELLED" and cancelled["direct_child_reaped"]
+        assert not group.processes
+        # A leader may exit on SIGINT while its same-group child ignores it.
+        leaf = ("import signal,socket,sys;signal.signal(signal.SIGINT,signal.SIG_IGN);"
+                "connection=socket.socket(socket.AF_UNIX);connection.connect(sys.argv[1]);"
+                "connection.sendall(b'r');connection.recv(1)")
+        leader = ("import os,sys,threading\n"
+                  "program,address=sys.argv[1:]\n"
+                  "if os.fork()==0:\n"
+                  " sys.argv=['-c',address]\n"
+                  " exec(program)\n"
+                  " os._exit(0)\n"
+                  "threading.Event().wait()\n")
+        for mode in ("timeout", "cancel"):
+            descendants = PhaseGroup()
+            address = str(base / ("descendant-" + mode))
+            with socket.socket(socket.AF_UNIX) as listener:
+                listener.bind(address)
+                listener.listen(1)
+                listener.settimeout(0.9)
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(phase, mode, [sys.executable, "-c", leader, leaf, address],
+                        cwd=base, env=os.environ.copy(), log=base / (mode + ".log"),
+                        budget=0.2 if mode == "timeout" else 0.9, group=descendants)
+                    connection, _ = listener.accept()
+                    # Closing this owned connection releases a leaf left alive by a regression.
+                    with connection:
+                        connection.settimeout(0.9)
+                        assert connection.recv(1) == b"r"
+                        if mode == "cancel":
+                            descendants.cancel()
+                        retired = future.result(timeout=0.9)
+                        assert retired["status"] == ("TIMEOUT" if mode == "timeout" else "CANCELLED")
+                        assert retired["direct_child_reaped"]
+                        assert connection.recv(1) == b"", "same-group descendant survived retirement"
+            descendants.close()
+            assert not descendants.processes
         args = SimpleNamespace(stage=str(base), julia="julia", tmux="tmux", threads=1,
                                tier="all", suite="all", expected_julia=None,
                                expected_tmux=None, expected_os=None, expected_arch=None)
@@ -620,11 +2993,14 @@ println("PASS admitted version arguments construct real Pkg specifications")
         budgets = {
             name: budget for name, _, budget, _ in selected_commands(args, base, metadata)
         }
-        assert budgets["format"] == 45
-        assert format_warmup_command(args, base) == [
-            "julia", "--startup-file=no", "--threads=1", f"--project={base}",
-            str(ROOT / "dev/check-quality.jl"), "format",
-        ]
+        assert budgets["format"] == 10
+        warmup = format_warmup_command(args, base)
+        assert warmup[:5] == ["julia", "--startup-file=no", "--threads=1", f"--project={base}", "-e"]
+        assert "using LibTmuxCheckCompiler" in warmup[5]
+        assert "source_files" not in warmup[5] and "check-quality" not in warmup[5]
+        compiler_source = (ROOT / "dev/LibTmuxCheckCompiler/src/LibTmuxCheckCompiler.jl").read_text()
+        assert "compiler_probe" in compiler_source and "@compile_workload" in compiler_source
+        assert "read(" not in compiler_source and "source_files" not in compiler_source
         partitions = []
         for suite in SUITES:
             args.suite = suite
@@ -633,19 +3009,76 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert set(partitions) == set(all_names)
         assert DELIVERY_PHASES <= set(all_names)
         args.suite = "all"
+        assert loop_result("mid", 10, args)["status"] == "FAIL"
+        assert loop_result("mid", 9.9, args)["status"] == "PASS"
+        assert loop_result("outer", 200, args)["status"] == "FAIL"
+        assert loop_result("outer", 199.9, args)["status"] == "PASS"
+        args.tier = "unit"
+        assert not loop_result("mid", 1, args)["complete"]
+        args.tier = "mid"
+        assert loop_result("mid", 1, args)["complete"]
+        assert {item[3] for item in selected_commands(args, base, metadata)} == {"unit", "quality"}
+        args.tier = "outer"
+        assert {item[0] for item in selected_commands(args, base, metadata)} == set(all_names)
+        assert loop_result("mid", 1, args)["complete"]
+        args.tier = "all"
         (base / ".libtmux-julia-matrix").touch()
         (base / "LocalPreferences.toml").write_text(TOOL_PREFERENCES)
         (base / "prepared.json").write_text(json.dumps(metadata))
+        fingerprint_root = base / "fingerprint-source"
+        fingerprints = [fingerprint_root / name for name in (
+            "CHANGELOG.md", "CONTRIBUTING.md", "WRITING.md", "AGENTS.md", "dev/quality-checks.jl",
+            "dev/generate-options.jl", "dev/LibTmuxCheckCompiler/src/LibTmuxCheckCompiler.jl",
+            "dev/LibTmuxCoreCheckCompiler/Project.toml",
+            "dev/LibTmuxCoreCheckCompiler/src/LibTmuxCoreCheckCompiler.jl",
+            "dev/LibTmuxWorkspaceCheckCompiler/Project.toml",
+            "dev/LibTmuxWorkspaceCheckCompiler/src/LibTmuxWorkspaceCheckCompiler.jl",
+            "dev/LibTmuxQualityCheckCompiler/Project.toml",
+            "dev/LibTmuxQualityCheckCompiler/src/LibTmuxQualityCheckCompiler.jl")]
+        for path in fingerprints:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("original")
+        with patch(__name__ + ".ROOT", fingerprint_root):
+            fingerprint = source_digest()
+            (base / "prepared.json").write_text(json.dumps(metadata | dict(source_digest=fingerprint)))
+            for path in fingerprints:
+                path.write_text("changed")
+                with patch(__name__ + ".phase") as launch, \
+                     patch.object(subprocess, "check_output", side_effect=AssertionError(
+                         "stale source reached executable probe")) as probe:
+                    try:
+                        run_checks(args)
+                    except ValueError as error:
+                        assert "source changed since preparation" in str(error)
+                    else:
+                        raise AssertionError("changed policy or compiler source was accepted")
+                    launch.assert_not_called()
+                    probe.assert_not_called()
+                path.write_text("original")
+                assert source_digest() == fingerprint
+        (base / "prepared.json").write_text(json.dumps(metadata))
+        expired_args = SimpleNamespace(**(vars(args) | dict(
+            worker=True, worker_phase="mid", invocation="expired-worker", deadline=time.monotonic() - 1)))
+        with patch(__name__ + ".source_digest", return_value="fixed"), \
+             patch(__name__ + ".version_probe") as probe, \
+             patch(__name__ + ".phase") as launch, \
+             redirect_stdout(StringIO()):
+            assert run_checks(expired_args) == 1
+            probe.assert_not_called()
+            launch.assert_not_called()
+        retained = json.loads(result_path(base, expired_args, worker=True).read_text())
+        assert retained["status"] == "FAIL" and retained["completion_status"] == "INCOMPLETE"
+        assert not retained["probes"] and not retained["phases"]
         plan = [("first", [], 30, "unit"), ("second", [], 30, "unit")]
         with patch(__name__ + ".source_digest", return_value="fixed"), \
              patch.object(shutil, "which", return_value="binary"), \
-             patch.object(subprocess, "check_output", return_value="version"), \
+             patch(__name__ + ".version_probe", return_value=dict(status="PASS", version="version")), \
              patch(__name__ + ".command_plan", return_value=plan), \
              patch(__name__ + ".phase", side_effect=[
                  dict(name="first", status="FAIL", seconds=0.01), KeyboardInterrupt()]), \
              redirect_stdout(StringIO()):
             try:
-                run(args)
+                run_checks(args)
             except KeyboardInterrupt:
                 pass
             else:
@@ -653,6 +3086,197 @@ println("PASS admitted version arguments construct real Pkg specifications")
         retained = json.loads((base / "results-all-t1.json").read_text())
         assert retained["status"] == "INTERRUPTED" and retained["active_phase"] == "second"
         assert retained["phases"][0]["status"] == "FAIL"
+        clock = [0.0]
+        def slow_check(name, argv, **kwargs):
+            clock[0] = 12.0
+            return dict(name=name, status="PASS", seconds=0.01)
+        with patch(__name__ + ".source_digest", return_value="fixed"), \
+             patch.object(shutil, "which", return_value="binary"), \
+             patch(__name__ + ".version_probe", return_value=dict(status="PASS", version="version")), \
+             patch(__name__ + ".command_plan", return_value=plan[:1]), \
+             patch(__name__ + ".phase", side_effect=slow_check), \
+             patch.object(time, "monotonic", side_effect=lambda: clock[0]), \
+             redirect_stdout(StringIO()):
+            assert run_checks(args) == 1
+        retained = json.loads((base / "results-all-t1.json").read_text())
+        assert retained["phases"][0]["status"] == "PASS"
+        assert retained["loops"]["mid"]["complete"]
+        assert retained["loops"]["mid"]["status"] == "FAIL"
+        assert retained["status"] == "FAIL"
+        metadata = metadata | dict(source_digest=source_digest())
+        (base / "prepared.json").write_text(json.dumps(metadata))
+        args.tier = "mid"
+        def complete_worker(name, argv, **kwargs):
+            invocation = argv[argv.index("--invocation") + 1]
+            worker_args = SimpleNamespace(**(vars(args) | dict(worker_phase=name)))
+            expected = [item[0] for item in selected_commands(args, base, metadata)
+                        if (item[3] == "outer") == (name == "outer")]
+            result_path(base, worker_args, worker=True).write_text(json.dumps(dict(
+                invocation=invocation, source_digest=metadata["source_digest"], status="PASS",
+                phases=[dict(name=case, status="PASS", seconds=0.01, started=True,
+                             direct_child_reaped=True) for case in expected],
+                active_phase=None, active_phases=[], pending_phases=[], planned_phases=expected,
+            )))
+            return dict(name=name, status="PASS", seconds=12, direct_child_reaped=True)
+        clock = [0.0]
+        def aged_complete_worker(*call_args, **kwargs):
+            answer = complete_worker(*call_args, **kwargs)
+            clock[0] = 12.0
+            return answer
+        with patch(__name__ + ".phase", side_effect=aged_complete_worker), \
+             patch.object(time, "monotonic", side_effect=lambda: clock[0]), \
+             redirect_stdout(StringIO()):
+            assert run(args) == 1
+        retained = json.loads(result_path(base, args).read_text())
+        assert retained["phases"][0]["status"] == "PASS"
+        assert retained["loops"]["mid"]["seconds"] == 12
+        assert retained["loops"]["mid"]["status"] == "FAIL"
+        assert retained["status"] == "FAIL"
+        with patch(__name__ + ".phase", return_value=dict(name="mid", status="PASS", seconds=0.01)), \
+             redirect_stdout(StringIO()):
+            assert run(args) == 1
+        retained = json.loads(result_path(base, args).read_text())
+        assert retained["workers"][0]["reason"] == "worker did not retain a receipt for this invocation"
+        # A completed failing worker must not hide the remaining outer checks.
+        continuation_args = SimpleNamespace(**(vars(args) | dict(tier="all")))
+        continuation_plan = [("mid-case", [], 10, "unit"), ("outer-case", [], LOOP_BUDGETS["outer"], "outer")]
+        admitted = []
+        def completed_failure(name, argv, **kwargs):
+            admitted.append(name)
+            invocation = argv[argv.index("--invocation") + 1]
+            case = "mid-case" if name == "mid" else "outer-case"
+            status = "FAIL" if name == "mid" else "PASS"
+            worker_args = SimpleNamespace(**(vars(continuation_args) | dict(worker_phase=name)))
+            result_path(base, worker_args, worker=True).write_text(json.dumps(dict(
+                invocation=invocation, source_digest=metadata["source_digest"], status=status,
+                phases=[dict(name=case, status=status, seconds=0.01, started=True,
+                             direct_child_reaped=True)],
+                active_phase=None, active_phases=[], pending_phases=[], planned_phases=[case],
+            )))
+            return dict(name=name, status=status, seconds=0.01, direct_child_reaped=True)
+        with patch(__name__ + ".command_plan", return_value=continuation_plan), \
+             patch(__name__ + ".phase", side_effect=completed_failure), \
+             redirect_stdout(StringIO()):
+            assert run(continuation_args) == 1
+        retained = json.loads(result_path(base, continuation_args).read_text())
+        assert admitted == ["mid", "outer"], "completed mid failure suppressed outer checks"
+        assert retained["loops"]["mid"]["complete"]
+        assert retained["loops"]["outer"]["complete"] and retained["status"] == "FAIL"
+        admitted.clear()
+        def contradictory_worker(*call_args, **kwargs):
+            answer = completed_failure(*call_args, **kwargs)
+            answer["status"] = "PASS"
+            return answer
+        with patch(__name__ + ".command_plan", return_value=continuation_plan), \
+             patch(__name__ + ".phase", side_effect=contradictory_worker), \
+             redirect_stdout(StringIO()):
+            assert run(continuation_args) == 1
+        retained = json.loads(result_path(base, continuation_args).read_text())
+        assert admitted == ["mid", "outer"] and retained["loops"]["mid"]["complete"]
+        assert retained["status"] == "FAIL" and retained["phases"][0]["status"] == "FAIL"
+        for invalid in ("stale", "stale-source", "incomplete", "unretired", "malformed",
+                        "missing-active", "malformed-active", "missing-pending", "malformed-plan", "malformed-births"):
+            admitted.clear()
+            def stopped_worker(name, argv, **kwargs):
+                answer = completed_failure(name, argv, **kwargs)
+                worker_args = SimpleNamespace(**(vars(continuation_args) | dict(worker_phase=name)))
+                receipt = result_path(base, worker_args, worker=True)
+                details = json.loads(receipt.read_text())
+                if invalid == "stale":
+                    details["invocation"] = "older-invocation"
+                elif invalid == "stale-source":
+                    details["source_digest"] = "other-source"
+                elif invalid == "incomplete":
+                    details.update(active_phase="mid-case", phases=[])
+                elif invalid == "unretired":
+                    answer["cleanup_status"] = "UNRETIRED"
+                elif invalid == "missing-active":
+                    details.pop("active_phase")
+                elif invalid == "malformed-active":
+                    details["active_phase"] = []
+                elif invalid == "missing-pending":
+                    details.pop("pending_phases")
+                elif invalid == "malformed-plan":
+                    details["planned_phases"] = [dict(name="mid-case")]
+                elif invalid == "malformed-births":
+                    details["phases"][0]["test_process_birth_ids"] = 7
+                receipt.write_text("{" if invalid == "malformed" else json.dumps(details))
+                return answer
+            with patch(__name__ + ".command_plan", return_value=continuation_plan), \
+                 patch(__name__ + ".phase", side_effect=stopped_worker), \
+                 redirect_stdout(StringIO()):
+                assert run(continuation_args) == 1
+            retained = json.loads(result_path(base, continuation_args).read_text())
+            assert admitted == ["mid"] and not retained["loops"]["mid"]["complete"], invalid
+            assert retained["loops"]["outer"]["status"] == "NOT RUN" and retained["status"] == "FAIL"
+            if invalid in ("missing-active", "malformed-active", "missing-pending", "malformed-plan", "malformed-births"):
+                assert retained["phases"][0]["status"] == "FAIL", "known source-bound failure was lost"
+        admitted.clear()
+        clock = [0.0]
+        def delayed_supervisor(*call_args, **kwargs):
+            answer = completed_failure(*call_args, **kwargs)
+            clock[0] = HARD_LIMITS["outer"] + 1.0
+            return answer
+        with patch(__name__ + ".command_plan", return_value=continuation_plan), \
+             patch(__name__ + ".phase", side_effect=delayed_supervisor), \
+             patch.object(time, "monotonic", side_effect=lambda: clock[0]), \
+             redirect_stdout(StringIO()):
+            assert run(continuation_args) == 1
+        retained = json.loads(result_path(base, continuation_args).read_text())
+        assert admitted == ["mid"] and retained["loops"]["outer"]["status"] == "NOT RUN"
+        assert retained["phases"][-1]["status"] == "NOT RUN" and not retained["phases"][-1]["started"]
+        for runner in (parallel_mid, parallel_outer):
+            expired_result = dict(phases=[])
+            with patch(__name__ + ".phase") as launch:
+                runner(continuation_plan, stage=base, env={}, result=expired_result,
+                       save=lambda: None, deadline=time.monotonic() - 1)
+                launch.assert_not_called()
+            assert len(expired_result["phases"]) == 2
+            assert all(item["status"] == "NOT RUN" and not item["started"] for item in expired_result["phases"])
+        def interrupted_worker(name, argv, **kwargs):
+            complete_worker(name, argv, **kwargs)
+            worker_args = SimpleNamespace(**(vars(args) | dict(worker_phase=name)))
+            receipt = result_path(base, worker_args, worker=True)
+            details = json.loads(receipt.read_text())
+            details["phases"] = details["phases"][:1]
+            details["phases"][0]["status"] = "FAIL"
+            details["active_phase"] = "second"
+            details["active_phases"] = ["second"]
+            details["required_phases"] = details["planned_phases"] = [
+                "first", "second", *[f"pending-{index}" for index in range(19)]]
+            details["pending_phases"] = details["planned_phases"][2:]
+            receipt.write_text(json.dumps(details))
+            raise KeyboardInterrupt()
+        interrupted_plan = [(name, [], 30, "unit") for name in (
+            "first", "second", *[f"pending-{index}" for index in range(19)])]
+        with patch(__name__ + ".phase", side_effect=interrupted_worker), \
+             patch(__name__ + ".command_plan", return_value=interrupted_plan), \
+             redirect_stdout(StringIO()):
+            try:
+                run(args)
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("supervisor interruption was swallowed")
+        retained = json.loads(result_path(base, args).read_text())
+        assert retained["status"] == "INTERRUPTED" and retained["active_phase"] == "second"
+        assert retained["phases"][0]["status"] == "FAIL"
+        assert len(retained["phases"]) == 21
+        assert retained["phases"][1]["started"] is None
+        assert all(item["status"] == "CANCELLED" and item["started"] is None
+                   for item in retained["phases"][2:])
+        with patch(__name__ + ".phase", side_effect=KeyboardInterrupt()), \
+             redirect_stdout(StringIO()):
+            try:
+                run(args)
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise AssertionError("missing-receipt interruption was swallowed")
+        retained = json.loads(result_path(base, args).read_text())
+        assert {item["name"] for item in retained["phases"]} == {
+            item[0] for item in selected_commands(args, base, metadata)}
+        assert all(item["started"] is None for item in retained["phases"])
     print("PASS owned preparation, phase retirement, suite coverage and interrupted result retention")
 
 
@@ -665,6 +3289,11 @@ def main():
                         help="emit the unsupported releases whose refusal is asserted")
     self_check = sub.add_parser("self-test")
     self_check.add_argument("--julia", help="also check real Pkg argument conversion offline")
+    artifacts = sub.add_parser("finalize-artifacts", help="publish sanitized evidence after work or preparation stops")
+    artifacts.add_argument("stage")
+    artifacts.add_argument("--threads", type=int, choices=(1, 4), default=1)
+    artifacts.add_argument("--tier", choices=("unit", "quality", "mid", "outer", "all"), default="all")
+    artifacts.add_argument("--suite", choices=("all", *SUITES), default="all")
     build = sub.add_parser("build-tmux", help="setup only: download, verify and build one pinned release")
     build.add_argument("stage")
     build.add_argument("version", choices=tuple(TMUX_SHA256))
@@ -677,12 +3306,22 @@ def main():
     execution.add_argument("--julia", default="julia")
     execution.add_argument("--tmux", default="tmux")
     execution.add_argument("--threads", type=int, choices=(1, 4), default=1)
-    execution.add_argument("--tier", choices=("unit", "quality", "outer", "all"), default="all")
+    execution.add_argument("--tier", choices=("unit", "quality", "mid", "outer", "all"), default="all")
     execution.add_argument("--suite", choices=("all", *SUITES), default="all")
+    execution.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    execution.add_argument("--worker-phase", choices=("mid", "outer"), help=argparse.SUPPRESS)
+    execution.add_argument("--invocation", help=argparse.SUPPRESS)
+    execution.add_argument("--deadline", type=float, help=argparse.SUPPRESS)
+    execution.add_argument("--worker-sampler-mode", choices=("off", "cpu", "wall"), help=argparse.SUPPRESS)
+    execution.add_argument("--worker-sampler-symbolization", choices=("native", "deferred"), help=argparse.SUPPRESS)
     for option in ("julia", "tmux", "os", "arch"):
         execution.add_argument(f"--expected-{option}")
     args = parser.parse_args()
     try:
+        if args.command == "run":
+            worker_sampling_configuration(args, os.environ)
+        if getattr(args, "deadline", None) is not None and (not math.isfinite(args.deadline) or args.deadline <= 0):
+            raise ValueError("worker deadline must be finite and positive")
         if args.command == "matrix" and args.rejection:
             print(json.dumps({"include": rejection_cells()}))
         elif args.command == "matrix":
@@ -697,8 +3336,18 @@ def main():
             build_tmux(args)
         elif args.command == "prepare":
             prepare(args)
+        elif args.command == "finalize-artifacts":
+            return finalize_artifacts(args)
         else:
-            return run(args)
+            try:
+                code = run_checks(args) if args.worker else run(args)
+            except BaseException:
+                try:
+                    finish_matrix_console(args, 1)
+                except BaseException as error:
+                    sys.stderr.write(f"FAIL console retirement: {type(error).__name__}\n")
+                raise
+            return finish_matrix_console(args, code)
     except (ValueError, FileNotFoundError, subprocess.CalledProcessError) as error:
         print(f"NOT RUN: {error}", file=sys.stderr)
         return 2

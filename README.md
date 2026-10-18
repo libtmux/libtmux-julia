@@ -23,8 +23,8 @@ and other Julia collection functions.
 [API reference](https://libtmux.org/en/julia/latest/reference/) ·
 [Field reference](docs/generated/criteria.md)
 
-The core uses only Julia standard libraries. Add a companion for MCP or
-workspace configuration:
+The core uses only Julia standard libraries. Add an experimental companion
+for MCP or workspace configuration:
 
 | Package | Use it for |
 | --- | --- |
@@ -34,13 +34,13 @@ workspace configuration:
 
 ## Install
 
-`v0.1.0-alpha.1` is an unregistered source release. From your Julia project's
-directory, add the core from its public Git tag:
+The package is unregistered. From your Julia project's directory, add the
+core from this tested public source revision:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); Pkg.add(Pkg.PackageSpec(url="https://github.com/libtmux/libtmux-julia.git", rev="v0.1.0-alpha.1"))'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="029c58b8a45e6d7abe87e83557b8b93980def42f"; Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
 Have `tmux` on your `PATH`. Julia 1.10+ and tmux 3.3a+ are the compatibility
@@ -50,8 +50,8 @@ have any effect; see
 during alpha development. Pkg records the requested revision and package tree
 in your project's `Manifest.toml`.
 
-Install the MCP or workspace companion with the matching core specification:
-[installation guide](docs/src/installation.md). The alpha is not in General.
+Install the MCP or workspace companion with the matching core revision:
+[installation guide](docs/src/installation.md). The packages are not in General.
 
 Open Julia in that project to run the examples below:
 
@@ -170,18 +170,21 @@ Each program creates and cleans up its own tmux server:
 | Query shared windows and their panes | [shared_windows.jl](examples/shared_windows.jl) |
 | Cancel a waiting control operation | [control_cancel.jl](examples/control_cancel.jl) |
 | Send text and subscribe to pane output | [output_stream.jl](examples/output_stream.jl) |
+| Read an authored command's completion marker and exit status | [command_completion.jl](examples/command_completion.jl) |
 
 To run the programs, clone the source:
 
 ```console
 $ git clone \
-    --branch v0.1.0-alpha.1 \
-    --depth 1 \
     https://github.com/libtmux/libtmux-julia.git
 ```
 
 ```console
 $ cd libtmux-julia
+```
+
+```console
+$ git checkout 029c58b8a45e6d7abe87e83557b8b93980def42f
 ```
 
 ```console
@@ -199,7 +202,7 @@ loads a configuration and checks its layout, focus and cleanup.
 
 This repository holds three Julia packages. Each heading links to the
 package's directory on GitHub. None is in the General registry yet, so no
-registry page exists; [Install](#install) uses the Git tag.
+registry page exists; [Install](#install) uses a public source revision.
 
 ### [LibTmux](https://github.com/libtmux/libtmux-julia/tree/master/src): the core library
 
@@ -315,9 +318,9 @@ The [MCP README](packages/LibTmuxMCP) covers other clients and every tool.
 
 ## Status and development
 
-The CI cells in [Compatibility](docs/src/compatibility.md) passed the
-complete package suite. Benchmark baselines and an independent guide walkthrough
-remain open. Check the
+[Compatibility](docs/src/compatibility.md) separates baseline correctness from
+current development gates. Complete loop budgets, final installed workflows,
+benchmark limits and independent adoption review remain open. Check the
 [capability manifest](docs/capabilities.toml) and
 [CI results](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
 for current evidence. WSL is a Linux host; native Windows tmux is outside scope.

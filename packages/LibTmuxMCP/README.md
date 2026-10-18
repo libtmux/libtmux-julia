@@ -18,21 +18,24 @@ and full compatibility support are pending.
 
 </div>
 
-[Install](#install-v010-alpha1) · [Connect a client](#connect-a-client) ·
+[Install](#install-from-source) · [Connect a client](#connect-a-client) ·
 [Tools](#targets-and-effects) · [Library use](#library-use) ·
 [API reference](https://libtmux.org/en/julia/latest/mcp/reference/) ·
 [Tool pages](https://libtmux.org/en/julia/latest/mcp/tools/) ·
 [Guide](https://libtmux.org/en/julia/latest/mcp/source-guide/)
 
-## Install v0.1.0-alpha.1
+This companion is experimental. Cold Julia compilation can consume short
+request deadlines; complete compatibility and timing checks remain open.
+
+## Install from source
 
 From a consumer project directory, add the core and MCP package from the same
-public Git tag:
+public source revision:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxMCP")])'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="029c58b8a45e6d7abe87e83557b8b93980def42f"; Pkg.add([Pkg.PackageSpec(url=repo, rev=revision), Pkg.PackageSpec(url=repo, rev=revision, subdir="packages/LibTmuxMCP")])'
 ```
 
 Install a launcher bound to that environment with
@@ -156,10 +159,17 @@ The default catalog contains [`list_panes`][tool_list_panes],
 - Repeat `--tool` to replace the default catalog.
 - The same policy applies to every item in
   [`run_operations`][tool_run_operations] before any item executes.
-- The server needs tmux 3.3a or newer. A tool called against an older or
-  unreadable tmux fails with code `unsupported_tmux` and `effects: none`. The
-  message says to upgrade tmux and restart the server, or pin the previous
-  libtmux release.
+- The server needs tmux 3.3a or newer. An initial version check against an
+  older tmux fails with code `unsupported_tmux` and `effects: none`. An
+  unreadable version also refuses the call before admitting operations. The
+  unsupported release error explains how to upgrade tmux and restart the
+  server, or pin the previous libtmux release.
+
+Narrow discovery with a generation-bound session/window `scope`, native inert
+`where` criteria, or explicit scalar `columns`. Continue `nextPageToken` only
+while the query and discovered facets remain unchanged; `observation_changed`
+requires a fresh listing. See [pane discovery](docs/discovery.md) for schemas,
+coverage, pagination, cancellation, and stale-target recovery.
 
 | Tool | Effect |
 | --- | --- |
@@ -176,6 +186,19 @@ The default catalog contains [`list_panes`][tool_list_panes],
 | [`teardown_session`][tool_teardown_session] | Destroy only a session created by this application |
 
 Each tool name links to its page with the full input and output contract.
+
+Every tool can invoke configured tmux hooks or aliases. Waits also attach and
+detach control clients, which can trigger hooks and unattached-session policies.
+The catalog therefore advertises `readOnlyHint: false`, `destructiveHint: true`
+and `idempotentHint: false`, including for listing and capture.
+
+`error.effects: none` means the call failed before potentially effectful I/O
+admission, such as argument validation, target policy, prior cancellation or
+the initial hook-free version check. Once any stage admits potentially
+effectful tmux I/O, errors report `possible`. This includes earlier batch items,
+control attachment, creation cleanup and truncated results. A later version
+refusal or unsent command cannot erase those effects. `possible` does not assert
+that a change occurred; cancellation and errors never establish rollback.
 
 ### Batches
 
@@ -212,6 +235,12 @@ then runs them in order.
 - Both tools share the application's deadline and byte bounds, emit bounded
   progress when requested, and release their control clients on cancellation.
 - Unrelated requests remain serviceable during a wait.
+
+Set `timeoutSeconds` on either wait tool to shorten that call's total budget.
+The value must be positive and no greater than the application timeout. Setup,
+capture and waiting share the shortened deadline; a wait inside `run_operations`
+also remains bounded by the whole batch's remaining deadline. The MCP tools use
+the core stream waits described in [the observation guide](../../docs/src/observations.md).
 
 ## Library use
 

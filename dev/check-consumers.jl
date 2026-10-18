@@ -2,6 +2,7 @@ using SHA
 using TOML
 
 const SOURCE_ROOT = dirname(@__DIR__)
+const CONSUMER_DIAGNOSTICS = Ref{Any}(nothing)
 const PACKAGE_SOURCES = (
     ("LibTmux", ".", "1a5dcb9e-7968-44df-ad70-bf0a17628f09"),
     ("LibTmuxMCP", "packages/LibTmuxMCP", "6ec2004f-18ba-4da6-9e55-6cdc607d109e"),
@@ -44,7 +45,23 @@ end
 function run_consumer_child(phase::AbstractString, command)
     result, failure = nothing, nothing
     try
-        result = run(command)
+        if get(ENV, "LIBTMUX_CI_PROFILE", "off") == "off" &&
+           get(ENV, "LIBTMUX_CI_CONSUMER_DIAGNOSTICS", "0") != "1"
+            result = run(command)
+        else
+            if CONSUMER_DIAGNOSTICS[] === nothing
+                namespace = Module(:ConsumerDiagnosticOwner)
+                Base.include(
+                    namespace,
+                    joinpath(@__DIR__, "LibTmuxTestDiagnostics", "src", "children.jl"),
+                )
+                CONSUMER_DIAGNOSTICS[] =
+                    Base.invokelatest(getproperty, namespace, :LibTmuxConsumerDiagnostics)
+            end
+            result = Base.invokelatest() do
+                CONSUMER_DIAGNOSTICS[].run_child(phase, command)
+            end
+        end
     catch error
         failure = error
     end
@@ -91,9 +108,10 @@ function consumer_self_test()
     @assert failure.cause isa ProcessFailedException
     @assert only(failure.cause.procs).exitcode == 7
     @assert success(run_consumer_child("successful child", `/bin/sh -c "exit 0"`))
-    println(
-        "PASS consumer child output, exit evidence, inspectable cause and diagnostic omission",
-    )
+    installation = Module(:ReleaseInstallChecks)
+    Base.include(installation, joinpath(@__DIR__, "check-tag-install.jl"))
+    Base.invokelatest(installation.self_test)
+    println("PASS consumer child diagnostics and Git installation metadata")
 end
 
 function package_files(root)

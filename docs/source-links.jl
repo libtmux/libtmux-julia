@@ -19,6 +19,9 @@ function source_contents(root)
             result[relpath(path, root)] = read(path, String)
         end
     end
+    for relative in ("CONTRIBUTING.md", "docs/capabilities.toml", "dev/wire-interop/lua.md")
+        result[relative] = read(joinpath(root, relative), String)
+    end
     result
 end
 

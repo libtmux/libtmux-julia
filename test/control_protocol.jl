@@ -69,6 +69,11 @@
             @test event.bytes == codeunits(record)
         end
 
+        layout =
+            raw"""{"V":2,"L":{"t":"p","w":80,"h":24,"x":-1,"y":0,"a":true,"i":0,"I":"%0","z":0}}"""
+        record = "%layout-change @1 $layout $layout *"
+        @test only(feed(Parser(), codeunits(record * "\n"))).bytes == codeunits(record)
+
         for malformed in (
             "%end 1 2 1\n",
             "%begin -1 2 1\n",

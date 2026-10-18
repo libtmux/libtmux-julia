@@ -9,22 +9,14 @@ Loading and freezing need tmux 3.3a or newer. The workspace CLI reports an
 older or unreadable tmux as error code `tmux_unsupported` with exit status 3,
 in every output mode, and applies nothing.
 
-From a consumer project directory, add the core and workspace package from the
-same public Git tag:
-
-```console
-$ julia \
-    --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
-```
+Prepare a consumer project with the core and workspace packages from the same
+revision using [Install](installation.md#workspace-loader).
 
 The following executable source example needs a checkout and its own consumer
-environment. Clone the same tag, then enter the checkout:
+environment. Clone the tested public source, then enter the checkout:
 
 ```console
 $ git clone \
-    --branch v0.1.0-alpha.1 \
-    --depth 1 \
     https://github.com/libtmux/libtmux-julia.git
 ```
 
@@ -32,12 +24,16 @@ $ git clone \
 $ cd libtmux-julia
 ```
 
+```console
+$ git checkout 029c58b8a45e6d7abe87e83557b8b93980def42f
+```
+
 Create a local environment for the example:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate(".workspace-env"); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
+    -e 'using Pkg; Pkg.activate(".workspace-env"); Pkg.develop([Pkg.PackageSpec(path=abspath(".")), Pkg.PackageSpec(path=abspath("packages/LibTmuxWorkspace"))]); Pkg.instantiate()'
 ```
 
 It loads two panes, checks their layout and focus, freezes the supported

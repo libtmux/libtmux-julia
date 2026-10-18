@@ -77,6 +77,71 @@ function generated_criteria(root)
         source,
         ")\nconst _FIELD_WIRE = Dict(value => key for (key, value) in _WIRE_FIELDS)\n",
     )
+    parameters = Dict(
+        "session"=>"SI",
+        "window"=>"WI",
+        "pane"=>"PI",
+        "client"=>"CI",
+        "windowlink"=>"LI",
+    )
+    for entity in sort!(collect(keys(entities)))
+        observation = entities[entity]["observation"]
+        scalars = filter(f -> f["type"] != "relation", entities[entity]["fields"])
+        integers = filter(f -> f["type"] == "Integer", scalars)
+        metadata = [
+            "(:" * f["name"] * ", " * string(get(f, "nullable", false)) * ")" for
+            f in integers
+        ]
+        tuple = isempty(metadata) ? "()" : "(" * join(metadata, ", ") * ",)"
+        println(source, "_snapshot_integer_fields(::Val{:", entity, "}) = ", tuple)
+        for (index, field) in enumerate(integers)
+            println(
+                source,
+                "_numeric_type(::Type{Snapshot{SI,WI,PI,CI,LI}}, ",
+                "::Val{:",
+                entity,
+                "}, ::Val{:",
+                field["name"],
+                "}) ",
+                "where {SI,WI,PI,CI,LI} = fieldtype(",
+                parameters[entity],
+                ", ",
+                index,
+                ")",
+            )
+        end
+        println(
+            source,
+            "Base.@constprop :aggressive function _typed_captured(x::",
+            observation,
+            "{S}, key::Symbol) where {S}",
+        )
+        for field in scalars
+            name, type = field["name"], field["type"]
+            type == "Integer" &&
+                (type = "_numeric_type(S, Val(:" * entity * "), Val(:" * name * "))")
+            get(field, "nullable", false) && (type = "Union{Nothing," * type * "}")
+            println(
+                source,
+                "    key === :",
+                name,
+                " && return _captured(x, :",
+                name,
+                ")::",
+                type,
+            )
+        end
+        entity in ("pane", "windowlink") && println(
+            source,
+            "    key === :window_id && return _captured(x, :window_id)::WindowID",
+        )
+        entity in ("client", "windowlink") && println(
+            source,
+            "    key === :session_id && return _captured(x, :session_id)::",
+            entity == "client" ? "Union{Nothing,SessionID}" : "SessionID",
+        )
+        println(source, "    _captured(x, key)\nend\n")
+    end
     println(docs, "# Criteria field reference\n")
     println(
         docs,
@@ -188,7 +253,14 @@ function generated_criteria(root)
             ")), Val(:validated))\nend",
         )
         println(source, "_criterion_entity(::", constructor, ") = :", entity)
-        println(source, "_observation_entity(::Type{", observation, "}) = :", entity, "\n")
+        println(
+            source,
+            "_observation_entity(::Type{<:",
+            observation,
+            "}) = :",
+            entity,
+            "\n",
+        )
         println(docs, "## ", constructor, "\n")
         println(
             docs,
