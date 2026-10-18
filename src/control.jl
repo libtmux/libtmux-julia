@@ -637,6 +637,8 @@ function _open_control_lane(
     selector =
         server.socket_path === nothing ? ["-L", something(server.socket_name)] :
         ["-S", server.socket_path]
+    flags = "ignore-size,no-output"
+    release !== nothing && _version_at_least(release, "3.8") && (flags *= ",new-layouts")
     argv = [
         server.tmux;
         "-u";
@@ -649,7 +651,7 @@ function _open_control_lane(
         "-t";
         string(session.id);
         "-f";
-        "ignore-size,no-output"
+        flags
     ]
     input, output, errors = Pipe(), Pipe(), Pipe()
     spawned = try

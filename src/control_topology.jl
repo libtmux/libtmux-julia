@@ -122,7 +122,7 @@ end
 
 Apply a named layout symbol, unambiguous alias or serialized tmux layout.
 Malformed headers are rejected before I/O; tmux validates checksums and layout
-structure. Mirrored layouts require an observed tmux version of 3.5 or later.
+structure. Mirrored layouts require tmux 3.5 or later; JSON layouts require 3.8.
 Return `ControlResult` after the completion fence on the pinned daemon.
 """
 function select_layout(
@@ -131,9 +131,9 @@ function select_layout(
     layout::Union{Symbol,AbstractString};
     kwargs...,
 )
-    text = _layout_argument(layout)
+    text = _control_singleline(_layout_argument(layout), :select_layout)
     context = _control_topology_context(connection, target; kwargs...)
-    if endswith(text, "-mirrored")
+    if endswith(text, "-mirrored") || _json_layout(text)
         _check_layout_version(text, something(_control_release(connection), ""))
     end
     _control_topology_effect(

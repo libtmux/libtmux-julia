@@ -315,6 +315,8 @@ const _NAMED_LAYOUTS = (
     "main-vertical-mirrored",
 )
 
+_json_layout(layout) = startswith(lstrip(layout), '{')
+
 function _layout_argument(layout::Union{Symbol,AbstractString})
     text = layout isa Symbol ? replace(string(layout), '_' => '-') : _argument(layout)
     isvalid(text) || throw(ArgumentError("layout must be valid UTF-8"))
@@ -323,6 +325,7 @@ function _layout_argument(layout::Union{Symbol,AbstractString})
         matches = filter(name -> startswith(name, text), _NAMED_LAYOUTS)
         length(matches) == 1 && return only(matches)
     end
+    _json_layout(text) && endswith(rstrip(text), '}') && return text
     if occursin(r"\A[0-9A-Fa-f]{4},[0-9][0-9x,{}\[\]]*\z", text)
         # tmux cell parsers may dereference a missing cell at a bracket boundary.
         body = SubString(text, 6)
@@ -336,20 +339,21 @@ function _layout_argument(layout::Union{Symbol,AbstractString})
 end
 
 function _check_layout_version(layout, version)
-    _version_at_least(version, "3.5") && return
+    minimum = _json_layout(layout) ? "3.8" : "3.5"
+    _version_at_least(version, minimum) && return
     throw(
         UnsupportedCapability(
             :select_layout,
-            "layout $(repr(layout)) requires tmux 3.5 or later; observed $(repr(version))",
+            "layout $(repr(layout)) requires tmux $minimum or later; observed $(repr(version))",
         ),
     )
 end
 
 """
 Apply a named or serialized tmux layout to an exact window. Aliases must be
-unambiguous among known layout names; mirrored layouts require observed tmux
-3.5 or later. Malformed headers are rejected before I/O. tmux validates a
-serialized layout's checksum and structure and retains its ordinary errors.
+unambiguous among known layout names. Mirrored layouts require tmux 3.5 or later;
+JSON layouts require tmux 3.8 or later. Malformed headers are rejected before I/O.
+tmux validates serialized layout checksums and structure and retains its errors.
 """
 function select_layout(
     server::Server,
@@ -359,10 +363,18 @@ function select_layout(
 )
     text = _layout_argument(layout)
     context = _target_context(server, target; kwargs...)
-    if endswith(text, "-mirrored")
-        _check_layout_version(text, _context_release(context))
-    end
-    _operation_command(context, "select-layout", "-t", string(target.id), "--", text)
+    guard =
+        endswith(text, "-mirrored") || _json_layout(text) ?
+        Base.Fix1(_check_layout_version, text) : nothing
+    _operation_command(
+        context,
+        "select-layout",
+        "-t",
+        string(target.id),
+        "--",
+        text;
+        _version_guard=guard,
+    )
 end
 
 """
