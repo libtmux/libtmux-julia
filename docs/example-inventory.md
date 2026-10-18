@@ -7,11 +7,14 @@ and program links. It does not establish runtime correctness.
 | Document and Julia fence | Class | Runtime gate | Source or prerequisite |
 | --- | --- | --- | --- |
 | [README.md](../README.md) (1) | executable | owned-context runner | Private server, captured screen and retained snapshot |
-| [README.md](../README.md) (2) | executable | owned-context runner | Captured predicates without a live daemon |
-| [README.md](../README.md) (3) | executable | owned-context runner | Task-based captures and scoped control cleanup |
-| [README.md](../README.md) (4) | executable | snippet doctests | Pure criterion encoding without a live daemon |
-| [README.md](../README.md) (5) | executable | snippet doctests | JSON 1.9 criteria codec round trip |
-| [README.md](../README.md) (6) | executable | owned-context runner | Retained snapshot projected through Tables 1.14 |
+| [README.md](../README.md) (2) | executable | owned-context runner | Retained snapshot listed pane by pane |
+| [README.md](../README.md) (3) | executable | owned-context runner | Captured predicates without a live daemon |
+| [README.md](../README.md) (4) | executable | snippet doctests | Server descriptions without contacting tmux |
+| [README.md](../README.md) (5) | executable | owned-context runner | Typed text read back from a control output stream |
+| [README.md](../README.md) (6) | executable | owned-context runner | Task-based captures and scoped control cleanup |
+| [README.md](../README.md) (7) | executable | snippet doctests | Pure criterion encoding without a live daemon |
+| [README.md](../README.md) (8) | executable | snippet doctests | JSON 1.9 criteria codec round trip |
+| [README.md](../README.md) (9) | executable | owned-context runner | Retained snapshot projected through Tables 1.14 |
 | [docs/criteria-wire.md](../docs/criteria-wire.md) (1) | executable | snippet doctests | Pure criteria wire round trip |
 | [docs/criteria-wire.md](../docs/criteria-wire.md) (2) | executable | snippet doctests | JSON 1.9 criteria codec round trip |
 | [docs/projections.md](../docs/projections.md) (1) | executable | owned-context runner | Owned snapshot passed to pane_rows |
@@ -22,9 +25,16 @@ and program links. It does not establish runtime correctness.
 | [docs/src/queries.md](../docs/src/queries.md) (1) | derived | external example runner | [examples/shared_windows.jl](../examples/shared_windows.jl) |
 | [docs/src/queries.md](../docs/src/queries.md) (2) | executable | snippet doctests | Pure callable criteria and wire conversion |
 | [docs/src/workspaces.md](../docs/src/workspaces.md) (1) | derived | external example runner | [packages/LibTmuxWorkspace/examples/owned_load.jl](../packages/LibTmuxWorkspace/examples/owned_load.jl) |
+| [packages/LibTmuxMCP/README.md](../packages/LibTmuxMCP/README.md) (1) | executable | snippet doctests | Default tool catalog from an application, without tmux |
+| [packages/LibTmuxMCP/README.md](../packages/LibTmuxMCP/README.md) (2) | executable | snippet doctests | Launcher entry point returns exit codes without tmux |
 | [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (1) | executable | snippet doctests | Private copy of the shipped workspace configuration |
-| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (2) | executable | owned-context runner | Owned server and private workspace.yaml |
-| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (3) | executable | owned-context runner | Private installation directory; installed launchers have a separate runtime gate |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (2) | executable | snippet doctests | Workspace text parsed, expanded and planned without tmux |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (3) | executable | owned-context runner | Owned server and private workspace.yaml |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (4) | executable | owned-context runner | Second apply of the same plan fails with a retained result |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (5) | executable | owned-context runner | Applied session frozen into a workspace document |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (6) | executable | owned-context runner | Private installation directory; installed launchers have a separate runtime gate |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (7) | executable | snippet doctests | Library entry point returns exit codes without a launcher |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (8) | executable | snippet doctests | Configuration error code and document path |
 | [src/formats.jl](../src/formats.jl) (1) | executable | owned-context runner | Owned server and exact pane reference |
 
 ## Executable programs
