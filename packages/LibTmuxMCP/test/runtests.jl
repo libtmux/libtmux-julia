@@ -3,7 +3,8 @@ using Test
 finish_test_imports()
 
 mode = isempty(ARGS) ? "all" : only(ARGS)
-mode in ("unit", "integration", "observation", "effects", "discovery", "old-daemon", "all") ||
+mode in
+("unit", "integration", "observation", "effects", "discovery", "old-daemon", "all") ||
     error("expected unit, integration, observation, effects, discovery, old-daemon, or all")
 isempty(ARGS) && push!(ARGS, mode)
 

@@ -40,11 +40,7 @@ core from this tested public source revision:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg
-        Pkg.activate(".")
-        repo = "https://github.com/libtmux/libtmux-julia.git"
-        revision = "e48057e583ac918c042c58021fac52137bbe05b3"
-        Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="e48057e583ac918c042c58021fac52137bbe05b3"; Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
 Have `tmux` on your `PATH`. Julia 1.10+ and tmux 3.3a+ are the compatibility

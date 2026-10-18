@@ -7,7 +7,8 @@ end
 finish_test_imports()
 
 suite = isempty(ARGS) ? "unit" : only(ARGS)
-suite in ("unit", "integration", "cli", "old-daemon", "all") || error("unknown workspace suite")
+suite in ("unit", "integration", "cli", "old-daemon", "all") ||
+    error("unknown workspace suite")
 files = String[]
 suite in ("unit", "all") &&
     append!(files, ["config", "script", "readiness", "cli", "cli_signal"])

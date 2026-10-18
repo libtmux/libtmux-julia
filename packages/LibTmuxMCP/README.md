@@ -35,16 +35,7 @@ public source revision:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg
-        Pkg.activate(".")
-        repo = "https://github.com/libtmux/libtmux-julia.git"
-        revision = "e48057e583ac918c042c58021fac52137bbe05b3"
-        Pkg.add([
-            Pkg.PackageSpec(url=repo, rev=revision),
-            Pkg.PackageSpec(
-                url=repo, rev=revision, subdir="packages/LibTmuxMCP",
-            ),
-        ])'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="e48057e583ac918c042c58021fac52137bbe05b3"; Pkg.add([Pkg.PackageSpec(url=repo, rev=revision), Pkg.PackageSpec(url=repo, rev=revision, subdir="packages/LibTmuxMCP")])'
 ```
 
 Install a launcher bound to that environment with
