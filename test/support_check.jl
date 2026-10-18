@@ -1,4 +1,5 @@
-isdefined(Main, :OwnedTmux) || include("support/owned_tmux.jl")
+isdefined(@__MODULE__, :OwnedTmux) ||
+    Base.include(@__MODULE__, joinpath(@__DIR__, "support", "owned_tmux.jl"))
 
 # A scripted client forwards to the real executable, optionally answering the
 # release probe or `-V` itself, and records every invocation.
@@ -284,11 +285,7 @@ end
                 @test length(calls) == 3 && !contains(calls[3], " -N ")
                 @test contains(calls[3], "if-shell -F #{==:#{version},$released}")
             finally
-                run(ignorestatus(`$tmux -S $socket kill-server`))
-                for _ = 1:100
-                    ispath(socket) || break
-                    sleep(0.05)
-                end
+                OwnedTmux.stop_daemon(tmux, socket)
             end
         end
     end
