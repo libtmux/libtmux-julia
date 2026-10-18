@@ -19,6 +19,21 @@ process to check the server's release. A readiness check that never succeeds
 now blocks longer before `apply` fails; your own `timeout` still caps it.
 (#17)
 
+#### Large workspace plans
+
+Reduce compilation costs when planning large pane lists. Preserve pane order
+and repeated commands. (#5)
+
+#### Command output and failures
+
+Stream workspace progress while preserving application failures when output
+stops. Retain failure details and cleanup of owned resources. (#5)
+
+#### Source installation
+
+Install the workspace package from a resolvable public source revision. Follow
+executable setup commands with explicit Julia and tmux requirements. (#5)
+
 ## 0.1.0-alpha.1 - 2026-09-21
 
 #### Initial workspace loader and CLI
