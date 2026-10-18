@@ -65,6 +65,12 @@ end
         # Probing neither reads the version through display-message nor trips either hook.
         @test LibTmux._daemon_version(server, environment) == version
         @test LibTmux._check_version(server, environment).version == version
+        context = LibTmux._operation_context(server)
+        @test LibTmux._context_release(context) == version
+        elapsed = merge(context, (; started=time_ns() - UInt64(3_000_000_000)))
+        @test LibTmux._context_release(elapsed) == version
+        expired = merge(context, (; started=time_ns() - UInt64(6_000_000_000)))
+        @test_throws DeadlineExceeded LibTmux._context_release(expired)
         @test option_value(fixture, "@hook_display") == ""
         error_hook && @test option_value(fixture, "@hook_error") == ""
 
@@ -382,6 +388,35 @@ end
             # One probe, then fenced commands only.
             @test count(contains("run-shell -C"), calls) == 1
             @test count(contains("if-shell -F"), calls) == 3
+            LibTmux._pre_probe_detail(
+                scripted,
+                LibTmux._client_environment(ENV);
+                cancel=nothing,
+                timeout=0.9,
+                started=time_ns() - UInt64(1_000_000_000),
+            )
+            @test recorded_calls(script) == calls
+
+            observed = LibTmux._cached_release(scripted)
+            releases = String[]
+            guard =
+                version -> begin
+                    push!(releases, version)
+                    version == "9.9" || throw(
+                        UnsupportedCapability(:guard_probe, "replacement release refused"),
+                    )
+                end
+            LibTmux._remember_release!(scripted, "9.9")
+            @test_throws UnsupportedCapability run_command(
+                scripted,
+                "set-option",
+                "-g",
+                "@guarded",
+                "must-not-run";
+                _version_guard=guard,
+            )
+            @test releases == ["9.9", observed]
+            @test option_value(fixture, "@guarded") == ""
 
             # A cached release the daemon no longer reports: the fence fails, the
             # entry is dropped and the probe runs again, here reporting 3.2a.
