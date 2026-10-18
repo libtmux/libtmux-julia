@@ -376,3 +376,10 @@ function decode_profile(payload::AbstractDict)
     haskey(lookup, UInt(0)) || throw(ArgumentError("profile has no NULL frame lookup"))
     data, lookup
 end
+
+# Compile the writer after its bindings exist in this include's world.
+if ccall(:jl_generating_output, Cint, ()) == 1
+    precompile(Tuple{typeof(json_value),ProfileBuffer,Vector{UInt}})
+    precompile(Tuple{typeof(json_value),ProfileBuffer,UInt})
+    precompile(Tuple{typeof(json_value),ProfileBuffer,Dict{String,Any}})
+end
