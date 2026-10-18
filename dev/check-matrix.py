@@ -33,7 +33,8 @@ PINNED_TOOLS = {
 TOOL_PREFERENCES = "[JuliaFormatter]\nprecompile_workload = false\n"
 
 DELIVERY_PHASES = frozenset(("extensions", "docs", "doc-snippets", "doc-contextual",
-                            "imports", "external-examples", "external-launchers"))
+                            "imports", "external-examples", "external-launchers",
+                            "readme-commands"))
 SUITES = ("runtime", "delivery")
 
 TMUX_SHA256 = {
@@ -347,6 +348,7 @@ def command_plan(args, stage, metadata):
     add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 30, "quality")
     add("consumer-diagnostics", [*minimal, "dev/check-consumers.jl", "--self-test"], 30, "quality")
     add("example-inventory", [*minimal, "dev/check-doc-examples.jl", "check"], 30, "quality")
+    add("readme-links", [*minimal, "dev/check-readme-commands.jl", "static"], 30, "quality")
     add("core-normal", [*normal, "test/runtests.jl", "all"], 300, "outer")
     add("workspace-normal", [*normal, "packages/LibTmuxWorkspace/test/runtests.jl", "all"], 300, "outer")
     add("mcp-normal", [*normal, "packages/LibTmuxMCP/test/runtests.jl", "all"], 300, "outer")
@@ -362,6 +364,7 @@ def command_plan(args, stage, metadata):
     add("imports", [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]], 300, "outer")
     add("external-examples", [*minimal, "dev/check-consumers.jl", "examples", metadata["consumers"]], 300, "outer")
     add("external-launchers", [*minimal, "dev/check-consumers.jl", "launchers", metadata["consumers"]], 300, "outer")
+    add("readme-commands", [*normal, "dev/check-readme-commands.jl", "commands"], 300, "outer")
     return commands
 
 
