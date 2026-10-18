@@ -784,7 +784,7 @@ function observe_span(f::Function, kind::AbstractString, label::AbstractString)
     end
 end
 
-# Cache serialization only; no sampler, observer or process runs here.
+# Cache diagnostic code without starting observers, samplers or test processes.
 if ccall(:jl_generating_output, Cint, ()) == 1
     load_profiling()
     precompile(Tuple{typeof(json_value),IOStream,Dict{String,Any}})

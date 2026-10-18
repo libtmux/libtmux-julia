@@ -59,6 +59,29 @@ function portable_frames(frames)
     ]
 end
 
+Base.@noinline function _run_profile_checkpoints(session::ProfileSession, timer::Timer)
+    while isopen(timer) && !session.stopping[]
+        try
+            wait(timer)
+        catch error
+            error isa EOFError || rethrow()
+            break
+        end
+        session.stopping[] && break
+        if session.sequence < PROFILE_MAX_CHECKPOINTS-1
+            checkpoint_profile(; label="periodic")
+        else
+            profile_event(
+                session,
+                "profile_checkpoint_limit";
+                reason="final_checkpoint_reserved",
+                maximum=PROFILE_MAX_CHECKPOINTS,
+            )
+            close(timer)
+        end
+    end
+end
+
 function start_profiles(
     observer,
     directory,
@@ -105,28 +128,7 @@ function start_profiles(
     PROFILE_SESSION[] = session
     try
         resume_sampler(session)
-        session.task = @async begin
-            while isopen(timer) && !session.stopping[]
-                try
-                    wait(timer)
-                catch error
-                    error isa EOFError || rethrow()
-                    break
-                end
-                session.stopping[] && break
-                if session.sequence < PROFILE_MAX_CHECKPOINTS-1
-                    checkpoint_profile(; label="periodic")
-                else
-                    profile_event(
-                        session,
-                        "profile_checkpoint_limit";
-                        reason="final_checkpoint_reserved",
-                        maximum=PROFILE_MAX_CHECKPOINTS,
-                    )
-                    close(timer)
-                end
-            end
-        end
+        session.task = @async _run_profile_checkpoints(session, timer)
         profile_event(
             session,
             "profile_start";
@@ -170,7 +172,7 @@ function resolve_profile_frames(session, data, deadline)
 end
 
 function checkpoint_profile(; label="requested", final=false)
-    session = PROFILE_SESSION[]
+    session = PROFILE_SESSION[]::Union{Nothing,ProfileSession}
     session === nothing && return nothing
     trylock(session.lock) || return nothing
     started = time_ns()
@@ -307,7 +309,7 @@ function checkpoint_profile(; label="requested", final=false)
 end
 
 function stop_profiles()
-    session = PROFILE_SESSION[]
+    session = PROFILE_SESSION[]::Union{Nothing,ProfileSession}
     session === nothing && return
     session.stopping[] = true
     close(session.timer)
@@ -377,9 +379,11 @@ function decode_profile(payload::AbstractDict)
     data, lookup
 end
 
-# Compile the writer after its bindings exist in this include's world.
+# Compile the writer and callbacks after their bindings exist in this include's world.
 if ccall(:jl_generating_output, Cint, ()) == 1
     precompile(Tuple{typeof(json_value),ProfileBuffer,Vector{UInt}})
     precompile(Tuple{typeof(json_value),ProfileBuffer,UInt})
     precompile(Tuple{typeof(json_value),ProfileBuffer,Dict{String,Any}})
+    precompile(Tuple{typeof(_run_profile_checkpoints),ProfileSession,Timer})
+    precompile(Tuple{typeof(stop_profiles)})
 end
