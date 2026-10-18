@@ -8,7 +8,7 @@ and resource cleanup.
 
 ```@autodocs
 Modules = [LibTmux]
-Pages = ["src/server.jl", "src/control.jl"]
+Pages = ["src/server.jl", "src/control.jl", "src/support.jl"]
 Private = false
 Order = [:module, :type, :function]
 ```
@@ -40,6 +40,7 @@ raw `run_command` accepts `timeout=nothing` and performs no generation check.
 | [`SnapshotCoverageError`](@ref) | A requested field or membership is uncaptured; it is not a no-match result. |
 | `InconsistentSnapshot` | Captured records or edges cannot form a consistent graph. |
 | `UnsupportedCapability` | The requested operation, transport, or format contract is not admitted; `operation` and `detail` explain the refusal. |
+| [`UnsupportedTmuxVersion`](@ref) | The selected tmux release was refused before the command ran; `observed`, `minimum`, and `detail` explain why. |
 
 The [ownership guide](ownership.md) explains uncertainty after submission and
 transport-specific guarantees. Cleanup can raise `CompositeException` with
