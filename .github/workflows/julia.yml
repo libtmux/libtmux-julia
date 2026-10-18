@@ -110,9 +110,9 @@ jobs:
           julia --startup-file=no -e 'using Pkg;
           Pkg.activate(joinpath(ENV["RUNNER_TEMP"], "libtmux-julia-reject", "packages"));
           Pkg.add(["JSON", "Tables"]);
-          Pkg.develop([PackageSpec(path="."),
-          PackageSpec(path="packages/LibTmuxWorkspace"),
-          PackageSpec(path="packages/LibTmuxMCP")]);
+          Pkg.develop([PackageSpec(path=abspath(".")),
+          PackageSpec(path=abspath("packages/LibTmuxWorkspace")),
+          PackageSpec(path=abspath("packages/LibTmuxMCP"))]);
           Pkg.precompile()'
       - name: Assert the workspace CLI refuses the release
         env:

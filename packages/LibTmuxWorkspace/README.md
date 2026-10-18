@@ -174,7 +174,7 @@ $ workspace_stage=$(mktemp -d "${TMPDIR:-/tmp}/ltj-workspace.XXXXXX")
 $ julia \
     --startup-file=no \
     --project="$workspace_stage" \
-    -e 'using Pkg; Pkg.develop([PackageSpec(path="../.."), PackageSpec(path=".")]); Pkg.precompile()'
+    -e 'using Pkg; Pkg.develop([PackageSpec(path=abspath("../..")), PackageSpec(path=abspath("."))]); Pkg.precompile()'
 ```
 
 ## Inspect a workspace

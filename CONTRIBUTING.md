@@ -225,7 +225,7 @@ Prepare the manual environment outside timed checks:
 $ julia \
     --startup-file=no \
     --project=docs \
-    -e 'using Pkg; Pkg.develop([PackageSpec(path="."), PackageSpec(path="packages/LibTmuxMCP"), PackageSpec(path="packages/LibTmuxWorkspace")]); Pkg.instantiate()'
+    -e 'using Pkg; Pkg.develop([PackageSpec(path=abspath(".")), PackageSpec(path=abspath("packages/LibTmuxMCP")), PackageSpec(path=abspath("packages/LibTmuxWorkspace"))]); Pkg.instantiate()'
 ```
 
 Build the Documenter manual with normal compilation:

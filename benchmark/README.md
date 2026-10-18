@@ -12,7 +12,7 @@ From the repository root:
 $ julia \
     --startup-file=no \
     --project=benchmark \
-    -e 'using Pkg; Pkg.develop([PackageSpec(path="."), PackageSpec(path="packages/LibTmuxMCP"), PackageSpec(path="packages/LibTmuxWorkspace")]); Pkg.instantiate()'
+    -e 'using Pkg; Pkg.develop([PackageSpec(path=abspath(".")), PackageSpec(path=abspath("packages/LibTmuxMCP")), PackageSpec(path=abspath("packages/LibTmuxWorkspace"))]); Pkg.instantiate()'
 ```
 
 Set `LIBTMUX_TEST_TMUX` to select a different tmux executable. Every driver

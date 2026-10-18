@@ -33,7 +33,7 @@ Create a local environment for the example:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate(".workspace-env"); Pkg.develop([Pkg.PackageSpec(path="."), Pkg.PackageSpec(path="packages/LibTmuxWorkspace")]); Pkg.instantiate()'
+    -e 'using Pkg; Pkg.activate(".workspace-env"); Pkg.develop([Pkg.PackageSpec(path=abspath(".")), Pkg.PackageSpec(path=abspath("packages/LibTmuxWorkspace"))]); Pkg.instantiate()'
 ```
 
 It loads two panes, checks their layout and focus, freezes the supported
