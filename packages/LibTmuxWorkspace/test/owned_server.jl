@@ -10,6 +10,8 @@ function with_workspace_server(f)
         "TERM" => "xterm-256color",
     )
     LibTmux.with_server(; tmux, env) do server
+        # Use a POSIX shell that skips host login profiles.
+        LibTmux.set_option(server, :global_session, "default-command", "exec /bin/sh")
         f((
             tmux=server.tmux,
             socket=server.socket_path,

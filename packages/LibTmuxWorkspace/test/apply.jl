@@ -11,6 +11,12 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
             output = joinpath(fixture.directory, "command-result")
             script_output = joinpath(fixture.directory, "before-result")
             shellword(s) = "'" * replace(s, "'" => "'\\''") * "'"
+            # Login profiles must not overwrite the workspace's script output.
+            touch(joinpath(fixture.directory, ".hushlogin"))
+            write(
+                joinpath(fixture.directory, ".profile"),
+                "printf profile > " * shellword(script_output) * "\n",
+            )
             marker =
                 shellword(fixture.tmux) *
                 " -S " *
@@ -22,7 +28,8 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
                 "before_script" =>
                     "/bin/sh -c 'printf before > \"\$1\"' sh " * shellword(script_output),
                 "options" => Dict("default-shell" => "/bin/sh"),
-                "environment" => Dict("VALUE" => "session"),
+                "environment" =>
+                    Dict("HOME" => fixture.directory, "VALUE" => "session"),
                 "windows" => [
                     Dict(
                         "window_name" => "main",
