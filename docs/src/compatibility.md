@@ -5,13 +5,16 @@ share these requirements. The higher tmux floor excludes unsafe older control
 attachment, named-buffer deletion and session/window name behavior.
 
 CI runs Linux only. It checks tmux 3.7c at one and four threads and tmux 3.8
-at one thread, using Julia 1.13.1. macOS and psmux are excluded from CI.
-Historical results do not establish current platform support; package
-resolution alone is not runtime evidence.
+at one thread, using Julia 1.13.1. macOS and psmux are excluded from CI and
+current support. Historical results remain available; they do not expand
+the selected scope.
 
-See the [CI runs](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
-for the result at a particular commit. The capability manifest retains older
-baseline results separately. They do not establish that a newer commit passes.
+[The retained Linux run](https://github.com/libtmux/libtmux-julia/actions/runs/39333764109)
+passed all 26 phases in each of those three cells for PR head `67da6f3`, tested
+as merge commit `f0a564f`. No phases were skipped or unrun. Its four older-daemon
+rejection jobs also passed. The capability manifest records both revisions and
+the tested source digest, with earlier baselines separate. This evidence does
+not establish that a later commit passes.
 
 ## Version refusal
 
@@ -49,6 +52,10 @@ imsg access and Python workspace plugins are excluded. Query pushdown, portable
 regex/Unicode folding, general execution DAGs and MCP HTTP remain deferred.
 Native Julia regex works in ordinary local predicates.
 
+MCP CLI startup and wait setup still acquire the full graph within an 8 MiB
+reply bound. Larger replies are unsupported at those stages. A discovery scope
+narrows a listing; it cannot bypass startup or wait setup.
+
 ## Verification
 
 Whole-command times are diagnostic: aim for five seconds for focused checks,
@@ -57,9 +64,16 @@ checks. A slower correct result remains a pass. The runner stops test work at
 fifteen minutes, retires owned processes and preserves partial evidence.
 Dependency acquisition and precompilation are measured separately.
 
-Required acceptance covers correctness, installed consumers, shipped examples
-and package/documentation checks. Benchmark completion and exhaustive profiling
-are separate work.
+Accept a final revision only after its affected correctness, package,
+example and documentation checks pass. Fresh consumer projects must install
+that source from the documented public GitHub commands and exercise the core,
+MCP and workspace flows. Immutable consumer exports do not prove that install.
+
+The shared website build and rendered output require their own verification;
+a passing native manual or API export does not establish them. Use the
+[CI result for the candidate commit](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
+and its public-install evidence. Benchmark completion and exhaustive profiling
+are separate work; excluded platforms are not acceptance gates.
 
 ```@raw html
 <p>See <a href="../source/CONTRIBUTING.md.html">the contributor guide</a> and
