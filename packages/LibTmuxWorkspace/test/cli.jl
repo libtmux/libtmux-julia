@@ -36,4 +36,8 @@ import JSON
     end
 end
 
-include("cli_output.jl")
+if isdefined(Main, :include_test_file)
+    Main.include_test_file(@__MODULE__, joinpath(@__DIR__, "cli_output.jl"))
+else
+    include("cli_output.jl")
+end

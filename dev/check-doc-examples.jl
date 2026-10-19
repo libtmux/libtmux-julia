@@ -606,7 +606,9 @@ function run_contextual_snippets(entries)
                     @assert length(screens) == 2 &&
                             all(screen -> isempty(strip(screen)), screens)
                 else
-                    println("SKIPPED README.md fences 5, 6: control acquisition needs tmux 3.7")
+                    println(
+                        "SKIPPED README.md fences 5, 6: control acquisition needs tmux 3.7",
+                    )
                 end
                 execute(("README.md", 9))
                 columns = Base.invokelatest(getproperty, workspace, :columns)

@@ -25,6 +25,11 @@
             @test any(w -> w.name == "#{literal}", windows(snapshot(server)))
             LibTmux.select_layout(server, extra, :even_horizontal)
             version = only(read_formats(server, extra, FormatField("version"))).value
+            captured_layout = snapshot(server, extra).layout
+            @test select_layout(server, extra, captured_layout) isa CommandResult
+            if !LibTmux._version_at_least(version, "3.8")
+                @test_throws UnsupportedCapability select_layout(server, extra, "{\"V\":2}")
+            end
             if version in ("3.3", "3.3a", "3.4")
                 @test_throws UnsupportedCapability select_layout(
                     server,

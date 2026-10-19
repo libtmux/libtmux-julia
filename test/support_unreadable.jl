@@ -1,3 +1,6 @@
+isdefined(@__MODULE__, :OwnedTmux) ||
+    Base.include(@__MODULE__, joinpath(@__DIR__, "support", "owned_tmux.jl"))
+
 @testset "tmux older than 3.2 is refused, not reported as a probe failure" begin
     # What tmux 3.1 (daemon), a 3.0 daemon and a client older than 3.2 print for
     # `tmux -N -- run-shell -C <marker>`.
@@ -198,11 +201,7 @@ end
                 )
                 @test LibTmux._cached_release(server) !== nothing
 
-                run(pipeline(`$current -S $socket kill-server`; stderr=devnull))
-                for _ = 1:100
-                    ispath(socket) || break
-                    sleep(0.05)
-                end
+                OwnedTmux.stop_daemon(current, socket)
                 @test success(`$old -S $socket -f /dev/null new-session -d -s old`)
 
                 for _ = 1:2

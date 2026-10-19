@@ -42,5 +42,31 @@ using JSON
             ) == encode_where(criterion)
         end
         @test_throws ArgumentError LibTmux.read_where_json(encoded; max_input_bytes=0)
+
+        F = LibTmux.Filters
+        snap = LibTmux._build_snapshot(
+            ServerIdentity(socket_path="/tmp/libtmux-json-empty", generation="one");
+            acquired=(0, 0),
+            complete=true,
+            windows=[(id="@1",)],
+            panes=[(id="%1", window_id="@1", title="literal")],
+        )
+        for (label, criterion, key, expected) in (
+            ("all", F.AllOf(), "args", 1),
+            ("any", F.AnyOf(), "args", 0),
+            ("membership", PaneWhere(title=F.OneOf(())), "values", 0),
+            ("fields", PaneWhere(), "fields", 1),
+        )
+            @testset "empty $label array" begin
+                text = write_where_json(criterion; entity=:pane)
+                node = JSON.parse(text)["where"]
+                container = key == "values" ? node["fields"][1]["match"][key] : node[key]
+                @test container isa Vector
+                restored = read_where_json(text)
+                @test encode_where(restored; entity=:pane) ==
+                      encode_where(criterion; entity=:pane)
+                @test count(restored, panes(snap)) == expected
+            end
+        end
     end
 end

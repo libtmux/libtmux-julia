@@ -1,5 +1,8 @@
 using Test, LibTmux, LibTmuxMCP
 
+isdefined(@__MODULE__, :OwnedTmux) ||
+    Base.include(@__MODULE__, joinpath(pkgdir(LibTmux), "test", "support", "owned_tmux.jl"))
+
 tool_result(app, name, args=Dict(); kwargs...) =
     LibTmuxMCP._invoke_tool(app, name, args; kwargs...)
 
@@ -35,11 +38,7 @@ tool_result(app, name, args=Dict(); kwargs...) =
             )
             try
                 @test !tool_result(app, "list_panes").is_error
-                run(pipeline(`$current -S $socket kill-server`; stderr=devnull))
-                for _ = 1:100
-                    ispath(socket) || break
-                    sleep(0.05)
-                end
+                OwnedTmux.stop_daemon(current, socket)
                 @test success(`$old -S $socket -f /dev/null new-session -d -s old`)
                 # The refusal repeats; the stale entry does not come back.
                 for _ = 1:2,
