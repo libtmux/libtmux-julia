@@ -33,13 +33,13 @@ leaves it running.
 
 ## Quick start
 
-`v0.1.0-alpha.2` is an unregistered source release. From a consumer project
-directory, add the core and MCP package from the same public Git tag:
+The packages are unregistered. From a consumer project
+directory, add the core and MCP package from the same rebuild branch:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.2"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxMCP")])'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="adoption-2026-10-18"; Pkg.add([Pkg.PackageSpec(url=repo, rev=revision), Pkg.PackageSpec(url=repo, rev=revision, subdir="packages/LibTmuxMCP")])'
 ```
 
 Install a launcher bound to that environment with
@@ -175,6 +175,10 @@ with its linked session and window contexts, and a `target` object. Pass that
 `target` to a pane tool: it holds the pane ID and the observed server
 generation.
 
+Narrow discovery with a generation-bound session/window `scope`, inert `where`
+criteria or scalar `columns`. A changed observation requires a fresh listing.
+[Pane discovery][mcp-discovery] covers pagination and stale-target recovery.
+
 ### [`capture_pane`][tool_capture_pane]: read what a pane shows
 
 [`capture_pane`][tool_capture_pane] returns bounded UTF-8 screen text and says
@@ -194,6 +198,10 @@ pastes longer text through an owned buffer.
 sends keys, so a match on text already on screen cannot satisfy it. Neither
 reports process exit.
 
+Set `timeoutSeconds` to shorten a wait's total budget. Setup, capture and
+waiting share that deadline. A wait inside a batch also shares the batch's
+remaining budget.
+
 ### [`run_operations`][tool_run_operations]: several calls, one request
 
 [`run_operations`][tool_run_operations] checks every item against the same tool
@@ -211,6 +219,14 @@ $ claude mcp add tmux-batch -- \
 If an item fails, earlier effects stay. The result reports its one-based
 `failedIndex` and sets `atomic: false`.
 [Batch results][mcp-docs-contracts-md-batches] covers truncated output.
+
+Tools can invoke configured tmux hooks or aliases, including listing and
+capture. Their catalog hints therefore declare possible mutation. Waits also
+attach and detach a control client, which can trigger hooks.
+
+`error.effects: none` means refusal before potentially effectful I/O. Once any
+stage admits that I/O, errors report `possible`. Earlier batch items, cleanup
+and truncation retain that history; cancellation never proves rollback.
 
 ### [`create_session`][tool_create_session]: a session the server owns
 
@@ -301,17 +317,14 @@ ownership.
 
 ## Support and status
 
-- **Alpha.** `v0.1.0-alpha.2` is an unregistered source release. Registry
-  publication and full compatibility support are pending.
+- **Alpha.** The packages are unregistered. Registry publication is pending.
 - **Protocol.** Modern discovery uses `2026-07-28`. The legacy initialize
   profile is `2025-11-25`.
-- **Julia 1.10 or newer and tmux 3.3a or newer.**
-- **Older tmux is refused.** A tool called against an older or unreadable tmux
-  fails with code `unsupported_tmux` and `effects: none`. The message says to
-  upgrade tmux and restart the server, or pin the previous libtmux release.
-- **Linux, including WSL, and macOS.** CI runs the complete suite on Ubuntu
-  24.04. macOS is supported on a best-effort basis, and CI coverage for it is
-  highly limited.
+- **Julia 1.13.1 or newer and tmux 3.7c or newer.**
+- **Older tmux is refused.** The initial check reports `unsupported_tmux` and
+  `effects: none`. A later refusal preserves earlier possible effects. Upgrade
+  tmux and restart the server, or pin a compatible libtmux release.
+- **Linux, including WSL.** Linux is the required CI platform. macOS is optional.
 
 ## Documentation
 
@@ -349,3 +362,4 @@ ownership.
 [mcp-docs-contracts-md]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/contracts.md
 [mcp-docs-contracts-md-batches]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/contracts.md#batches
 [mcp-license]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/LICENSE
+[mcp-discovery]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/discovery.md

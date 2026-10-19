@@ -28,6 +28,9 @@ function main()
     @assert length(windowlinks(snap)) == 3
     @assert length(panes(snap)) == 3
     @assert length(paneoccurrences(snap)) == 5
+    reference = first(panes(snap)).ref
+    @assert snap[reference].ref == reference
+    @assert snapshotof(get(snap, reference, nothing)) === snap
 
     # Captured relations remain usable after the owned daemon has stopped.
     has_api = SessionWhere(windows=F.AnyRelated(WindowWhere(name="api")))

@@ -60,7 +60,7 @@
         @test !occursin("is unsupported", message(version))
     end
     @test startswith(message(""), "tmux version is unsupported;")
-    @test LibTmux.MINIMUM_TMUX_VERSION == "3.3a"
+    @test LibTmux.MINIMUM_TMUX_VERSION == "3.7c"
     for chain in (
         ("next-3.7", "3.7-rc", "3.7-rc3", "3.7", "3.7a"),
         ("next-3.4", "3.4-rc", "3.4"),

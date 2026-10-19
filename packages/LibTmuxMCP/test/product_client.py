@@ -120,7 +120,7 @@ def main():
         sent_and_observed = call('echo', 'send_keys_and_wait',
                                  {'keys': ['observed-marker'], 'literal': True, 'text': 'observed-marker'})
         assert not sent_and_observed.get('isError', False), sent_and_observed
-        assert sent_and_observed['structuredContent']['source'] in ('output', 'screen')
+        assert sent_and_observed['structuredContent']['source'] == 'output'
         send('waiting', 'tools/call', {'name': 'wait_for_text',
              'arguments': {'text': 'never-produced-marker'},
              '_meta': {'progressToken': 'waiting'}})

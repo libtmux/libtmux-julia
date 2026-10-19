@@ -15,6 +15,41 @@ Base.:(==)(a::BufferID, b::BufferID) = a.name == b.name
 Base.hash(id::BufferID, h::UInt) = hash((:buffer, id.name), h)
 const BufferRef = EntityRef{BufferID}
 
+"""A borrowed paste-buffer observation. Listing neither creates nor owns the buffer."""
+struct BufferInfo
+    ref::BufferRef
+    size::Int
+end
+
+"""
+    list_buffers(server; max_bytes=1048576, kwargs...)
+
+Capture exact names and byte sizes in tmux order. References share an observed
+daemon generation and are borrowed: release only buffers the caller owns or
+explicitly intends to delete. Names can be replaced within the same generation;
+listing does not reserve their contents. Replies are bounded by `max_bytes`.
+"""
+function list_buffers(server::Server; max_bytes::Int=1024^2, kwargs...)
+    max_bytes >= 0 || throw(ArgumentError("max_bytes cannot be negative"))
+    context = _operation_context(server; kwargs...)
+    _verify_row_codec(server, context.started, context.budget, context.cancel)
+    identity = _snapshot_metadata(server, context.started, context.budget, context.cancel)
+    result = _operation_command(
+        context,
+        "list-buffers",
+        "-F",
+        _format_template(["buffer_name", "buffer_size"]);
+        max_output_bytes=max_bytes,
+    )
+    rows = _decode_format_rows(result.stdout, 2)
+    current = _snapshot_metadata(server, context.started, context.budget, context.cancel)
+    current == identity || throw(StaleReference("buffer inventory"))
+    [
+        BufferInfo(BufferRef(identity, row[1]), _observed_int(row[2], "buffer_size")) for
+        row in rows
+    ]
+end
+
 """A capture decoding failure with its cause and an owned copy of source bytes."""
 struct CaptureDecodeError <: LibTmuxError
     cause::InvalidUTF8Error
@@ -150,7 +185,7 @@ function _cleanup_owned_buffer(server, buffer)
     nothing
 end
 
-function _load_owned_buffer(context, buffer, bytes; exact_delete::Bool=true)
+function _load_owned_buffer(context, buffer, bytes)
     try
         _operation_command(
             context,
@@ -161,8 +196,6 @@ function _load_owned_buffer(context, buffer, bytes; exact_delete::Bool=true)
             input=bytes,
         )
     catch original
-        # Before 3.4 a delete by a missing name can take an unrelated buffer.
-        exact_delete || rethrow()
         try
             _cleanup_owned_buffer(context.server, buffer)
         catch cleanup
@@ -184,7 +217,6 @@ remote I/O. Empty input errors because tmux does not create empty buffers.
 function load_buffer(server::Server, bytes::AbstractVector{UInt8}; kwargs...)
     isempty(bytes) && throw(ArgumentError("tmux does not create empty buffers"))
     context = _operation_context(server; kwargs...)
-    _require_buffer_release(context, :load_buffer)
     _verify_row_codec(
         server,
         context.started,
@@ -225,7 +257,6 @@ end
 """Delete the explicitly supplied generation-bound buffer."""
 function delete_buffer(server::Server, buffer::BufferRef; kwargs...)
     context = _target_context(server, buffer; kwargs...)
-    _require_buffer_release(context, :delete_buffer)
     _operation_command(
         context,
         "delete-buffer",
@@ -272,10 +303,8 @@ enabled it. No Enter is appended. tmux receives exact buffer bytes, but the
 terminal driver and target application can transform them.
 
 Success, failure and cancellation attempt bounded cleanup of only the new
-buffer with an uncancelled 900 ms context. Before tmux 3.4 an exact-name delete
-can take an unrelated buffer when the name is missing, so the paste itself
-deletes the buffer (`paste-buffer -d`) and a failed stage leaves its named
-buffer behind instead of risking another one. A cleanup failure preserves the
+buffer with a separate, uncancelled five-second cleanup budget. A cleanup
+failure preserves the
 original error in `CompositeException`. Subprocess generation checks remain
 best effort; input already delivered to the pane cannot be rolled back.
 Empty bytes validate the target and return `nothing` without sending input.
@@ -289,17 +318,9 @@ function paste_bytes(
 )
     context = _target_context(server, pane; kwargs...)
     isempty(bytes) && return nothing
-    exact_delete = _version_at_least(_checked_release(context), BUFFER_DELETE_MINIMUM_TMUX)
     args = _paste_args(context, pane, bracketed)
     buffer = _new_buffer_ref(context, pane.server)
-    _load_owned_buffer(context, buffer, bytes; exact_delete)
-    exact_delete || return _operation_command(
-        context,
-        args...,
-        "-d",
-        "-b",
-        _literal_tmux_argument(string(buffer.id)),
-    )
+    _load_owned_buffer(context, buffer, bytes)
     original = nothing
     try
         _operation_command(

@@ -38,12 +38,12 @@ struct ControlConnectionError <: LibTmuxError
     reason::Symbol
     sent::Bool
 end
-"""Local resources closed, but retirement of submitted backend work was not proved."""
+"""Owned resource cleanup or retirement of submitted backend work was not proved."""
 struct ControlCleanupError <: LibTmuxError
     reason::Symbol
 end
 Base.showerror(io::IO, error::ControlCleanupError) =
-    print(io, "tmux control cleanup could not confirm remote retirement: ", error.reason)
+    print(io, "tmux control cleanup could not confirm retirement: ", error.reason)
 "An exact control target did not resolve; no fallback observation is returned."
 struct ControlTargetError <: LibTmuxError
     target::String
@@ -189,7 +189,10 @@ function _control_stop!(connection::ControlConnection, reason::Symbol)
         end
         connection.stop_timer, connection.stop_timer_task = _owned_timer(0.9) do
             lock(connection.lock) do
-                connection.cleanup_error = ControlCleanupError(:forced_client_termination)
+                cleanup_reason =
+                    process_running(connection.process) ? :client_stop_timeout :
+                    :local_retirement_timeout
+                connection.cleanup_error = ControlCleanupError(cleanup_reason)
             end
             try
                 process_running(connection.process) &&
@@ -203,16 +206,16 @@ function _control_stop!(connection::ControlConnection, reason::Symbol)
         true
     end
     stop || return
-    auxiliary = lock(connection.lock) do
-        connection.closing_requested || !isempty(connection.signals) ? nothing :
-        connection.cleanup
-    end
-    auxiliary === nothing || _control_stop!(auxiliary, reason)
     try
         process_running(connection.process) && kill(connection.process, Base.SIGTERM)
     catch error
         error isa Base.IOError || rethrow()
     end
+    auxiliary = lock(connection.lock) do
+        connection.closing_requested || !isempty(connection.signals) ? nothing :
+        connection.cleanup
+    end
+    auxiliary === nothing || _control_stop!(auxiliary, reason)
     _close_owned(connection.input)
     nothing
 end
@@ -405,7 +408,7 @@ function _close_control_lane(connection::ControlConnection)
     _control_stop!(connection, :closed_by_caller)
     connection.supervisor === nothing || wait(connection.supervisor)
     _control_join_observation(connection.observation)
-    nothing
+    lock(() -> connection.cleanup_error, connection.lock)
 end
 
 function _control_request(
@@ -504,6 +507,7 @@ function _control_rows(
     command::AbstractString,
     fields::AbstractVector{<:AbstractString};
     target=nothing,
+    filter=nothing,
     timeout::Real=5.0,
     cancel=nothing,
     _opening::Bool=false,
@@ -521,12 +525,13 @@ function _control_rows(
         allowed =
             command == "display-message" ? target isa Union{SessionRef,WindowRef,PaneRef} :
             command in ("list-windows", "list-clients") ? target isa SessionRef :
-            command == "list-panes" ? target isa WindowRef : false
+            command == "list-panes" ? target isa Union{SessionRef,WindowRef} : false
         allowed ||
             throw(ArgumentError("control row target kind is not admitted for this command"))
         target.server.socket_path == connection.identity.socket_path ||
             throw(CrossServerReference(string(target.id)))
         target.server == connection.identity || throw(StaleReference(string(target.id)))
+        command == "list-panes" && target isa SessionRef && push!(argv, "-s")
         append!(argv, ["-t", string(target.id)])
         if command == "display-message"
             target_field =
@@ -536,6 +541,11 @@ function _control_rows(
         end
     elseif command in ("list-windows", "list-panes")
         push!(argv, "-a")
+    end
+    if filter !== nothing
+        command in ("list-sessions", "list-windows", "list-panes") ||
+            throw(ArgumentError("control row filtering is not admitted for this command"))
+        append!(argv, ["-f", String(filter)])
     end
     prefix = "LIBTMUX\t"
     append!(argv, ["-F", prefix * _format_template(observed_fields)])
@@ -603,6 +613,7 @@ function _open_control_lane(
     timeout::Real=5.0,
     cancel=nothing,
     capacity::Integer=64,
+    _make_timer=_owned_timer,
 )
     !(capacity isa Bool) && 0 < capacity <= typemax(Int) || throw(
         ArgumentError("control capacity must be a positive representable Int, not Bool"),
@@ -617,18 +628,13 @@ function _open_control_lane(
         throw(CrossServerReference(string(session.id)))
     # The attach cannot start a daemon, so only a live endpoint needs a release
     # check; the handshake below binds the connection to the captured daemon.
-    release = _check_daemon(
-        server,
-        _client_environment(ENV);
-        cancel,
-        timeout=_snapshot_remaining(started, budget),
-        started,
-    )
-    # Short-lived control attaches crash servers before 3.7, so decide first.
-    _require_release(release, CONTROL_MINIMUM_TMUX, :open_control, "control acquisition")
+    release =
+        _check_daemon(server, _client_environment(ENV); cancel, timeout=budget, started)
     selector =
         server.socket_path === nothing ? ["-L", something(server.socket_name)] :
         ["-S", server.socket_path]
+    flags = "ignore-size,no-output"
+    release !== nothing && _version_at_least(release, "3.8") && (flags *= ",new-layouts")
     argv = [
         server.tmux;
         "-u";
@@ -641,7 +647,7 @@ function _open_control_lane(
         "-t";
         string(session.id);
         "-f";
-        "ignore-size,no-output"
+        flags
     ]
     input, output, errors = Pipe(), Pipe(), Pipe()
     spawned = try
@@ -723,22 +729,24 @@ function _open_control_lane(
                     foreach(_close_owned, (input, output, errors))
                     wait(spawned)
                 end
+                nothing
             else
                 _control_stop!(connection, :setup_failure)
                 _control_supervise(connection)
+                lock(() -> connection.cleanup_error, connection.lock)
             end
-            nothing
         catch error
             error
         end
         cleanup === nothing ? throw(primary) : throw(CompositeException([primary, cleanup]))
     end
-    timer, timer_task = _owned_timer(max(0.0, budget - (time_ns() - started) / 1e9)) do
+    timer, timer_task = _make_timer(max(0.0, budget - (time_ns() - started) / 1e9)) do
         _control_stop!(connection, :open_timeout)
     end
     registration =
         cancel === nothing ? nothing :
         on_cancel(() -> _control_stop!(connection, :open_cancelled), cancel)
+    failures = Any[]
     try
         lock(connection.lock) do
             while connection.startup && connection.state === :opening
@@ -782,14 +790,38 @@ function _open_control_lane(
             notify(connection.changed; all=true)
         end
         connection
-    catch
-        _close_control_lane(connection)
-        rethrow()
+    catch error
+        if error isa ControlConnectionError
+            if error.reason === :open_timeout
+                error = DeadlineExceeded(budget, error.sent, nothing)
+            elseif error.reason === :open_cancelled
+                error = RequestCancelled(error.sent)
+            end
+        end
+        push!(failures, error)
     finally
-        close(timer)
-        wait(timer_task)
-        registration === nothing || close(registration)
+        for finalize in (
+            () -> close(timer),
+            () -> wait(timer_task),
+            () -> registration === nothing || close(registration),
+        )
+            try
+                finalize()
+            catch error
+                push!(failures, error)
+            end
+        end
     end
+    if !isempty(failures)
+        cleanup = try
+            _close_control_lane(connection)
+        catch error
+            error
+        end
+        cleanup === nothing || push!(failures, cleanup)
+        length(failures) == 1 ? throw(only(failures)) : throw(CompositeException(failures))
+    end
+    connection
 end
 
 """
@@ -1022,7 +1054,9 @@ end
 
 function Base.close(connection::ControlConnection)
     if connection.cleanup === nothing
-        return _close_control_lane(connection)
+        cleanup = _close_control_lane(connection)
+        cleanup === nothing || throw(cleanup)
+        return nothing
     end
     owner = lock(connection.lock) do
         connection.closing_requested && return false
@@ -1130,10 +1164,17 @@ function open_control(
         isopen(auxiliary) || throw(ControlConnectionError(:cleanup_lane_lost, false))
         primary.cleanup_worker = Threads.@spawn _control_signal_worker(primary)
         primary
-    catch
-        auxiliary === nothing || _close_control_lane(auxiliary)
-        close(primary)
-        rethrow()
+    catch error
+        failures = Any[error]
+        for lane in (auxiliary, primary)
+            lane === nothing && continue
+            try
+                close(lane)
+            catch cleanup
+                push!(failures, cleanup)
+            end
+        end
+        length(failures) == 1 ? rethrow() : throw(CompositeException(failures))
     end
 end
 

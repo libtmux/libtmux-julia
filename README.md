@@ -36,8 +36,8 @@ and, through the MCP package, agents that share a terminal.
 [API reference](https://libtmux.org/en/julia/latest/reference/) ·
 [Field reference][repo-docs-generated-criteria-md]
 
-The core uses only Julia standard libraries. Add a companion for MCP or
-workspace configuration:
+The core uses only Julia standard libraries. Add an experimental companion
+for MCP or workspace configuration:
 
 | Package | Use it for |
 | --- | --- |
@@ -47,16 +47,17 @@ workspace configuration:
 
 ## Quick start
 
-`v0.1.0-alpha.2` is an unregistered source release. From your Julia project's
-directory, add the core from its public Git tag:
+The package is unregistered. From your Julia project's directory, add the
+core from the rebuild branch:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); Pkg.add(Pkg.PackageSpec(url="https://github.com/libtmux/libtmux-julia.git", rev="v0.1.0-alpha.2"))'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="adoption-2026-10-18"; Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
-Have `tmux` on your `PATH`, then open Julia in that project:
+Use Julia 1.13.1 or newer and tmux 3.7c or newer. Have `tmux` on your `PATH`,
+then open Julia in that project:
 
 ```console
 $ julia --project=.
@@ -253,18 +254,21 @@ Each program creates and cleans up its own tmux server:
 | Query shared windows and their panes | [shared_windows.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/shared_windows.jl) |
 | Cancel a waiting control operation | [control_cancel.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/control_cancel.jl) |
 | Send text and subscribe to pane output | [output_stream.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/output_stream.jl) |
+| Wait for an explicit command completion marker | [command_completion.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/command_completion.jl) |
 
 To run the programs, clone the source:
 
 ```console
 $ git clone \
-    --branch v0.1.0-alpha.2 \
-    --depth 1 \
     https://github.com/libtmux/libtmux-julia.git
 ```
 
 ```console
 $ cd libtmux-julia
+```
+
+```console
+$ git checkout adoption-2026-10-18
 ```
 
 ```console
@@ -282,7 +286,7 @@ configuration and checks its layout, focus and cleanup.
 ## Packages
 
 Each heading links to the package's directory on GitHub. None is in the
-General registry yet, so install from the Git tag, as the
+General registry yet, so install from the same source revision, as the
 [quick start](#quick-start) does.
 
 ### [`LibTmux`](https://github.com/libtmux/libtmux-julia/tree/master/src): the core library
@@ -408,18 +412,16 @@ The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
 
 ## Support and status
 
-- **Alpha.** `v0.1.0-alpha.2` is an unregistered source release, and its APIs
-  may change. Pkg records the requested revision and package tree in your
-  `Manifest.toml`.
+- **Alpha.** The packages are unregistered and their APIs may change. Pkg
+  records the requested revision and package tree in your `Manifest.toml`.
 - **Standard library only.** The core imports only Julia standard libraries.
   The JSON and Tables integrations are optional extensions.
-- **Julia 1.10 or newer and tmux 3.3a or newer.** Operations refuse an older
+- **Julia 1.13.1 or newer and tmux 3.7c or newer.** Operations refuse an older
   or unreadable tmux release before they have any effect.
   [Compatibility][repo-docs-src-compatibility-md] lists the cells that passed
   the complete suite.
-- **Linux, including WSL, and macOS.** CI runs the complete suite on Ubuntu
-  24.04. macOS is supported on a best-effort basis, and CI coverage for it is
-  highly limited. Native Windows tmux is outside scope.
+- **Linux, including WSL.** Linux is the required CI platform. macOS is
+  optional; native Windows tmux is outside scope.
 - **Evidence.** The [capability manifest][repo-docs-capabilities-toml] and the
   [CI results](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
   record what is verified. Benchmark baselines and an independent guide

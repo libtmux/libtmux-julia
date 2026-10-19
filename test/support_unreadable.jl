@@ -69,7 +69,7 @@ end
             """#!/bin/sh
 echo 'usage: run-shell [-b] [-t target-pane] shell-command' >&2
 sleep 20 &
-echo \$! > '$pidfile'
+echo \$! >> '$pidfile'
 exit 1
 """,
         )

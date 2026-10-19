@@ -3,7 +3,7 @@
 | Symptom | Meaning and next step |
 | --- | --- |
 | tmux cannot start | Check the executable passed to `Server` or `open_server` |
-| `UnsupportedTmuxVersion`, `unsupported_tmux` or `tmux_unsupported` | The daemon or client is below tmux 3.3a, or reports no known release. Upgrade tmux and restart the server |
+| `UnsupportedTmuxVersion`, `unsupported_tmux` or `tmux_unsupported` | The daemon or client is below tmux 3.7c, or reports no known release. Upgrade tmux and restart the server |
 | Socket path too long | Use a shorter temporary directory for owned daemons |
 | No match | Check whether the source contains entities or link occurrences |
 | Coverage error | Acquire the required field/relation; absence was not established |

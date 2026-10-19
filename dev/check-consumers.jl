@@ -51,7 +51,7 @@ function run_consumer_child(phase::AbstractString, command)
     # Leave the catch stack before throwing so Julia cannot render the raw cause.
     failure isa InterruptException && throw(failure)
     failure === nothing || throw(ConsumerProcessError(String(phase), failure))
-    result
+    return result
 end
 
 function consumer_self_test()
@@ -91,9 +91,10 @@ function consumer_self_test()
     @assert failure.cause isa ProcessFailedException
     @assert only(failure.cause.procs).exitcode == 7
     @assert success(run_consumer_child("successful child", `/bin/sh -c "exit 0"`))
-    println(
-        "PASS consumer child output, exit evidence, inspectable cause and diagnostic omission",
-    )
+    installation = Module(:ReleaseInstallChecks)
+    Base.include(installation, joinpath(@__DIR__, "check-tag-install.jl"))
+    Base.invokelatest(installation.self_test)
+    return println("PASS consumer child diagnostics and Git installation metadata")
 end
 
 function package_files(root)
@@ -126,13 +127,13 @@ function package_files(root)
             end
         end
     end
-    sort!(files)
+    return sort!(files)
 end
 
 digest(path) = bytes2hex(open(sha256, path))
 
 function isolated_environment(stage)
-    (
+    return (
         "JULIA_DEPOT_PATH" => joinpath(stage, "depot"),
         "JULIA_LOAD_PATH" => "@:@stdlib",
         "JULIA_PKG_OFFLINE" => "true",
@@ -141,14 +142,14 @@ function isolated_environment(stage)
 end
 
 function workspace_test_setup(stage)
-    """
-    Pkg.activate($(repr(joinpath(stage, "test-environments", "LibTmuxWorkspace"))))
-    Pkg.develop([
-        Pkg.PackageSpec(path=$(repr(joinpath(stage, "source", "LibTmux")))),
-        Pkg.PackageSpec(path=$(repr(joinpath(stage, "source", "LibTmuxWorkspace")))),
-    ])
-    Pkg.add(Pkg.PackageSpec(name="JSON", version=v"1.9.0"))
-    """
+    return """
+           Pkg.activate($(repr(joinpath(stage, "test-environments", "LibTmuxWorkspace"))))
+           Pkg.develop([
+               Pkg.PackageSpec(path=$(repr(joinpath(stage, "source", "LibTmux")))),
+               Pkg.PackageSpec(path=$(repr(joinpath(stage, "source", "LibTmuxWorkspace")))),
+           ])
+           Pkg.add(Pkg.PackageSpec(name="JSON", version=v"1.9.0"))
+           """
 end
 
 function check_manifest(stage, project)
@@ -226,9 +227,11 @@ function prepare(stage)
         addenv(Cmd(command; dir=stage), isolated_environment(stage)...),
     )
     open(joinpath(stage, "exports.toml"), "w") do io
-        TOML.print(io, exports; sorted=true)
+        return TOML.print(io, exports; sorted=true)
     end
-    println("PASS prepared three isolated import environments; no original source paths")
+    return println(
+        "PASS prepared three isolated import environments; no original source paths",
+    )
 end
 
 function check(stage; imports=true)
@@ -280,18 +283,7 @@ function check(stage; imports=true)
     forbidden = ("LibTmuxMCP", "LibTmuxWorkspace", "HTTP", "YAML", "DataFrames")
     isempty(intersect(dependencies, forbidden)) ||
         error("Core imports a consumer dependency")
-    println("PASS unchanged exported sources and core dependency boundary")
-end
-
-# Control acquisition needs tmux 3.7; next-X.Y and X.Y-rc rank below X.Y.
-function control_supported(tmux)
-    report = last(split(readchomp(`$tmux -V`)))
-    parsed = match(r"\A(?:next-(\d+)\.(\d+)|(\d+)\.(\d+)(?:[a-z]|-rc\d*)?)\z", report)
-    parsed === nothing && return false
-    release =
-        parse.(Int, (something(parsed[1], parsed[3]), something(parsed[2], parsed[4])))
-    prerelease = startswith(report, "next-") || occursin("-rc", report)
-    Tuple(release) > (3, 7) || (Tuple(release) == (3, 7) && !prerelease)
+    return println("PASS unchanged exported sources and core dependency boundary")
 end
 
 function check_examples(stage)
@@ -320,21 +312,7 @@ function check_examples(stage)
         "example cleanup negative control",
         addenv(Cmd(audit; dir=stage), isolated_environment(stage)...),
     )
-    control_examples = ("control_cancel.jl", "output_stream.jl")
-    control = control_supported(tmux)
-    skipped = String[]
     for (name, program) in programs
-        if !control && basename(program) in control_examples
-            push!(skipped, relpath(program, joinpath(stage, "source", name)))
-            println(
-                "SKIPPED ",
-                name,
-                "/",
-                last(skipped),
-                ": control acquisition needs tmux 3.7",
-            )
-            continue
-        end
         project = joinpath(stage, "environments", name)
         example = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$project $program`
         pure = name == "LibTmuxWorkspace" && basename(program) == "plan.jl"
@@ -354,13 +332,10 @@ function check_examples(stage)
             round((time_ns() - started) / 1e9; digits=3),
         )
     end
-    println(
+    return println(
         "PASS ",
-        length(programs) - length(skipped),
-        " of ",
         length(programs),
         " discovered examples from immutable external packages",
-        isempty(skipped) ? "" : " (control examples skipped)",
     )
 end
 
@@ -416,7 +391,7 @@ function main(args)
         "examples"=>check_examples,
         "launchers"=>check_launchers,
     )[args[1]]
-    operation(stage)
+    return operation(stage)
 end
 
 abspath(PROGRAM_FILE) == (@__FILE__) && main(ARGS)

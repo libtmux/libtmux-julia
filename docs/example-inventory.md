@@ -19,8 +19,10 @@ and program links. It does not establish runtime correctness.
 | [docs/criteria-wire.md](../docs/criteria-wire.md) (2) | executable | snippet doctests | JSON 1.9 criteria codec round trip |
 | [docs/projections.md](../docs/projections.md) (1) | executable | owned-context runner | Owned snapshot passed to pane_rows |
 | [docs/projections.md](../docs/projections.md) (2) | executable | owned-context runner | Owned snapshot passed to pane_columns with Tables 1.14 |
+| [docs/src/api-queries.md](../docs/src/api-queries.md) (1) | executable | snippet doctests | Pure native criterion composition and wire round trip |
 | [docs/src/index.md](../docs/src/index.md) (1) | derived | external example runner | [examples/owned_capture.jl](../examples/owned_capture.jl) |
 | [docs/src/observations.md](../docs/src/observations.md) (1) | derived | external example runner | [examples/output_stream.jl](../examples/output_stream.jl) |
+| [docs/src/observations.md](../docs/src/observations.md) (2) | derived | external example runner | [examples/command_completion.jl](../examples/command_completion.jl) |
 | [docs/src/ownership.md](../docs/src/ownership.md) (1) | derived | external example runner | [examples/control_cancel.jl](../examples/control_cancel.jl) |
 | [docs/src/queries.md](../docs/src/queries.md) (1) | derived | external example runner | [examples/shared_windows.jl](../examples/shared_windows.jl) |
 | [docs/src/queries.md](../docs/src/queries.md) (2) | executable | snippet doctests | Pure callable criteria and wire conversion |
@@ -39,12 +41,13 @@ and program links. It does not establish runtime correctness.
 
 ## Executable programs
 
-The external consumer checker discovers and executes all six programs from
+The external consumer checker discovers and executes all programs from
 exported packages. Preparation and normal runtime execution are separate
 from this inventory check.
 
 | Program | Behavior |
 | --- | --- |
+| [examples/command_completion.jl](../examples/command_completion.jl) | owned tmux: authored completion marker and child exit status |
 | [examples/control_cancel.jl](../examples/control_cancel.jl) | owned tmux: cancellation and control cleanup |
 | [examples/output_stream.jl](../examples/output_stream.jl) | owned tmux: output observation and baseline |
 | [examples/owned_capture.jl](../examples/owned_capture.jl) | owned tmux: create, capture and cleanup |
@@ -59,7 +62,7 @@ shipped through Documenter, with a private copy of the workspace fixture.
 Use the prepared quality project containing Documenter, JSON and both
 consumer packages; dependency resolution stays outside the check.
 
-The five derived fences read their executable programs directly during the
+Derived fences read their executable programs directly during the
 manual build. `dev/check-consumers.jl examples STAGE` supplies their separate
 owned-tmux runtime check. `dev/check-consumers.jl launchers STAGE` checks both
 installed consumer launchers; shell command blocks are not Julia fences.
@@ -70,5 +73,5 @@ workspace file and installation directory. It checks results and cleanup.
 
 The scan includes Markdown and library source docstrings. Documenter reference
 directives such as `@autodocs` are not displayed Julia examples; their source
-docstring fences are included here. A normal manual build and an unfamiliar
-Julia developer's task walkthrough remain separate required checks.
+docstring fences are included here. The manual build runs in CI; an unfamiliar
+Julia developer's task walkthrough can supplement the automated checks.

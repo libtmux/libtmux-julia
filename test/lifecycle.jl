@@ -13,7 +13,7 @@ end
 
 # Scripted executables answer the release probe before their scripted failure.
 scripted_release(
-    release="3.3a",
+    release=LibTmux.MINIMUM_TMUX_VERSION,
 ) = "#!/bin/sh\nif [ \"\$1\" = -V ]; then echo 'tmux $release'; exit 0; fi\n"
 
 @testset "owned server lifecycle" begin

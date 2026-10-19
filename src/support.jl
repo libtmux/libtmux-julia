@@ -6,8 +6,8 @@
 using UUIDs: uuid4
 
 # The oldest tmux release that ordinary operations support. Releases compare
-# with their patch letters, so 3.3 is below 3.3a.
-const MINIMUM_TMUX_VERSION = "3.3a"
+# with their patch letters, so 3.7b is below 3.7c.
+const MINIMUM_TMUX_VERSION = "3.7c"
 
 """
     UnsupportedTmuxVersion(observed, minimum, detail)
@@ -116,9 +116,20 @@ _pre_probe_diagnostic(line) =
 
 # The refusal for a tmux that cannot answer the probe. The client's own release,
 # when `-V` reports it, says which side is old.
-function _pre_probe_detail(server::Server, env)
+function _pre_probe_detail(server::Server, env; cancel, timeout, started)
+    detail = "the server or the client is tmux 3.1 or older"
+    probe_started = time_ns()
+    remaining =
+        timeout === nothing ? 5.0 : Float64(timeout) - (probe_started - started) / 1e9
+    remaining > 0 || return detail
     client = try
-        _executable_version(server, env; timeout=5)
+        _executable_version(
+            server,
+            env;
+            cancel,
+            timeout=min(5.0, remaining),
+            started=probe_started,
+        )
     catch
         nothing
     end
@@ -171,7 +182,12 @@ function _daemon_version(
     # three put the release below the floor rather than leave it unreadable.
     result.exitcode != 0 &&
         any(_pre_probe_diagnostic, _stderr_lines(result)) &&
-        throw(UnsupportedTmuxVersion("", _pre_probe_detail(server, env)))
+        throw(
+            UnsupportedTmuxVersion(
+                "",
+                _pre_probe_detail(server, env; cancel, timeout, started),
+            ),
+        )
     throw(CommandError(result, "version probe"))
 end
 
@@ -290,11 +306,7 @@ end
 # executable that would create an absent daemon.
 function _context_release(context)
     environment = _client_environment(ENV)
-    options = (;
-        cancel=context.cancel,
-        timeout=_snapshot_remaining(context.started, context.budget),
-        started=context.started,
-    )
+    options = (; cancel=context.cancel, timeout=context.budget, started=context.started)
     version = _daemon_version(context.server, environment; options...)
     version === nothing ? _executable_version(context.server, environment; options...) :
     version

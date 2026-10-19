@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import ctypes
 import hashlib
 import json
 import os
@@ -12,12 +14,12 @@ from pathlib import Path
 import platform
 import shutil
 import signal
+import selectors
 import subprocess
 import sys
 import tempfile
 import tarfile
 import urllib.request
-import threading
 import time
 import tomllib
 import uuid
@@ -35,7 +37,7 @@ TOOL_PREFERENCES = "[JuliaFormatter]\nprecompile_workload = false\n"
 
 DELIVERY_PHASES = frozenset(("extensions", "docs", "doc-snippets", "doc-contextual",
                             "imports", "external-examples", "external-launchers",
-                            "readme-commands"))
+                            "readme-commands", "api-export", "api-export-check"))
 SUITES = ("runtime", "delivery")
 TMUX_SHA256 = {
     "3.0a": "4ad1df28b4afa969e59c08061b45082fdc49ff512f30fc8e43217d7b0e5f8db9",
@@ -53,12 +55,14 @@ TMUX_SHA256 = {
 
 # Releases below the supported floor. Their cells assert refusal without effect
 # and stay outside the supported matrix.
-REJECTED_TMUX = ("3.0a", "3.1c", "3.2a", "3.3")
+REJECTED_TMUX = ("3.0a", "3.1c", "3.3a", "3.6b")
 # Releases whose daemon answers a current client with a protocol mismatch or a
 # usage error; their cells run the real-build refusal test in place of the
 # owned-daemon rejection suite.
 PRE_PROBE_TMUX = ("3.0a", "3.1c")
-MINIMUM_TMUX = "3.3a"
+MINIMUM_TMUX = "3.7c"
+MINIMUM_JULIA = "1.13.1"
+HARD_WORK_SECONDS = 15 * 60
 
 
 def tmux_configure_command(target, version, os_name):
@@ -130,14 +134,14 @@ def qa_cells():
                           julia=julia, tmux=tmux, threads=threads, suites=tuple(suites),
                           status="NOT RUN"))
 
-    add("Linux", "ubuntu-24.04", "x86_64", "1.10.0", MINIMUM_TMUX, suites=("all",))
+    add("Linux", "ubuntu-24.04", "x86_64", MINIMUM_JULIA, MINIMUM_TMUX, suites=("all",))
     add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.7c", 4, ("all",))
     add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.8", 1, ("all",))
     return cells
 
 
 def rejection_cells():
-    return [dict(label=f"Linux-x86_64-julia1.10.0-tmux{tmux}-rejection", tmux=tmux,
+    return [dict(label=f"Linux-x86_64-julia{MINIMUM_JULIA}-tmux{tmux}-rejection", tmux=tmux,
                  job_label=f"Reject tmux {tmux}",
                  real_old="true" if tmux in PRE_PROBE_TMUX else "false",
                  suite="old-daemon" if tmux in PRE_PROBE_TMUX else "rejection")
@@ -146,7 +150,7 @@ def rejection_cells():
 
 def source_digest():
     digest = hashlib.sha256()
-    inputs = ("Project.toml", "README.md", "LICENSE", ".github/workflows",
+    inputs = ("Project.toml", "README.md", "CHANGELOG.md", "LICENSE", ".github/workflows",
               "src", "ext", "test", "schema", "docs", "examples", "packages",
               "dev", "benchmark")
     for base in inputs:
@@ -197,46 +201,126 @@ def signal_group(process, number):
             raise
 
 
-def phase(name, argv, *, cwd, env, log, budget):
-    """Wait on a child-exit event; retire only this run's process group."""
+def enable_subreaper():
+    """Linux reparents orphaned descendants to this runner for bounded cleanup."""
+    if sys.platform == "linux":
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+            raise OSError(ctypes.get_errno(), "cannot own orphaned test descendants")
+
+
+def retire(process):
+    for number, grace in ((signal.SIGINT, 3), (signal.SIGTERM, 2), (signal.SIGKILL, 5)):
+        if process.poll() is not None:
+            return True
+        signal_group(process, number)
+        try:
+            process.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            continue
+    return process.poll() is not None
+
+
+def retire_orphans(budget=10):
+    """Reap only our children, including detached daemons adopted on Linux."""
+    answer = dict(descendant_retirement="unverified on this platform", reaped=[], killed=[], survivors=[])
+    if sys.platform != "linux":
+        return answer
+    children = Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children")
+    deadline = time.monotonic() + budget
+    while True:
+        owned = [int(pid) for pid in children.read_text().split()]
+        if not owned:
+            answer["descendant_retirement"] = "verified"
+            return answer
+        if time.monotonic() >= deadline:
+            answer["survivors"] = owned
+            return answer
+        for pid in owned:
+            if os.waitpid(pid, os.WNOHANG)[0]:
+                answer["reaped"].append(pid)
+                continue
+            with selectors.DefaultSelector() as selector:
+                descriptor = os.pidfd_open(pid)
+                try:
+                    selector.register(descriptor, selectors.EVENT_READ)
+                    if not selector.select(0):
+                        signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                        answer["killed"].append(pid)
+                    if selector.select(max(0, deadline - time.monotonic())):
+                        os.waitpid(pid, 0)
+                        answer["reaped"].append(pid)
+                finally:
+                    os.close(descriptor)
+
+
+def phase(name, argv, *, cwd, env, log, budget, completion=False):
+    """Stream original output; bound work and cleanup independently."""
     start = time.monotonic()
     log.parent.mkdir(parents=True, exist_ok=True)
-    answer = dict(name=name, command=argv, status="NOT RUN", budget_seconds=budget)
+    answer = dict(name=name, command=argv, status="NOT RUN", hard_limit_seconds=budget)
     process = None
-    waiter = None
-    done = threading.Event()
+    tee = None
+    receipt = log.with_suffix(".toml")
+    receipt.unlink(missing_ok=True)
+    invocation = uuid.uuid4().hex
+    temporary = tempfile.mkdtemp(prefix="ltj-check-", dir="/tmp")
+    env = dict(env, JULIA_TEST_VERBOSE="true", TMPDIR=temporary,
+               LIBTMUX_TEST_TMPDIR=temporary)
+    if completion:
+        env.update(LIBTMUX_TEST_COMPLETION=str(receipt), LIBTMUX_TEST_INVOCATION=invocation)
+    else:
+        env.pop("LIBTMUX_TEST_COMPLETION", None)
+        env.pop("LIBTMUX_TEST_INVOCATION", None)
+    print(f"PHASE START {name} invocation={invocation}", flush=True)
     try:
-        with log.open("wb") as output:
-            process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                                       stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
-            def reap():
-                try:
-                    process.wait()
-                finally:
-                    done.set()
-            waiter = threading.Thread(target=reap, name=f"matrix-{name}")
-            waiter.start()
-            timed_out = not done.wait(budget)
-            if timed_out:
-                signal_group(process, signal.SIGINT)
-                if not done.wait(0.9):
-                    signal_group(process, signal.SIGKILL)
-                    done.wait()
-            waiter.join()
-            answer.update(status="TIMEOUT" if timed_out else "PASS" if process.returncode == 0 else "FAIL",
-                          exit_code=process.returncode, direct_child_reaped=True)
-            if timed_out:
-                answer["cleanup"] = "owned process group signalled; escaped descendants not proved retired"
+        tee = subprocess.Popen(["tee", str(log)], stdin=subprocess.PIPE, start_new_session=True)
+        process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                   stdout=tee.stdin, stderr=subprocess.STDOUT, start_new_session=True)
+        tee.stdin.close()
+        answer.update(pid=process.pid, invocation=invocation)
+        try:
+            process.wait(timeout=max(0, budget))
+            answer["status"] = "PASS" if process.returncode == 0 else "FAIL"
+        except subprocess.TimeoutExpired:
+            answer["status"] = "TIMEOUT"
+        if completion and answer["status"] == "PASS":
+            try:
+                report = tomllib.loads(receipt.read_text())
+                valid = (report["invocation"] == invocation and report["pid"] == process.pid
+                         and report["status"] == "PASS" and bool(report["files"])
+                         and all(row["outcome"] == "RETURNED" for row in report["files"]))
+            except (OSError, ValueError, KeyError, TypeError):
+                valid = False
+            if not valid:
+                answer.update(status="INCOMPLETE", reason="missing, stale or incomplete test receipt")
+    except KeyboardInterrupt:
+        answer["status"] = "INTERRUPTED"
     except FileNotFoundError:
         answer["reason"] = "required executable is unavailable"
     finally:
-        if process is not None and process.poll() is None:
-            signal_group(process, signal.SIGKILL)
-            process.wait()
-        if waiter is not None:
-            waiter.join()
+        if process is not None:
+            answer.update(direct_child_reaped=retire(process), exit_code=process.returncode)
+        if tee is not None:
+            if not tee.stdin.closed:
+                tee.stdin.close()
+            try:
+                tee.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                retire(tee)
+            answer["log_complete"] = tee.returncode == 0
+        answer["cleanup"] = retire_orphans()
+        if not answer["cleanup"]["survivors"] and answer.get("direct_child_reaped", True):
+            shutil.rmtree(temporary)
+            answer["cleanup"]["temporary_directory_removed"] = True
+        else:
+            answer["cleanup"]["temporary_directory_removed"] = False
+        if answer["status"] == "PASS" and (answer["cleanup"]["killed"] or
+                answer["cleanup"]["survivors"] or not answer.get("log_complete", False)):
+            answer.update(status="FAIL", reason="test process left descendants or incomplete output")
         answer["seconds"] = time.monotonic() - start
         answer["log"] = str(log)
+        print(f"PHASE END {name} {answer['status']} {answer['seconds']:.3f}s", flush=True)
     return answer
 
 
@@ -341,6 +425,7 @@ def stdlib_cache_profile(julia, env):
 
 
 def prepare(args):
+    started_preparation = time.monotonic()
     stage = checked_stage(args.stage, create=True)
     initial_digest = source_digest()
     project = stage / "environment"
@@ -372,6 +457,7 @@ def prepare(args):
     if initial_digest != source_digest():
         raise ValueError("source changed during preparation; rerun with stable source (dependency cache retained)")
     metadata = dict(schema_version=1, source_digest=initial_digest, tools=PINNED_TOOLS,
+                    seconds=time.monotonic() - started_preparation,
                     consumers=str(consumers), project=str(project), registry_seed=registry_seed,
                     stdlib_seed=stdlib_seed,
                     tool_preferences=tomllib.loads(TOOL_PREFERENCES))
@@ -395,10 +481,11 @@ def command_plan(args, stage, metadata):
     add("workspace-unit", [*minimal, "packages/LibTmuxWorkspace/test/runtests.jl", "unit"], 30, "unit")
     add("mcp-unit", [*minimal, "packages/LibTmuxMCP/test/runtests.jl", "unit"], 30, "unit")
     add("quality", [*minimal, "dev/check-quality.jl", "quality"], 30, "quality")
-    add("format", [*normal, "dev/check-quality.jl", "format"], 45, "quality")
+    add("format", [*normal, "dev/check-quality.jl", "format"], 30, "quality")
     add("generated", [*minimal, "dev/generate-criteria.jl", "--check"], 30, "quality")
     add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 30, "quality")
     add("consumer-diagnostics", [*minimal, "dev/check-consumers.jl", "--self-test"], 30, "quality")
+    add("test-progress", [sys.executable, "dev/test-progress.py", args.julia], 5, "quality")
     add("example-inventory", [*minimal, "dev/check-doc-examples.jl", "check"], 30, "quality")
     add("readme-links", [*minimal, "dev/check-readme-commands.jl", "static"], 30, "quality")
     add("core-normal", [*normal, "test/runtests.jl", "all"], 300, "outer")
@@ -411,6 +498,8 @@ def command_plan(args, stage, metadata):
     extensions = 'using Test, LibTmux; include("test/criteria.jl"); include("test/json_extension.jl"); include("test/tables_extension.jl")'
     add("extensions", [*normal, "-e", extensions], 300, "outer")
     add("docs", [*normal, "docs/make.jl"], 300, "outer")
+    add("api-export", [*normal, "docs/export-api.jl"], 300, "outer")
+    add("api-export-check", [*normal, "docs/test-export-api.jl"], 300, "outer")
     add("doc-snippets", [*normal, "dev/check-doc-examples.jl", "doctest"], 300, "outer")
     add("doc-contextual", [*normal, "dev/check-doc-examples.jl", "contextual"], 300, "outer")
     add("imports", [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]], 300, "outer")
@@ -421,6 +510,7 @@ def command_plan(args, stage, metadata):
 
 
 def run(args):
+    enable_subreaper()
     stage = checked_stage(args.stage)
     metadata = json.loads((stage / "prepared.json").read_text())
     if metadata["source_digest"] != source_digest():
@@ -430,14 +520,21 @@ def run(args):
         raise ValueError("tool preferences changed since preparation; prepare a fresh stage")
     env = environment(stage, offline=True)
     env.update(LIBTMUX_TEST_TMUX=args.tmux, LIBTMUX_TEST_CLI_COMPILE="normal",
-               LIBTMUX_TEST_MINIMAL_CHILD="0")
+               LIBTMUX_TEST_MINIMAL_CHILD="0", JULIA_TEST_VERBOSE="true")
+    work_seconds = HARD_WORK_SECONDS
+    if "MATRIX_JOB_DEADLINE" in env:
+        work_seconds = min(work_seconds, max(0, float(env["MATRIX_JOB_DEADLINE"]) - time.time() - 180))
+    deadline = time.monotonic() + work_seconds
     result = dict(schema_version=2, source_digest=metadata["source_digest"],
                   platform=platform.system(), machine=platform.machine(), kernel=platform.release(),
                   wsl="microsoft" in platform.release().lower(), threads=args.threads,
                   tools=metadata["tools"], status="NOT RUN", phases=[], suite=args.suite,
                   tier=args.tier, active_phase=None)
+    result["invocation"] = uuid.uuid4().hex
+    result.update(hard_work_seconds=work_seconds, preparation_seconds=metadata.get("seconds"))
     suffix = "" if args.suite == "all" else f"-{args.suite}"
-    destination = stage / f"results-{args.tier}{suffix}-t{args.threads}.json"
+    destination = stage / f"results-{args.tier}{suffix}-t{args.threads}-{result['invocation'][:8]}.json"
+    log_directory = stage / "logs" / result["invocation"]
 
     def save():
         temporary = destination.with_suffix(".tmp")
@@ -467,16 +564,31 @@ def run(args):
                 for name, argv, budget, tier in commands:
                     result["active_phase"] = name
                     save()
-                    item = phase(name, argv, cwd=ROOT, env=env, log=stage / "logs" / f"{name}.log", budget=budget)
-                    item["skipped"] = skipped_checks(stage / "logs" / f"{name}.log")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        result.update(status="TIMEOUT", reason="hard work limit reached")
+                        break
+                    native_suite = any(argument.endswith("/test/runtests.jl") or
+                                       argument == "test/runtests.jl" for argument in argv)
+                    item = phase(name, argv, cwd=ROOT, env=env, log=log_directory / f"{name}.log",
+                                 budget=remaining, completion=native_suite)
+                    item.update(target_seconds=budget, over_target=item["seconds"] > budget)
+                    item["skipped"] = skipped_checks(log_directory / f"{name}.log")
                     result["phases"].append(item)
                     result["active_phase"] = None
                     save()
                     print(f"{item['status']} {name} {item['seconds']:.3f}s", flush=True)
                     for line in item["skipped"]:
                         print(f"::warning title=Skipped in {name}::{line}", flush=True)
+                    if item["status"] in ("TIMEOUT", "INTERRUPTED") or item["cleanup"]["survivors"]:
+                        result["status"] = item["status"]
+                        break
                 report_skipped(result)
-                result["status"] = "PASS" if result["phases"] and all(p["status"] == "PASS" for p in result["phases"]) else "FAIL"
+                completed = {item["name"] for item in result["phases"]}
+                result["not_run"] = [name for name, *_ in commands if name not in completed]
+                if result["status"] == "RUNNING":
+                    result["status"] = "PASS" if not result["not_run"] and result["phases"] and all(
+                        p["status"] == "PASS" for p in result["phases"]) else "FAIL"
                 if metadata["source_digest"] != source_digest():
                     result.update(status="STALE", reason="source changed during checks")
             except BaseException as error:
@@ -496,7 +608,86 @@ def selected_commands(args, stage, metadata):
             and (args.suite == "all" or (item[0] in DELIVERY_PHASES) == (args.suite == "delivery"))]
 
 
+def artifacts(stage):
+    """Export readable evidence without local paths or known credential values."""
+    stage = checked_stage(stage)
+    destination = stage / "artifacts"
+    destination.mkdir(exist_ok=True)
+    deadline = time.monotonic() + 30
+    replacements = [(str(stage), "<stage>"), (str(ROOT), "<checkout>"),
+                    (str(Path.home()), "<home>")]
+    replacements += [(path.replace(str(Path.home()), "~", 1), replacement)
+                     for path, replacement in list(replacements)
+                     if path.startswith(str(Path.home()) + os.sep)]
+    replacements.append(("~/", "<home>/"))
+    replacements += [(value, "<redacted>") for key, value in os.environ.items()
+                     if re.search(r"TOKEN|SECRET|PASSWORD|CREDENTIAL", key) and len(value) >= 8]
+
+    def sanitize(text):
+        for value, replacement in sorted(replacements, key=lambda pair: len(pair[0]), reverse=True):
+            text = text.replace(value, replacement)
+        return text
+
+    sources = [*stage.glob("results-*.json"), *stage.glob("prepared.json"),
+               *stage.glob("logs/**/*.log"), *stage.glob("logs/**/*.toml")]
+    incomplete = []
+    for source in sources:
+        exported = destination / source.relative_to(stage)
+        exported.parent.mkdir(parents=True, exist_ok=True)
+        with source.open(errors="replace") as original, exported.open("w") as output:
+            for line in original:
+                if time.monotonic() >= deadline:
+                    incomplete.append(source.name)
+                    output.write("\nARTIFACT EXPORT INTERRUPTED: finalization deadline\n")
+                    break
+                output.write(sanitize(line))
+    rows = []
+    summary = []
+    receipts = {}
+    for source in stage.glob("results-*.json"):
+        result = json.loads(source.read_text())
+        summary.append(f"{source.name}: {result['status']}\n")
+        summary.append(f"Preparation: {result.get('preparation_seconds')} seconds\n")
+        if result.get("active_phase"):
+            summary.append(f"  INCOMPLETE {result['active_phase']}\n")
+        for item in result["phases"]:
+            if "log" in item and "invocation" in item:
+                receipts[Path(item["log"]).with_suffix(".toml")] = (item["invocation"], item["pid"])
+            rows.append(dict(name=item["name"], status=item["status"], seconds=item["seconds"],
+                             target_seconds=item.get("target_seconds", "")))
+            summary.append(f"  {item['status']} {item['name']}: {item['seconds']:.3f}s"
+                           + (" (over diagnostic target)" if item.get("over_target") else "") + "\n")
+        for name in result.get("not_run", []):
+            summary.append(f"  NOT RUN {name}\n")
+    for source in stage.glob("logs/**/*.toml"):
+        try:
+            receipt = tomllib.loads(source.read_text())
+            if receipts.get(source) != (receipt.get("invocation"), receipt.get("pid")):
+                summary.append(f"Unmatched test receipt: {source.name}\n")
+                continue
+            for row in receipt["files"]:
+                rows.append(dict(name=row["file"], status=row["outcome"], seconds=row["seconds"],
+                                 target_seconds=""))
+        except (ValueError, KeyError):
+            summary.append(f"Incomplete test receipt: {source.name}\n")
+    with (destination / "timings.csv").open("w", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=("name", "status", "seconds", "target_seconds"))
+        writer.writeheader()
+        writer.writerows(sorted(rows, key=lambda row: row["seconds"], reverse=True))
+    summary.append("File and command timings overlap; add neither to their enclosing command.\n")
+    if incomplete:
+        summary.append(f"Incomplete artifact exports: {', '.join(incomplete)}\n")
+    rendered = sanitize("".join(summary))
+    (destination / "summary.txt").write_text(rendered)
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+            output.write("```text\n" + rendered + "```\n")
+    print(rendered)
+    return 1 if incomplete else 0
+
+
 def self_test(julia=None):
+    enable_subreaper()
     if julia:
         script = PACKAGE_SPECIFICATIONS + r'''
 specifications = package_specifications(["Aqua=0.8.18", "JSON=1.9.0"])
@@ -585,6 +776,24 @@ println("PASS admitted version arguments construct real Pkg specifications")
         timed = phase("deadline", [sys.executable, "-c", "import threading; threading.Event().wait()"],
                       cwd=base, env=os.environ.copy(), log=base / "deadline.log", budget=0.05)
         assert timed["status"] == "TIMEOUT" and timed["direct_child_reaped"]
+        incomplete = phase("incomplete", [sys.executable, "-c", "pass"], cwd=base,
+                           env=os.environ.copy(), log=base / "incomplete.log", budget=1, completion=True)
+        assert incomplete["status"] == "INCOMPLETE"
+        for content in ('invocation = "stale"\n', 'invocation = "truncated'):
+            code = "import os; open(os.environ['LIBTMUX_TEST_COMPLETION'], 'w').write(" + repr(content) + ")"
+            incomplete = phase("bad-receipt", [sys.executable, "-c", code], cwd=base,
+                               env=os.environ.copy(), log=base / "bad.log", budget=1, completion=True)
+            assert incomplete["status"] == "INCOMPLETE"
+        if sys.platform == "linux":
+            child = "import threading; threading.Event().wait()"
+            code = ("import subprocess,sys,threading; "
+                    f"subprocess.Popen([sys.executable,'-c',{child!r}],start_new_session=True); "
+                    "print('DETACHED_CHILD_STARTED',flush=True); threading.Event().wait()")
+            cancelled = phase("detached", [sys.executable, "-c", code], cwd=base,
+                              env=os.environ.copy(), log=base / "detached.log", budget=0.2)
+            assert cancelled["status"] == "TIMEOUT"
+            assert cancelled["cleanup"]["reaped"] and not cancelled["cleanup"]["survivors"]
+            assert cancelled["cleanup"]["temporary_directory_removed"]
         log = base / "skipped.log"
         log.write_text("PASS core\n\u250c Warning: control suites skipped: below 3.7\n"
                        "SKIPPED README.md fence 3: control acquisition needs tmux 3.7\nPASS x\n")
@@ -597,7 +806,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
             (cell["os"], cell["arch"], cell["julia"], cell["tmux"], cell["threads"])
             for cell in cells
         ] == [
-            ("Linux", "x86_64", "1.10.0", "3.3a", 1),
+            ("Linux", "x86_64", "1.13.1", "3.7c", 1),
             ("Linux", "x86_64", "1.13.1", "3.7c", 4),
             ("Linux", "x86_64", "1.13.1", "3.8", 1),
         ]
@@ -605,7 +814,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
         rejected = rejection_cells()
-        assert [cell["tmux"] for cell in rejected] == ["3.0a", "3.1c", "3.2a", "3.3"]
+        assert [cell["tmux"] for cell in rejected] == ["3.0a", "3.1c", "3.3a", "3.6b"]
         assert [cell["tmux"] for cell in rejected if cell["real_old"] == "true"] == [
             "3.0a",
             "3.1c",
@@ -652,7 +861,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         budgets = {
             name: budget for name, _, budget, _ in selected_commands(args, base, metadata)
         }
-        assert budgets["format"] == 45
+        assert budgets["format"] == 30
         assert format_warmup_command(args, base) == [
             "julia", "--startup-file=no", "--threads=1", f"--project={base}",
             str(ROOT / "dev/check-quality.jl"), "format",
@@ -674,7 +883,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
              patch.object(subprocess, "check_output", return_value="version"), \
              patch(__name__ + ".command_plan", return_value=plan), \
              patch(__name__ + ".phase", side_effect=[
-                 dict(name="first", status="FAIL", seconds=0.01), KeyboardInterrupt()]), \
+                 dict(name="first", status="FAIL", seconds=0.01, cleanup={"survivors": []}), KeyboardInterrupt()]), \
              redirect_stdout(StringIO()):
             try:
                 run(args)
@@ -682,10 +891,34 @@ println("PASS admitted version arguments construct real Pkg specifications")
                 pass
             else:
                 raise AssertionError("matrix interruption was swallowed")
-        retained = json.loads((base / "results-all-t1.json").read_text())
+        retained = json.loads(next(base.glob("results-all-t1-*.json")).read_text())
         assert retained["status"] == "INTERRUPTED" and retained["active_phase"] == "second"
         assert retained["phases"][0]["status"] == "FAIL"
-    print("PASS owned preparation, phase retirement, suite coverage and interrupted result retention")
+        with patch(__name__ + ".source_digest", return_value="fixed"), \
+             patch.object(shutil, "which", return_value="binary"), \
+             patch.object(subprocess, "check_output", return_value="version"), \
+             patch(__name__ + ".command_plan", return_value=[("slow", [], 0.001, "unit"),
+                                                             ("following", [], 30, "unit")]), \
+             patch(__name__ + ".phase", side_effect=[
+                 dict(name="slow", status="PASS", seconds=0.01, cleanup={"survivors": []}),
+                 dict(name="following", status="PASS", seconds=0.01, cleanup={"survivors": []})]), \
+             redirect_stdout(StringIO()):
+            assert run(args) == 0
+        reports = [json.loads(path.read_text()) for path in base.glob("results-all-t1-*.json")]
+        passed = next(report for report in reports if report["status"] == "PASS")
+        assert passed["phases"][0]["over_target"] and len(passed["phases"]) == 2
+        logs = base / "logs" / "probe"
+        logs.mkdir(parents=True)
+        (logs / "failure.log").write_text(
+            f"{Path.home()}/private failed: original assertion\n~/private failure\nsecret-value\n")
+        with patch.dict(os.environ, {"TEST_SECRET": "secret-value"}), redirect_stdout(StringIO()):
+            assert artifacts(base) == 0
+        exported = (base / "artifacts" / "logs" / "probe" / "failure.log").read_text()
+        assert str(Path.home()) not in exported and "secret-value" not in exported
+        assert "~/" not in exported
+        assert "original assertion" in exported
+        assert "INCOMPLETE second" in (base / "artifacts" / "summary.txt").read_text()
+    print("PASS owned preparation, bounded cleanup, diagnostic overruns and retained sanitized artifacts")
 
 
 def main():
@@ -700,6 +933,8 @@ def main():
     build = sub.add_parser("build-tmux", help="setup only: download, verify and build one pinned release")
     build.add_argument("stage")
     build.add_argument("version", choices=tuple(TMUX_SHA256))
+    export = sub.add_parser("artifacts", help="sanitize logs and results for upload")
+    export.add_argument("stage")
     preparation = sub.add_parser("prepare")
     preparation.add_argument("stage")
     preparation.add_argument("--julia", default="julia")
@@ -729,6 +964,8 @@ def main():
             build_tmux(args)
         elif args.command == "prepare":
             prepare(args)
+        elif args.command == "artifacts":
+            return artifacts(args.stage)
         else:
             return run(args)
     except (ValueError, FileNotFoundError, subprocess.CalledProcessError) as error:

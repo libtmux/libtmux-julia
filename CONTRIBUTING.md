@@ -53,23 +53,21 @@ $ /usr/bin/time -p julia \
     test/runtests.jl integration
 ```
 
-Assert that a release below the 3.3a floor is refused without effect by
+Assert that a release below the 3.7c floor is refused without effect by
 pointing the tmux selector at that release. `LIBTMUX_TEST_CLIENT_TMUX`
 optionally adds a newer client that must not qualify the older daemon:
 
 ```console
-$ LIBTMUX_TEST_TMUX=/path/to/tmux-3.2a julia \
+$ LIBTMUX_TEST_TMUX=/path/to/tmux-3.6b julia \
     --startup-file=no \
     --project=. \
     --threads=1 \
     test/runtests.jl rejection
 ```
 
-Below tmux 3.7 the control suites are skipped, and below 3.4 the named-buffer
-load, save and delete cases are skipped; `test/features.jl` asserts those
-refusals instead. Skips are warned in the log, and the matrix runner collects
-them into its result file and the job summary. A skipped check is not a
-passing one.
+The global tmux floor is 3.7c. Rejection tests verify that older daemons cannot
+receive effectful operations, including after replacing a previously checked
+daemon. A skipped check is not a passing check.
 
 Run both suites before handoff, and repeat with `--threads=4` when changing
 process ownership, cancellation, or concurrent I/O:
@@ -85,8 +83,8 @@ $ /usr/bin/time -p julia \
 Use `--compile=min -O0` for the inner and mid semantic loops, including all
 unit tests. Normal compilation belongs in the outer loop because it includes
 Julia compilation across every public feature. Minimal compilation does not
-replace those normal checks or establish performance. The runner accepts only
-`unit`, `integration`, and `all`; omitting the argument selects `all`.
+replace those normal checks or establish performance. The runner accepts `unit`, `integration`, `all`, or a test-file stem;
+omitting the argument selects `all`.
 
 The forced-cleanup case belongs to the outer loop because it deliberately
 stops its owned daemon and waits for the 900 ms shutdown deadline:
@@ -414,7 +412,7 @@ still uses normal compilation and inspects every owned source file. Product
 precompilation is unchanged. Prepared metadata records the preference, and
 the runner rejects preference changes before checking the cell.
 Preparation runs the same read-only formatter check at the selected thread
-count so the timed quality gate keeps its 30-second budget.
+count. Its cost is included in preparation, independently of check timings.
 
 ```console
 $ matrix_stage=$(mktemp -d "${TMPDIR:-/tmp}/ltj-matrix.XXXXXX")
@@ -462,24 +460,28 @@ Both must pass at the same source revision to complete a split cell. Use
 `--suite runtime` or `--suite delivery` to run one partition locally; omitting
 the option runs both.
 
-Pull requests run combined QA cells: Linux floor (tmux 3.3a) at one thread,
-current Linux at four threads, and Linux on tmux 3.8 at one thread. CI does
-not run macOS. macOS is supported on a best-effort basis, and CI coverage for
-it is highly limited. Rejection cells run tmux 3.0a, 3.1c, 3.2a and the
-unpatched 3.3 release against `test/runtests.jl rejection`, with
-the release as its own client and behind a 3.3a client; they assert that
-operations are refused without effect and sit outside the supported matrix. The
-3.0a and 3.1c cells run `test/runtests.jl old-daemon` instead: the real old
-daemon behind a 3.3a client. Every rejection cell also runs the workspace CLI
-against a real daemon of the rejected release, and the 3.0a and 3.1c cells run
-the MCP tools against a daemon that replaces a checked one. Both package suites
-are `runtests.jl old-daemon` and fail instead of skipping when the builds are
-absent. Intermediate releases remain explicit compatibility work; an unrun
-release is not support.
+Pull requests run Linux checks on Julia 1.13.1 with tmux 3.7c at one and four
+threads and tmux 3.8 at one thread. macOS jobs are informational. Rejection
+jobs use tmux 3.0a, 3.1c, 3.3a and 3.6b with a current client; these versions
+must be refused without effect. The oldest two also exercise protocol-mismatch
+replies from real old daemons in the core and MCP packages.
 
-The driver saves structured results before and after each phase. Interrupted
-runs retain completed failures and identify the unfinished phase; they never
-establish a passing cell.
+Set `JULIA_TEST_VERBOSE=true` for native nested testset start/finish messages.
+The file wrapper preserves assertion details and continues later files after a
+failure. A native testset finish message can be printed during interruption;
+only a matching final receipt and successful process exit establish completion.
+
+The runner streams original logs, saves partial results between phases and
+reports diagnostic timing overruns. A fifteen-minute work limit stops admission
+and interrupts owned processes, escalating when necessary. Cleanup is separately
+bounded. Linux adopts and reaps escaped descendants; artifacts record survivors
+and cleanup failures. CI reserves time within its twenty-minute job for cleanup
+and sanitized artifact upload. Profiling is optional troubleshooting, using
+Julia's standard `Profile` tools.
+
+Each artifact contains a readable summary, ranked timing CSV, original failure
+logs with local paths and known credentials removed, completion receipts and
+partial result records. File times overlap command times; do not add both.
 
 Print the exact planned version/platform cells:
 
@@ -488,38 +490,30 @@ $ python3 dev/check-matrix.py matrix
 ```
 
 Planned cells begin as `NOT RUN`. Only recorded successful checks against
-unchanged sources establish a passed cell. WSL counts as Linux. The workflow
-is prepared in `.github/workflows/julia.yml`; remote CI results require an
-actual run.
+unchanged sources establish a passed cell. WSL counts as Linux; no local
+Linux run establishes macOS support. The workflow is prepared in
+`.github/workflows/julia.yml`; remote CI results require an actual run.
 
 Run performance work separately using [the benchmark guide](benchmark/README.md).
 It covers execution modes, local criteria, output pressure and installed
 MCP/workspace processes. Keep raw results and compiler flags with any claim.
 
-## Verification budgets and remaining gates
+## Diagnostic timing targets
 
-Measure the whole command. Libraries should aim for the stretch budget.
+Time whole commands, including startup, setup and cleanup. Aim for roughly
+five seconds for focused checks, thirty seconds for unit/quality checks and
+five minutes for complete outer checks. These targets are diagnostic, not
+pass/fail thresholds. Investigate substantial regressions without adding blind
+retries or sleeps. Product deadlines, cancellation and cleanup remain correctness
+requirements.
 
-| Loop | Budget | Stretch | Scope |
-| --- | --- | --- | --- |
-| Inner | Under 5 seconds | Under 2 seconds | Focused tests after each edit |
-| Mid | Under 30 seconds | Under 10 seconds | Unit suites, lint, and generated-file checks before handoff |
-| Outer | Under 5 minutes | Under 60 seconds | Types, builds, integration tests, and compatibility checks before commit or PR |
+Keep network access, installs, production builds, browsers, sleeps and broad
+corpus scans out of inner and mid loops. Prepare dependencies before checking
+and report preparation separately. Normal compilation and installed consumers
+belong in the outer loop. Compiler caches do not replace correctness checks.
 
-The current runnable tiers include unit checks, owned-tmux integration,
-forced-cleanup cases, generated criteria and external imports. Four CI product
-cells cover quality, example discovery and compatibility at their listed
-checkpoints. Benchmark baselines and an independent guide walkthrough remain
-open. Focused passing checks do not establish support outside recorded cells.
-
-Keep network access, installs, production builds, browsers, sleeps, and broad
-corpus scans out of the inner and mid loops. Replace polling delays with
-events or subscriptions. Investigate waits over one second and remove their
-cause. Tag slow tests with a one-line reason and run them in the outer loop.
-Fix an over-budget loop before adding tests; do not raise its budget.
-
-Benchmarks are separate: keep each run under ten minutes and a full sweep
-under one hour. Reduce sizes when necessary.
+Benchmark work is separate from merge readiness. Keep each run under ten
+minutes and a full sweep under one hour; reduce sizes when necessary.
 
 ## Review
 

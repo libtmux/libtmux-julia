@@ -15,16 +15,13 @@ with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do se
             @assert baseline.continuity === :reset
             message = "observed terminal echo: λ"
             send_keys(server, pane, message; literal=true)
-            bytes = UInt8[]
-            started = time_ns()
-            while length(bytes) < ncodeunits(message)
-                remaining = 0.9 - (time_ns() - started) / 1e9
-                remaining > 0 || error("terminal echo deadline expired")
-                append!(bytes, take!(stream; timeout=remaining).bytes)
+            result = wait_for(stream; timeout=0.9) do observed
+                observed.text == message
             end
-            @assert bytes == codeunits(message)
+            @assert result.text == message
+            @assert result.source === :output
             @assert observation_cursor(stream).pane == pane.id
-            println(decode_text(bytes))
+            println(result.text)
         end
     end
 end

@@ -352,7 +352,7 @@ function open_server(;
             Server(; socket_name="owned", tmux=executable),
             environment;
             cancel,
-            timeout=_snapshot_remaining(started, budget),
+            timeout=budget,
             started,
         ),
     )

@@ -133,9 +133,10 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
             :open_control,
             "control acquisition requires tmux 3.7",
         )
-        for name in ("capture_pane", "send_keys")
-            error = LibTmuxMCP._tool_error(failure, name)
-            @test error["code"] == "unsupported_capability" && error["effects"] == "none"
+        for admitted in (false, true)
+            error = LibTmuxMCP._tool_error(failure, admitted)
+            @test error["code"] == "unsupported_capability" &&
+                  error["effects"] == (admitted ? "possible" : "none")
             @test occursin("3.7", error["message"])
         end
     end
@@ -245,12 +246,6 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
 
 end
 
-# The waiting tools observe through control clients (tmux 3.7) and poll the
-# screen below it, so the evidence they report differs by release.
-mcp_control_supported = LibTmux._version_at_least(
-    last(split(readchomp(`$(get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) -V`))),
-    LibTmux.CONTROL_MINIMUM_TMUX,
-)
 if isempty(ARGS) || any(arg -> arg in ("effects", "integration", "all"), ARGS)
     if isdefined(Main, :include_test_file)
         Main.include_test_file(@__MODULE__, joinpath(@__DIR__, "effects.jl"))
@@ -688,14 +683,12 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                     Dict("keys"=>["λ-ready", "Enter"], "text"=>"reply:λ-ready"),
                 )
                 @test !sent.is_error
-                @test sent.structured_content["source"] ==
-                      (mcp_control_supported ? "output" : "screen") &&
+                @test sent.structured_content["source"] == "output" &&
                       sent.structured_content["keysSent"]
                 @test sent.structured_content["evidence"] == "literal_text"
                 baseline = tool_result(app, "wait_for_text", Dict("text"=>"reply:λ-ready"))
                 @test !baseline.is_error &&
-                      baseline.structured_content["source"] ==
-                      (mcp_control_supported ? "baseline" : "screen")
+                      baseline.structured_content["source"] == "baseline"
                 @test baseline.structured_content["continuity"] == "reset"
                 callback_failure = tool_result(
                     app,

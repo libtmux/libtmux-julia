@@ -72,7 +72,7 @@ end
             executable,
             raw"""#!/bin/sh
 if [ "$6" = run-shell ]; then
-    printf 'unknown command: %s3.7\n' "${8%\#\{version\}}" >&2
+    printf 'unknown command: %s3.7c\n' "${8%\#\{version\}}" >&2
     exit 1
 fi
 shift 7
@@ -90,7 +90,7 @@ esac
         )
         chmod(executable, 0o700)
         write(executable * ".codec", "A\\\\B\\tC\\nD\n")
-        write(executable * ".metadata", "100\t200\t3.7\t$socket\n")
+        write(executable * ".metadata", "100\t200\t3.7c\t$socket\n")
         server = Server(socket_path=socket, tmux=executable)
         identity = ServerIdentity(socket_path=socket, generation="100:200")
         session_ref = SessionRef(identity, "\$0")

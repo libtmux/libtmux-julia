@@ -73,7 +73,11 @@ temporary directory that would exceed tmux's UNIX-socket path limit. The
 callback sees the matching `TMUX_TMPDIR` and no inherited tmux selector.
 """
 function with_named_tmux(f; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"))
-    directory = mktempdir("/tmp"; prefix="ltj-named-", cleanup=false)
+    directory = mktempdir(
+        get(ENV, "LIBTMUX_TEST_TMPDIR", "/tmp");
+        prefix="ltj-named-",
+        cleanup=false,
+    )
     process = nothing
     watcher = nothing
     monitor = nothing

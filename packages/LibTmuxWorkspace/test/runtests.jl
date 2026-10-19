@@ -1,9 +1,6 @@
 include(joinpath(@__DIR__, "..", "..", "..", "dev", "test-diagnostics.jl"))
 using Test
 
-if get(ENV, "LIBTMUX_TEST_COMPILER_CACHE", "0") == "1"
-    import LibTmuxWorkspaceCheckCompiler
-end
 finish_test_imports()
 
 suite = isempty(ARGS) ? "unit" : only(ARGS)
@@ -22,22 +19,7 @@ if suite in ("integration", "old-daemon", "all")
     # Needs real builds; skips unless LIBTMUX_TEST_TMUX and the client are set.
     push!(files, "old_daemon")
 end
-if CI_TEST_DIAGNOSTICS !== nothing || get(ENV, "LIBTMUX_TEST_INVENTORY_ONLY", "0") == "1"
-    inventory = [joinpath(@__DIR__, file * ".jl") for file in files]
-    "cli" in files && push!(inventory, joinpath(@__DIR__, "cli_output.jl"))
-    "cli_integration" in files &&
-        push!(inventory, joinpath(@__DIR__, "cli_backpressure.jl"))
-    declare_test_files(inventory)
-end
 for file in files
-    path = joinpath(@__DIR__, file * ".jl")
-    if isdefined(@__MODULE__, :LibTmuxWorkspaceCheckCompiler) &&
-       hasproperty(LibTmuxWorkspaceCheckCompiler.FILE_CHECKS, Symbol(file))
-        run_test_file(path) do
-            LibTmuxWorkspaceCheckCompiler.run_file(file)
-        end
-    else
-        include_test_file(@__MODULE__, path)
-    end
+    include_test_file(@__MODULE__, joinpath(@__DIR__, file * ".jl"))
 end
 finish_test_diagnostics()

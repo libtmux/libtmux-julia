@@ -1,74 +1,68 @@
 # Compatibility
 
-| Boundary | Current evidence |
-| --- | --- |
-| Julia / tmux | 1.10.0 / 3.3a, 1.13.1 / 3.7c and 1.13.1 / 3.8 on Linux, in the listed CI cells |
-| Linux x86_64 | 1.10.0 / 3.3a / 1 thread, 1.13.1 / 3.7c / 4 threads and 1.13.1 / 3.8 / 1 thread passed in Julia workflow run 39157326487 |
-| Full package suite | Core, MCP, workspace, extensions, documentation, external imports, examples and launchers passed in all listed cells |
+The minimums are Julia 1.13.1 and tmux 3.7c. Core, MCP and workspace packages
+share these requirements. The higher tmux floor excludes unsafe older control
+attachment, named-buffer deletion and session/window name behavior.
 
-CI runs Linux only. macOS is supported on a best-effort basis, and CI
-coverage for it is highly limited.
+Linux is the required platform. CI checks tmux 3.7c at one and four threads and
+tmux 3.8 at one thread, using Julia 1.13.1. macOS jobs are optional. An unrun
+platform or release is not established support; package resolution alone is
+not runtime evidence.
 
-These are exact CI cells, not a promise for other Julia, tmux, platform,
-architecture or thread combinations. Julia 1.10.0 on tmux 3.3a is the evidence
-for the Julia 1.10 floor. An independent guide walkthrough and benchmark
-baselines remain open.
+See the [CI runs](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
+for the result at a particular commit. The capability manifest retains older
+baseline results separately. They do not establish that a newer commit passes.
 
-The minimum tmux release for ordinary operations is 3.3a. The first
+## Version refusal
+
+The minimum tmux release for ordinary operations is 3.7c. The first
 subprocess command to an endpoint reads the connected daemon's release, not
 the client's `-V` report. Later commands to the same executable and endpoint
 skip that read and rely on a fence: every command runs behind a check on the
-release it was admitted for. A daemon below 3.3a, an unreadable release, or a
+release it was admitted for. A daemon below 3.7c, an unreadable release, or a
 daemon replaced after the version check raises [`UnsupportedTmuxVersion`](@ref)
 before the command has any effect. A fence mismatch, a vanished endpoint or a
 tmux 3.1 or older answer drops the remembered release, and the next read
 decides. Reading the release fires no `after-*` or `command-error` hook. An
 endpoint with no daemon is checked against the `-V` report of the executable
 that would start it, and `kill-server` on such an endpoint does nothing.
-Releases are compared with their patch letters, so 3.3 is below the floor;
+Releases are compared with their patch letters, so 3.7b is below the floor;
 `next-X.Y` and `X.Y-rc` rank below `X.Y`, and a bare `master` or OpenBSD report
 names no release and is refused as unrecognized. A daemon or client of tmux 3.1
 or older has no `run-shell -C` and is refused as unsupported the same way. Each
 refusal says to upgrade tmux and restart the server, or pin the previous
-libtmux release. CI keeps 3.0a, 3.1c, 3.2a and 3.3 as rejection cells, each
-run behind a 3.3a client, that assert this refusal and that nothing changed.
+libtmux release. CI keeps 3.0a, 3.1c, 3.3a and 3.6b as rejection cells, each
+run behind a 3.7c client, that assert this refusal and that nothing changed.
 
-The repository capability manifest records implemented, deferred, excluded
-and untested surfaces. tmux letter suffixes are meaningful; `3.3a` is not
-silently normalized to `3.3`.
+## Optional capabilities
 
-## Optional features above the floor
+JSON layouts require tmux 3.8. Unsupported requests raise
+`UnsupportedCapability` before dispatch. Layout strings are validated
+before being sent to tmux. Other operations use the global 3.7c floor; no
+older-release paste fallback or screen-polling wait is retained.
 
-Some operations need a newer daemon than the 3.3a floor. Each requirement
-belongs to its operation, is decided from the connected daemon before the
-operation has an effect, and raises `UnsupportedCapability` naming the release.
-Ordinary subprocess operations stay available on 3.3a.
+The core uses standard libraries. JSON and Tables integrations are optional
+extensions. MCP and workspace dependencies remain in their own packages.
 
-| Feature | Requirement | Below it | State |
-| --- | --- | --- | --- |
-| Control acquisition: `open_control`, control batches, output streams, format subscriptions and the MCP waiting tools | tmux 3.7 | Refused before any attach client starts | The refusal is qualified; concurrent acquisition on 3.7 and later is unverified |
-| Named-buffer deletion: `load_buffer` and `delete_buffer` | tmux 3.4 | Refused before any buffer exists | The refusal is qualified |
-| `:` or `.` in session and window names | Not tmux 3.7 | Refused for that exact release before dispatch | The refusal is qualified |
-| Mirrored layouts | tmux 3.5 | Refused before dispatch | Qualified |
+Local POSIX tmux is the transport scope. SSH, native Windows tmux, private
+imsg access and Python workspace plugins are excluded. Query pushdown, portable
+regex/Unicode folding, general execution DAGs and MCP HTTP remain deferred.
+Native Julia regex works in ordinary local predicates.
 
-Short control attaches crash tmux servers before 3.7, which is why acquisition
-is decided first. Exact-name buffer deletion can act on an unrelated buffer
-before 3.4 when the name is missing. Layout strings are validated before
-dispatch on every release, because 3.3a crashes on an invalid one.
+## Verification
 
-`paste_bytes`, `paste_text` and workspace commands that paste work on 3.3a.
-Before 3.4 the paste itself deletes its staging buffer (`paste-buffer -d`),
-because deleting by a missing name can take an unrelated buffer; a paste that
-fails after the buffer was loaded leaves that one named buffer behind. The
-library does not capture `run-shell` output or call `break-pane`, so those
-release restrictions do not apply, and it keeps no short socket alias because
-it does not attach to sockets outside its owned directories.
+Whole-command times are diagnostic: aim for five seconds for focused checks,
+thirty seconds for unit/quality checks and five minutes for the complete outer
+checks. A slower correct result remains a pass. The runner stops test work at
+fifteen minutes, retires owned processes and preserves partial evidence.
+Dependency acquisition and precompilation are measured separately.
 
-Local POSIX tmux is the initial transport scope. SSH, native Windows tmux,
-private tmux imsg access and Python workspace plugins are excluded. Query
-pushdown, portable regex/Unicode folding, general execution DAGs and remote
-MCP HTTP remain deferred. Native Julia regex works in ordinary local predicates.
+Required acceptance covers correctness, installed consumers, shipped examples
+and package/documentation checks. Benchmark completion and exhaustive profiling
+are separate work.
 
-The core uses standard libraries. JSON/Tables integrations are package
-extensions; MCP and workspace dependencies remain in their separate packages.
-Julia compatibility declarations are resolver constraints, not test evidence.
+```@raw html
+<p>See <a href="../source/CONTRIBUTING.md.html">the contributor guide</a> and
+<a href="../source/docs/capabilities.toml.html">the capability manifest</a>
+included in this build for scope and evidence.</p>
+```

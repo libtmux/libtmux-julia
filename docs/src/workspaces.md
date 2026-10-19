@@ -5,26 +5,18 @@ expansion and planning are pure. Applying a plan creates tmux resources and
 can execute shell input. Keep those stages explicit when reviewing an
 untrusted configuration.
 
-Loading and freezing need tmux 3.3a or newer. The workspace CLI reports an
+Loading and freezing need tmux 3.7c or newer. The workspace CLI reports an
 older or unreadable tmux as error code `tmux_unsupported` with exit status 3,
 in every output mode, and applies nothing.
 
-From a consumer project directory, add the core and workspace package from the
-same public Git tag:
-
-```console
-$ julia \
-    --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.2"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
-```
+Prepare a consumer project with the core and workspace packages from the same
+revision using [Install](installation.md#workspace-loader).
 
 The following executable source example needs a checkout and its own consumer
-environment. Clone the same tag, then enter the checkout:
+environment. Clone the tested public source, then enter the checkout:
 
 ```console
 $ git clone \
-    --branch v0.1.0-alpha.2 \
-    --depth 1 \
     https://github.com/libtmux/libtmux-julia.git
 ```
 
@@ -32,12 +24,16 @@ $ git clone \
 $ cd libtmux-julia
 ```
 
+```console
+$ git checkout adoption-2026-10-18
+```
+
 Create a local environment for the example:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate(".workspace-env"); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.2"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
+    -e 'using Pkg; Pkg.activate(".workspace-env"); Pkg.develop([Pkg.PackageSpec(path=abspath(".")), Pkg.PackageSpec(path=abspath("packages/LibTmuxWorkspace"))]); Pkg.instantiate()'
 ```
 
 It loads two panes, checks their layout and focus, freezes the supported

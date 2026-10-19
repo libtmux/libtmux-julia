@@ -17,6 +17,7 @@ mutable struct _CLIOwnedOutput
     max_bytes::Int
     timeout::Float64
     closing::Bool
+    writing::Bool
     io_closed::Bool
     failure::Union{Nothing,Exception}
     worker::Union{Nothing,Task}
@@ -115,13 +116,15 @@ function _cli_output_worker(owner)
             isempty(owner.queue) && return nothing
             item = popfirst!(owner.queue)
             owner.bytes -= ncodeunits(last(item))
+            owner.writing = true
             item
         end
         item === nothing && return
         destination, text = item
         deadline = _CLIOutputDeadline(owner, :write_deadline)
-        timer, timer_task = _owned_timer(deadline, owner.timeout)
+        timer, timer_task = nothing, nothing
         try
+            timer, timer_task = _owned_timer(deadline, owner.timeout)
             stream = destination === :out ? owner.out : owner.err
             write(stream, text)
             flush(stream)
@@ -129,8 +132,15 @@ function _cli_output_worker(owner)
             _cli_output_abort(owner, _CLIOutputError(:write, error))
         finally
             deadline.active[] = false
-            close(timer)
-            wait(timer_task)
+            try
+                timer === nothing || close(timer)
+                timer_task === nothing || wait(timer_task)
+            finally
+                lock(owner.changed) do
+                    owner.writing = false
+                    notify(owner.changed; all=true)
+                end
+            end
         end
     end
 end
@@ -149,6 +159,7 @@ function _CLIOwnedOutput(out::IO, err::IO; timeout=0.5, max_items=64, max_bytes=
         max_items,
         max_bytes,
         Float64(timeout),
+        false,
         false,
         false,
         nothing,
@@ -180,6 +191,17 @@ function _cli_output_enqueue(owner, destination, text)
     nothing
 end
 
+function _cli_output_wait(owner)
+    failure = lock(owner.changed) do
+        while owner.failure === nothing && (owner.writing || !isempty(owner.queue))
+            wait(owner.changed)
+        end
+        owner.failure
+    end
+    failure === nothing || throw(failure)
+    nothing
+end
+
 function Base.close(owner::_CLIOwnedOutput)
     lock(owner.changed) do
         owner.closing = true
@@ -205,6 +227,7 @@ end
 if ccall(:jl_generating_output, Cint, ()) == 1
     precompile(_cli_output_worker, (_CLIOwnedOutput,))
     precompile(_cli_output_enqueue, (_CLIOwnedOutput, Symbol, String))
+    precompile(_cli_output_wait, (_CLIOwnedOutput,))
     precompile(_cli_output_abort, (_CLIOwnedOutput, _CLIOutputError))
     precompile(_cli_output_close_io, (_CLIOwnedOutput,))
     precompile(Base.close, (_CLIOwnedOutput,))

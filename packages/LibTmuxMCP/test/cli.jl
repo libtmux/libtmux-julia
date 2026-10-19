@@ -29,7 +29,7 @@ using Test, LibTmuxMCP
     @test LibTmuxMCP.main(["--help"]; output=out, err) == 0
     help = String(take!(out))
     @test occursin("--caller-pane", help) && isempty(take!(err))
-    @test occursin("tmux 3.3a or newer", help) && occursin("unsupported_tmux", help)
+    @test occursin("tmux 3.7c or newer", help) && occursin("unsupported_tmux", help)
     @test LibTmuxMCP.main(String[]; output=out, err) == 2
     @test isempty(take!(out)) && occursin("socket", String(take!(err)))
 end

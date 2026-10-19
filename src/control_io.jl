@@ -264,3 +264,41 @@ function snapshot(
     end
     error("unreachable snapshot retry state")
 end
+
+function _snapshot_scope_rows(
+    connection::ControlConnection,
+    command,
+    fields,
+    context;
+    kwargs...,
+)
+    _control_rows(
+        connection,
+        command,
+        fields;
+        timeout=_snapshot_remaining(context.started, context.budget),
+        cancel=context.cancel,
+        kwargs...,
+    )
+end
+
+_snapshot_scope_identity(connection::ControlConnection, scope, context) =
+    _control_exact_target(connection, scope)
+
+"""
+    snapshot(connection, scope::Union{SessionRef,WindowRef}; timeout=5.0, cancel=nothing)
+
+Capture an exact session or window through the existing control connection.
+Return the same scoped view and membership coverage as `snapshot(server, scope)`.
+The scope may belong to another session on this daemon. Connection identity
+binds the capture; two topology observations share one total deadline.
+"""
+function snapshot(
+    connection::ControlConnection,
+    scope::Union{SessionRef,WindowRef};
+    kwargs...,
+)
+    context = _control_operation_context(connection; kwargs...)
+    _control_exact_target(connection, scope)
+    _scoped_snapshot(connection, scope, context)
+end

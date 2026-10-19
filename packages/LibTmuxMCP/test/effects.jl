@@ -16,7 +16,7 @@ using Test, LibTmux, LibTmuxMCP
             server;
             caller,
             allowed_tools=("list_panes", "capture_pane", "wait_for_text", "run_operations"),
-            timeout=0.9,
+            timeout=5.0,
         )
         try
             catalog = tools(app)
@@ -84,52 +84,46 @@ using Test, LibTmux, LibTmuxMCP
             @test get_environment(server, :global, "LTJ_LIST_HOOK").value == "observed"
 
             @testset "MCP cancellation after attachment" begin
-                # Deadline can expire before cancellation is sent; follow-up:
-                # https://github.com/libtmux/libtmux-julia/issues/8
-                @test_skip begin
-                    set_hook(
-                        server,
-                        :global_session,
-                        "client-attached",
-                        "set-environment -g LTJ_ATTACH_HOOK observed",
+                # Cancellation is triggered by readiness, not elapsed time.
+                set_hook(
+                    server,
+                    :global_session,
+                    "client-attached",
+                    "set-environment -g LTJ_ATTACH_HOOK observed",
+                )
+                token = CancellationToken()
+                waiting_reached = Ref(false)
+                waited = LibTmuxMCP._invoke_tool(
+                    app,
+                    "wait_for_text",
+                    Dict("text"=>"never-emitted");
+                    cancel=token,
+                    progress=phase -> begin
+                        if phase == "waiting"
+                            waiting_reached[] = true
+                            cancel!(token)
+                        end
+                    end,
+                )
+                if !(
+                    waited.is_error &&
+                    get(get(waited.structured_content, "error", Dict()), "code", nothing) ==
+                    "cancelled"
+                )
+                    println(
+                        stderr,
+                        "whole-call effects wait payload: ",
+                        waited.structured_content,
+                        "; waiting reached: ",
+                        waiting_reached[],
                     )
-                    token = CancellationToken()
-                    waiting_reached = Ref(false)
-                    waited = LibTmuxMCP._invoke_tool(
-                        app,
-                        "wait_for_text",
-                        Dict("text"=>"never-emitted");
-                        cancel=token,
-                        progress=phase -> begin
-                            if phase == "waiting"
-                                waiting_reached[] = true
-                                cancel!(token)
-                            end
-                        end,
-                    )
-                    if !(
-                        waited.is_error &&
-                        get(
-                            get(waited.structured_content, "error", Dict()),
-                            "code",
-                            nothing,
-                        ) == "cancelled"
-                    )
-                        println(
-                            stderr,
-                            "whole-call effects wait payload: ",
-                            waited.structured_content,
-                            "; waiting reached: ",
-                            waiting_reached[],
-                        )
-                    end
-                    @test waited.is_error &&
-                          waited.structured_content["error"]["code"] == "cancelled"
-                    @test waited.structured_content["error"]["effects"] == "possible"
-                    @test get_environment(server, :global, "LTJ_ATTACH_HOOK").value ==
-                          "observed"
-                    @test isempty(clients(snapshot(server)))
                 end
+                @test waited.is_error &&
+                      waited.structured_content["error"]["code"] == "cancelled"
+                @test waited.structured_content["error"]["effects"] == "possible"
+                @test get_environment(server, :global, "LTJ_ATTACH_HOOK").value ==
+                      "observed"
+                @test isempty(clients(snapshot(server)))
             end
         finally
             close(app)
