@@ -23,7 +23,7 @@ leaves it running.
 **Contents** — [Quick start](#quick-start) ·
 [Point a client at a server](#point-a-client-at-a-server) ·
 [Choose the tools](#choose-the-tools) ·
-[Confine a client](#confine-a-client-to-one-pane) ·
+[Restrict pane targets](#restrict-a-clients-pane-targets) ·
 [Use the tools](#use-the-tools) · [Library use](#use-it-as-a-library) ·
 [Leaves out](#what-it-leaves-out) · [Support](#support-and-status) ·
 [Documentation](#documentation) ·
@@ -140,12 +140,12 @@ $ claude mcp add tmux-wait -- \
     --tool send_keys_and_wait
 ```
 
-## Confine a client to one pane
+## Restrict a client's pane targets
 
 ### `--caller-pane` and `--allow-pane`: one pane, no others
 
-To confine a client to one pane, find its ID and pass it as both the default
-target and the allowed set:
+To restrict a client's tools to one pane, find its ID and pass it as both the
+default target and the allowed set:
 
 ```console
 $ tmux -L agent list-panes -a -F '#{pane_id}'
@@ -164,7 +164,8 @@ $ claude mcp add tmux-pane -- \
 ```
 
 With `--caller-pane`, a call that omits `target` uses that pane. It never uses
-the control client's current pane. Calls that name another pane are denied.
+the control client's current pane. `--allow-pane` denies other pane targets;
+`--caller-pane` alone does not. Commands sent to the shell retain its host access.
 
 ## Use the tools
 
@@ -324,7 +325,8 @@ ownership.
 - **Older tmux is refused.** The initial check reports `unsupported_tmux` and
   `effects: none`. A later refusal preserves earlier possible effects. Upgrade
   tmux and restart the server, or pin a compatible libtmux release.
-- **Linux, including WSL.** Linux is the required CI platform. macOS is optional.
+- **Linux, including WSL.** CI runs Linux only. macOS and psmux are excluded
+  from CI.
 
 ## Documentation
 

@@ -4,7 +4,7 @@ const DOC_EXAMPLE_ROOT = dirname(@__DIR__)
 const DOC_EXAMPLE_LANGUAGES =
     Set(("julia", "jl", "jldoctest", "@example", "@repl", "@eval", "@setup"))
 
-function document_fences(text, path)
+function document_fences(text, path; languages=DOC_EXAMPLE_LANGUAGES)
     entries = NamedTuple[]
     lines = split(replace(text, "\r\n"=>"\n"), '\n'; keepempty=true)
     delimiter = nothing
@@ -24,7 +24,7 @@ function document_fences(text, path)
             line,
         )
             language = isempty(info) ? "" : first(split(info))
-            if language in DOC_EXAMPLE_LANGUAGES
+            if language in languages
                 code = join(lines[(start+1):(number-1)], '\n') * "\n"
                 push!(
                     entries,
@@ -649,17 +649,15 @@ function run_contextual_snippets(entries)
             @assert formats[1].value == pane.width && formats[2].value === true
             @assert !isempty(formats[3].value)
             mktempdir(; prefix="libtmux-julia-doc-context-") do directory
-                write(
-                    joinpath(directory, "workspace.yaml"),
-                    """
-session_name: \${PROJECT}
-options:
-  default-shell: /bin/sh
-windows:
-  - window_name: docs
-    panes: [null, null]
-""",
-                )
+                path = "packages/LibTmuxWorkspace/README.md"
+                configuration = only(
+                    document_fences(
+                        read(joinpath(DOC_EXAMPLE_ROOT, path), String),
+                        path;
+                        languages=("yaml",),
+                    ),
+                ).code
+                write(joinpath(directory, "workspace.yaml"), configuration)
                 cd(directory) do
                     execute(("packages/LibTmuxWorkspace/README.md", 3))
                     result = Base.invokelatest(getproperty, workspace, :result)
@@ -677,7 +675,7 @@ windows:
                     @assert document.data["session_name"] == "example"
                     @assert [
                         window["window_name"] for window in document.data["windows"]
-                    ] == ["docs"]
+                    ] == ["editor"]
                     bind(:bin_directory, joinpath(directory, "bin"))
                     launcher = execute(("packages/LibTmuxWorkspace/README.md", 6))
                     @assert isfile(launcher) && !islink(launcher)

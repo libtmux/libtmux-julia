@@ -293,7 +293,7 @@ println(document.data["session_name"], ": ",
 ```
 
 ```text
-example: docs
+example: editor
 ```
 
 Write `document.data` with your JSON or YAML encoder. Commands, options,
@@ -480,7 +480,8 @@ lists the defaults and what `validate` copies.
 - **Precompilation.** It covers inert configuration and CLI reporting. It never
   starts a process or contacts tmux.
 - **Julia 1.13.1 or newer and tmux 3.7c or newer.**
-- **Linux, including WSL.** Linux is the required CI platform. macOS is optional.
+- **Linux, including WSL.** CI runs Linux only. macOS and psmux are excluded
+  from CI.
 - **Attach.** The automated consumer tests have not exercised `--attach`.
 
 ## Documentation

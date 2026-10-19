@@ -17,7 +17,7 @@ Julia.
 </div>
 
 [Create a session][new_session], [capture a pane][capture_pane] and read
-everything a server holds into a [snapshot][snapshot]. Then
+sessions, windows, panes and clients into a [snapshot][snapshot]. Then
 [filter it][panewhere] with `filter`, `count` and other Julia collection
 functions. You can also [type into a pane][send_keys] and
 [read what it prints][observe_output].
@@ -215,10 +215,11 @@ reads the cursor with [`observation_cursor`][observation_cursor].
 
 ## Reuse a control connection
 
-### [`open_control`][open_control]: one client for many commands
+### [`open_control`][open_control]: persistent clients for repeated commands
 
 A plain server starts a tmux client process for each command.
-[`open_control`][open_control] keeps one client open for repeated operations.
+[`open_control`][open_control] keeps two clients open for repeated operations
+and cleanup.
 Both yield during I/O, so `Threads.@spawn` and `fetch` overlap calls:
 
 ```julia
@@ -236,7 +237,7 @@ screens = with_server() do server
 end
 ```
 
-`screens` holds both pane captures. The inner block closes the client, and the
+`screens` holds both pane captures. The inner block closes both clients, and the
 outer block closes the server.
 
 A control client counts as attached in tmux. Connection loss is terminal, and
@@ -420,8 +421,8 @@ The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
   or unreadable tmux release before they have any effect.
   [Compatibility][repo-docs-src-compatibility-md] lists the cells that passed
   the complete suite.
-- **Linux, including WSL.** Linux is the required CI platform. macOS is
-  optional; native Windows tmux is outside scope.
+- **Linux, including WSL.** CI runs Linux only. macOS and psmux are excluded
+  from CI; native Windows tmux is outside scope.
 - **Evidence.** The [capability manifest][repo-docs-capabilities-toml] and the
   [CI results](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
   record what is verified. Benchmark baselines and an independent guide

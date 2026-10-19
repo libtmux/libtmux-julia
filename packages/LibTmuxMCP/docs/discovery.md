@@ -64,6 +64,10 @@ matching link. Each tmux reply is bounded at 8 MiB. Use a scope when a
 server-wide capture exceeds that bound, including repeated rows from shared
 window links. None of these captures is atomic against concurrent daemon changes.
 
+CLI startup and wait setup still capture the full graph. A discovery scope
+limits that listing only; it cannot bypass a startup or wait-setup capture
+that exceeds the reply bound. Those larger-server flows remain unsupported.
+
 ## Continue or restart
 
 For consistent pages, pass `nextPageToken` as `pageToken` with the same `scope`,

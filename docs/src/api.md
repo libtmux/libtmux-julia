@@ -10,7 +10,7 @@ guide](observations.md) explain how these APIs fit together.
 | Capture entities, select rows, or exchange criteria | [Captured data and criteria](api-queries.md) |
 | Create, select, move, or resize panes and windows | [Pane and window operations](api-operations.md) |
 | Read or change options, hooks, environment, and formats | [Configuration and formats](api-configuration.md) |
-| Observe output, wait for completion, or decode text | [Observations and waits](api-observations.md) |
+| Observe output, wait for text or quiet, or decode text | [Observations and waits](api-observations.md) |
 
 The references are generated from source docstrings. Each source link opens
 the implementation included in this documentation build, with line anchors
