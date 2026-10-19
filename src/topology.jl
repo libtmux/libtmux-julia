@@ -522,8 +522,13 @@ function break_pane(
         ref -> _same_observed_server(pane, ref),
         (source.session, source.window, destination),
     )
-    literal =
-        name === nothing ? nothing : _maintenance_literal(transport, name, :break_pane)
+    literal = if name === nothing
+        nothing
+    elseif transport isa Server
+        _literal_tmux_argument(name)
+    else
+        _control_singleline(name, :break_pane)
+    end
     context = _maintenance_context(transport, pane; kwargs...)
     if hasproperty(context, :connection)
         _control_check_link(context, source)

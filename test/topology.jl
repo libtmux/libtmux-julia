@@ -254,8 +254,16 @@ function test_topology_pane_maintenance_preserves_process_and_explicit_link_iden
                             ),
                         )
                     ) == ids
-                    moved = break_pane(transport, pane, link, beta; index=7)
+                    moved = break_pane(
+                        transport,
+                        pane,
+                        link,
+                        beta;
+                        index=7,
+                        name="literal #{pane_id};",
+                    )
                     @test readfield(pane, "window_id") == string(moved.id)
+                    @test readfield(moved, "window_name") == "literal #{pane_id};"
                     @test readfield(pane, "pane_pid") == before
                     @test length(
                         panes(
@@ -267,6 +275,16 @@ function test_topology_pane_maintenance_preserves_process_and_explicit_link_iden
                             ),
                         ),
                     ) == 1
+                    last_moved = break_pane(
+                        transport,
+                        pane,
+                        WindowLinkRef(beta, moved, 7),
+                        beta;
+                        index=8,
+                        name="last #{pane_id};",
+                    )
+                    @test last_moved == moved
+                    @test readfield(last_moved, "window_name") == "last #{pane_id};"
                     @test_throws ArgumentError rotate_panes(
                         transport,
                         moved;
