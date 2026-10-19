@@ -4,10 +4,10 @@ The minimums are Julia 1.13.1 and tmux 3.7c. Core, MCP and workspace packages
 share these requirements. The higher tmux floor excludes unsafe older control
 attachment, named-buffer deletion and session/window name behavior.
 
-Linux is the required platform. CI checks tmux 3.7c at one and four threads and
-tmux 3.8 at one thread, using Julia 1.13.1. macOS jobs are optional. An unrun
-platform or release is not established support; package resolution alone is
-not runtime evidence.
+CI runs Linux only. It checks tmux 3.7c at one and four threads and tmux 3.8
+at one thread, using Julia 1.13.1. macOS and psmux are excluded from CI.
+Historical results do not establish current platform support; package
+resolution alone is not runtime evidence.
 
 See the [CI runs](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
 for the result at a particular commit. The capability manifest retains older

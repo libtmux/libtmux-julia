@@ -118,7 +118,6 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.matrix.outputs.cells) }}
     timeout-minutes: 20
-    continue-on-error: ${{ matrix.os == 'Darwin' }}
     env:
       TMPDIR: /tmp
       JULIA_TEST_VERBOSE: 'true'

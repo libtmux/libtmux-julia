@@ -6,7 +6,7 @@ julia_development = "1.13.1"
 julia_proposed_floor = "1.13.1"
 tmux_proposed_floor = "3.7c"
 platforms_proposed = ["Linux x86_64"]
-platforms_optional = ["macOS arm64", "macOS x86_64"]
+ci_excluded = ["macOS", "psmux"]
 # Baseline correctness predates the complete adoption gates. It does not
 # establish current revision, timing or broader platform support.
 verified_product_cells = []
