@@ -1,10 +1,14 @@
 # Per-operation tmux release requirements above the 3.3a floor. A requirement
 # never raises the minimum for the rest of the library.
 
-const CONTROL_MINIMUM_TMUX = "3.7"
-const BUFFER_DELETE_MINIMUM_TMUX = "3.4"
-const CLIPBOARD_QUERY_MINIMUM_TMUX = "3.6a"
-const JSON_LAYOUT_MINIMUM_TMUX = "3.8"
+# The releases come from the capability registry in `support_capabilities.jl`.
+const CONTROL_MINIMUM_TMUX = _capability_since("control-mode")
+const BUFFER_DELETE_MINIMUM_TMUX = _capability_since("buffer-delete-named")
+const BUFFER_RENAME_MINIMUM_TMUX = _capability_since("buffer-rename")
+const CLIPBOARD_QUERY_MINIMUM_TMUX = _capability_since("clipboard-query")
+const LAYOUT_CHECKSUM_MINIMUM_TMUX = _capability_since("layout-without-checksum")
+const MIRRORED_LAYOUT_MINIMUM_TMUX = _capability_since("layout-mirrored-main")
+const JSON_LAYOUT_MINIMUM_TMUX = _capability_since("layout-json")
 
 function _require_release(version, minimum, operation, what)
     version === nothing && return nothing
@@ -34,14 +38,13 @@ end
 
 # tmux 3.7 rejects ':' and '.' in session and window names.
 # 3.7a restored them. Pre-release builds of 3.7 rank below it but carry the
-# restriction, so the guard covers every 3.7 build without a patch letter.
-function _names_restricted(version)
-    key = _release_key(version)
-    key !== nothing && key[1:3] == (3, 7, "")
-end
+# restriction, so the guard covers every build of a listed release without a
+# patch letter.
+_names_restricted(version) = _workaround_applies("name-separators-rejected", version)
 
-# tmux 3.7 also stops on a `break-pane` that gives the new window no name.
-_unnamed_break_stops(version) = _names_restricted(version)
+# tmux 3.7 also stops on a `break-pane` that gives the new window no name. The
+# release list is its own registry entry, so moving one rule leaves the other.
+_unnamed_break_stops(version) = _workaround_applies("break-pane-misnames-windows", version)
 
 function _check_name_release(version, name, operation)
     _names_restricted(version) &&
@@ -274,7 +277,8 @@ function _guard_command_line(words, version)
         flag = command == "delete-buffer" ? 'b' : 'n'
         haskey(flags, flag) && _require_release(
             version,
-            BUFFER_DELETE_MINIMUM_TMUX,
+            command == "delete-buffer" ? BUFFER_DELETE_MINIMUM_TMUX :
+            BUFFER_RENAME_MINIMUM_TMUX,
             Symbol(replace(command, '-' => '_')),
             "$command -$flag",
         )
@@ -301,11 +305,13 @@ function _guard_command_line(words, version)
     elseif command == "select-layout"
         _, operands, valid = _command_flags(arguments, "Enopt:")
         valid || return nothing
-        if version !== nothing && !_version_at_least(version, "3.4") && !isempty(operands)
+        if version !== nothing &&
+           !_version_at_least(version, LAYOUT_CHECKSUM_MINIMUM_TMUX) &&
+           !isempty(operands)
             _layout_operand_safe(first(operands)) || throw(
                 UnsupportedCapability(
                     :select_layout,
-                    "tmux below 3.4 stops on a layout string that does not open like a dumped layout; observed $(repr(version))",
+                    "tmux below $LAYOUT_CHECKSUM_MINIMUM_TMUX stops on a layout string that does not open like a dumped layout; observed $(repr(version))",
                 ),
             )
         end

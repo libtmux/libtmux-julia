@@ -53,6 +53,7 @@ export encode_rust_where, decode_rust_where
 include("server.jl")
 include("process.jl")
 include("support.jl")
+include("support_capabilities.jl")
 include("text.jl")
 include("lifecycle.jl")
 include("model.jl")

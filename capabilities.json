@@ -1,0 +1,199 @@
+{
+  "capabilities": [
+    {
+      "apis": [
+        "LibTmux.open_control",
+        "LibTmux.observe_output",
+        "LibTmux.subscribe_format",
+        "LibTmux.notifications"
+      ],
+      "commands": [
+        {
+          "command": "attach-session"
+        }
+      ],
+      "error": "LibTmux.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "control-mode",
+      "name": "Control mode",
+      "since": "3.7",
+      "summary": "Attach a library-managed control client and stream events."
+    },
+    {
+      "apis": [
+        "LibTmux.delete_buffer",
+        "LibTmux.load_buffer"
+      ],
+      "commands": [
+        {
+          "command": "delete-buffer",
+          "flags": [
+            "-b"
+          ]
+        },
+        {
+          "command": "load-buffer",
+          "flags": [
+            "-b"
+          ]
+        }
+      ],
+      "error": "LibTmux.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "buffer-delete-named",
+      "name": "Named buffer deletion",
+      "since": "3.4",
+      "summary": "Delete one paste buffer by name without risking another buffer. paste_bytes and paste_text keep working below it by deleting their own staging buffer with paste-buffer -d."
+    },
+    {
+      "apis": [
+        "LibTmux.run_command",
+        "LibTmux.run_batch",
+        "LibTmux.run_group"
+      ],
+      "commands": [
+        {
+          "command": "set-buffer",
+          "flags": [
+            "-n"
+          ]
+        }
+      ],
+      "error": "LibTmux.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "buffer-rename",
+      "name": "Buffer rename",
+      "since": "3.4",
+      "summary": "Rename a paste buffer without risking another buffer."
+    },
+    {
+      "apis": [
+        "LibTmux.run_command",
+        "LibTmux.run_batch",
+        "LibTmux.run_group"
+      ],
+      "commands": [
+        {
+          "command": "select-layout"
+        }
+      ],
+      "error": "LibTmux.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "layout-without-checksum",
+      "name": "Layouts without a checksum",
+      "since": "3.4",
+      "summary": "Apply a layout string that opens like a dumped layout; tmux 3.3 and 3.3a stop on any other operand."
+    },
+    {
+      "apis": [
+        "LibTmux.run_command",
+        "LibTmux.run_batch",
+        "LibTmux.run_group"
+      ],
+      "commands": [
+        {
+          "command": "refresh-client",
+          "flags": [
+            "-l"
+          ]
+        }
+      ],
+      "error": "LibTmux.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "clipboard-query",
+      "name": "Clipboard query",
+      "since": "3.6a",
+      "summary": "Ask an attached client's terminal for its clipboard with refresh-client -l. tmux 3.3a stops at once; 3.4 to 3.6 stop when the client leaves before its terminal answers."
+    },
+    {
+      "apis": [
+        "LibTmux.select_layout"
+      ],
+      "commands": [
+        {
+          "command": "select-layout"
+        }
+      ],
+      "error": "LibTmux.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "layout-mirrored-main",
+      "name": "Mirrored main layouts",
+      "since": "3.5",
+      "summary": "Apply the main-horizontal-mirrored and main-vertical-mirrored layouts."
+    },
+    {
+      "apis": [
+        "LibTmux.select_layout"
+      ],
+      "commands": [
+        {
+          "command": "select-layout"
+        }
+      ],
+      "error": "LibTmux.UnsupportedCapability",
+      "handling": "refuse",
+      "id": "layout-json",
+      "name": "JSON layout strings",
+      "since": "3.8",
+      "summary": "Apply a layout saved in the JSON form tmux reports. The library requires the 3.8 release, so 3.8 release candidates are refused although they accept it."
+    }
+  ],
+  "floor": {
+    "minimum": "3.3a"
+  },
+  "port": "julia",
+  "schema": "libtmux-capabilities/1",
+  "workarounds": [
+    {
+      "apis": [
+        "LibTmux.new_session",
+        "LibTmux.new_window",
+        "LibTmux.rename_session",
+        "LibTmux.rename_window"
+      ],
+      "commands": [
+        {
+          "command": "new-session"
+        },
+        {
+          "command": "new-window"
+        },
+        {
+          "command": "rename-session"
+        },
+        {
+          "command": "rename-window"
+        }
+      ],
+      "handling": "refuse",
+      "id": "name-separators-rejected",
+      "name": "Colon and dot in names",
+      "releases": [
+        "3.7"
+      ],
+      "summary": "tmux 3.7 rejects ':' and '.' in session and window names, so the library refuses them first."
+    },
+    {
+      "apis": [
+        "LibTmux.run_command",
+        "LibTmux.run_batch",
+        "LibTmux.run_group"
+      ],
+      "commands": [
+        {
+          "command": "break-pane",
+          "flags": [
+            "-n"
+          ]
+        }
+      ],
+      "handling": "refuse",
+      "id": "break-pane-misnames-windows",
+      "name": "break-pane window naming",
+      "releases": [
+        "3.7"
+      ],
+      "summary": "tmux 3.7 stops on a break-pane without a window name and ignores -n. The library refuses the nameless form in raw command lines and in break_pane, and break_pane renames the window afterwards."
+    }
+  ]
+}
