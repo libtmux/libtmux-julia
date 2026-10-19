@@ -364,4 +364,4 @@ ownership.
 [mcp-docs-contracts-md]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/contracts.md
 [mcp-docs-contracts-md-batches]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/contracts.md#batches
 [mcp-license]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/LICENSE
-[mcp-discovery]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/discovery.md
+[mcp-discovery]: https://github.com/libtmux/libtmux-julia/blob/589c726499610ce5e96844f6c9a49a41368da5ec/packages/LibTmuxMCP/docs/discovery.md

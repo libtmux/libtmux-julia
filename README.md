@@ -255,7 +255,7 @@ Each program creates and cleans up its own tmux server:
 | Query shared windows and their panes | [shared_windows.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/shared_windows.jl) |
 | Cancel a waiting control operation | [control_cancel.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/control_cancel.jl) |
 | Send text and subscribe to pane output | [output_stream.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/output_stream.jl) |
-| Wait for an explicit command completion marker | [command_completion.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/command_completion.jl) |
+| Wait for an explicit command completion marker | [command_completion.jl](https://github.com/libtmux/libtmux-julia/blob/589c726499610ce5e96844f6c9a49a41368da5ec/examples/command_completion.jl) |
 
 To run the programs, clone the source:
 
