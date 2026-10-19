@@ -30,10 +30,97 @@ Base.@noinline function abandon_notifications!(streams)
     nothing
 end
 
+function test_output_registration_admission()
+    OwnedTmux.with_tmux() do fixture
+        server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
+        session = new_session(server; name="registration", command=["cat"])
+        pane = only(panes(snapshot(server))).ref
+        open_control(server, session) do connection
+            snapshot(connection, session)
+            run_command(
+                server,
+                "set-hook",
+                "-g",
+                "after-refresh-client",
+                "wait-for -S registration-ready ; wait-for registration-release",
+            )
+            cancelled = CancellationToken()
+            results = Dict{Symbol,Any}()
+            # Pre-register waiters so the held request cannot delay target lookup.
+            register(name; timeout=5.0, cancel=nothing) = begin
+                stream = LibTmux._new_observation(connection, :output; pane)
+                lock(connection.lock) do
+                    notify(connection.changed; all=true)
+                end
+                result = try
+                    LibTmux._enable_observation_output(
+                        connection,
+                        connection.observation,
+                        time_ns(),
+                        timeout,
+                        cancel,
+                    )
+                catch error
+                    error
+                finally
+                    close(stream)
+                end
+                lock(connection.lock) do
+                    results[name] = result
+                    notify(connection.changed; all=true)
+                end
+                result
+            end
+            owner = @async try
+                observe_output(connection, pane)
+            catch error
+                error
+            end
+            expired = interrupted = nothing
+            try
+                run_command(server, "wait-for", "registration-ready"; timeout=0.9)
+                expired = @async register(:expired; timeout=0.1)
+                interrupted = @async register(:interrupted; cancel=cancelled)
+                await_observation(connection, "cancelled caller did not register") do
+                    connection.observation.reservations == 3
+                end
+                cancel!(cancelled)
+                retired = try
+                    await_observation(connection, "registration callers did not retire") do
+                        haskey(results, :expired) && haskey(results, :interrupted)
+                    end
+                    true
+                catch
+                    false
+                end
+                @test retired
+                @test !istaskdone(owner)
+                @test lock(() -> connection.observation.reservations, connection.lock) == 1
+            finally
+                run_command(server, "set-hook", "-gu", "after-refresh-client")
+                run_command(server, "wait-for", "-S", "registration-release"; timeout=0.9)
+                for task in (owner, expired, interrupted)
+                    task === nothing && continue
+                    output = fetch(task)
+                    output isa ObservationStream && close(output)
+                end
+            end
+            @test fetch(owner) isa ObservationStream
+            @test fetch(expired) isa DeadlineExceeded
+            @test fetch(interrupted) isa RequestCancelled
+            @test isempty(cancelled.hooks)
+            @test connection.observation.reservations == 0
+        end
+    end
+end
+
 @testset "bounded observations" begin
     @test isdefined(LibTmux, :ObservationStream)
     if isdefined(LibTmux, :ObservationStream)
         isdefined(Main, :OwnedTmux) || include("support/owned_tmux.jl")
+        @testset "output registration admission" begin
+            test_output_registration_admission()
+        end
         OwnedTmux.with_tmux() do fixture
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
             session = new_session(server; name="observation", command=["cat"])
