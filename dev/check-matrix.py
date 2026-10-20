@@ -134,9 +134,9 @@ def qa_cells():
                           julia=julia, tmux=tmux, threads=threads, suites=tuple(suites),
                           status="NOT RUN"))
 
-    add("Linux", "ubuntu-24.04", "x86_64", MINIMUM_JULIA, MINIMUM_TMUX, suites=("all",))
-    add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.7c", 4, ("all",))
-    add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.8", 1, ("all",))
+    add("Linux", "ubuntu-24.04", "x86_64", MINIMUM_JULIA, MINIMUM_TMUX)
+    add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.7c", 4)
+    add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.8", 1)
     return cells
 
 
@@ -810,7 +810,9 @@ println("PASS admitted version arguments construct real Pkg specifications")
             ("Linux", "x86_64", "1.13.1", "3.7c", 4),
             ("Linux", "x86_64", "1.13.1", "3.8", 1),
         ]
-        assert sum(len(cell["suites"]) for cell in cells) == len(cells)
+        assert all(cell["suites"] == SUITES for cell in cells)
+        jobs = [(cell["label"], suite) for cell in cells for suite in cell["suites"]]
+        assert len(jobs) == len(set(jobs)) == 6
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
         rejected = rejection_cells()

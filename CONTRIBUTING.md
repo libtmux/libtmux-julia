@@ -461,8 +461,14 @@ Both must pass at the same source revision to complete a split cell. Use
 the option runs both.
 
 Pull requests run Linux checks on Julia 1.13.1 with tmux 3.7c at one and four
-threads and tmux 3.8 at one thread. macOS and psmux are excluded from CI. Rejection
-jobs use tmux 3.0a, 3.1c, 3.3a and 3.6b with a current client; these versions
+threads and tmux 3.8 at one thread. Each configuration runs required runtime and
+delivery jobs, with independent preparation and unchanged hard limits. Both
+partitions must pass; their union runs every verification phase once. This repeats
+dependency setup to keep cold preparation from exhausting the final checks'
+allowance.
+
+macOS and psmux are excluded from CI. Rejection jobs use tmux 3.0a, 3.1c, 3.3a
+and 3.6b with a current client; these versions
 must be refused without effect. The oldest two also exercise protocol-mismatch
 replies from real old daemons in the core and MCP packages.
 
