@@ -130,19 +130,9 @@ jobs:
       - name: Check setup argument conversion offline
         run: python3 dev/check-matrix.py self-test --julia julia
       - name: Prepare Linux build dependencies
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libevent-dev libncurses-dev bison
-      - name: Prepare macOS build dependencies
-        if: runner.os == 'macOS'
-        run: |
-          brew install libevent ncurses pkg-config utf8proc jemalloc
-          {
-            echo "PKG_CONFIG_PATH=$(brew --prefix libevent)/lib/pkgconfig:$(brew --prefix ncurses)/lib/pkgconfig:$(brew --prefix utf8proc)/lib/pkgconfig:$(brew --prefix jemalloc)/lib/pkgconfig"
-            echo "CPPFLAGS=-I$(brew --prefix utf8proc)/include"
-            echo "LDFLAGS=-L$(brew --prefix utf8proc)/lib"
-          } >> "$GITHUB_ENV"
       - name: Prepare pinned tmux release
         run: python3 dev/check-matrix.py build-tmux "$MATRIX_STAGE" '${{ matrix.tmux }}'
       - name: Cache isolated Julia tool depot

@@ -482,7 +482,8 @@ lists the defaults and what `validate` copies.
   starts a process or contacts tmux.
 - **Julia 1.10 or newer and tmux 3.3a or newer.**
 - **Linux, including WSL, and macOS.** CI runs the complete suite on Ubuntu
-  24.04 and on macOS, arm64 and x86_64.
+  24.04. macOS is supported on a best-effort basis, and CI coverage for it is
+  highly limited.
 - **Attach.** The automated consumer tests have not exercised `--attach`.
 
 ## Documentation

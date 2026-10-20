@@ -310,7 +310,8 @@ ownership.
   fails with code `unsupported_tmux` and `effects: none`. The message says to
   upgrade tmux and restart the server, or pin the previous libtmux release.
 - **Linux, including WSL, and macOS.** CI runs the complete suite on Ubuntu
-  24.04 and on macOS, arm64 and x86_64.
+  24.04. macOS is supported on a best-effort basis, and CI coverage for it is
+  highly limited.
 
 ## Documentation
 

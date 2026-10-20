@@ -418,7 +418,8 @@ The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
   [Compatibility][repo-docs-src-compatibility-md] lists the cells that passed
   the complete suite.
 - **Linux, including WSL, and macOS.** CI runs the complete suite on Ubuntu
-  24.04 and on macOS, arm64 and x86_64. Native Windows tmux is outside scope.
+  24.04. macOS is supported on a best-effort basis, and CI coverage for it is
+  highly limited. Native Windows tmux is outside scope.
 - **Evidence.** The [capability manifest][repo-docs-capabilities-toml] and the
   [CI results](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
   record what is verified. Benchmark baselines and an independent guide

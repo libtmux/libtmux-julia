@@ -179,9 +179,15 @@ function configure_isolation(layout::StageLayout)
     append!(LOAD_PATH, ("@", "@stdlib"))
 end
 
-function package_info(record::ReleasePackage, info, checkout::AbstractString)
+# `Pkg.dependencies()` is keyed by UUID, so finding `info` there already
+# matched the UUID; `PackageInfo` has no UUID field of its own.
+function package_info(
+    record::ReleasePackage,
+    commit::AbstractString,
+    info,
+    checkout::AbstractString,
+)
     require(info.name == record.name, "installed package name is wrong")
-    require(info.uuid == record.uuid, "installed package UUID is wrong")
     require(info.version == record.version, "installed package version is wrong")
     require(info.is_direct_dep, "installed package is not direct")
     require(!info.is_tracking_path, "installed package tracks a path")
@@ -192,7 +198,7 @@ function package_info(record::ReleasePackage, info, checkout::AbstractString)
         "installed package source is not canonical",
     )
     require(
-        info.git_revision == record.commit,
+        info.git_revision == commit,
         "installed package revision is not the release commit",
     )
     require(
@@ -261,7 +267,7 @@ function installed_packages(record::ReleaseRecord, checkout::AbstractString)
     for package in record.packages
         info = get(dependencies, package.uuid, nothing)
         info === nothing && fail("Pkg did not install $(package.name)")
-        package_info(package, info, checkout)
+        package_info(package, record.commit, info, checkout)
     end
 end
 
@@ -427,6 +433,35 @@ function self_test()
             TOML.print(io, manifest)
         end
         expect_error(() -> verify_manifest(record, project), "subdirectory")
+    end
+    installed = record.packages[1]
+    mktempdir(; prefix="libtmux-julia-release-package-self-test-") do source
+        # Shaped like the installed Julia's `Pkg.API.PackageInfo`, so reading a
+        # field it lacks fails here rather than on the first real release.
+        fields = fieldnames(Pkg.API.PackageInfo)
+        values = Dict{Symbol,Any}(field => nothing for field in fields)
+        merge!(
+            values,
+            Dict{Symbol,Any}(
+                :name => installed.name,
+                :version => installed.version,
+                :tree_hash => Base.SHA1(installed.tree),
+                :is_direct_dep => true,
+                :is_tracking_path => false,
+                :is_tracking_repo => true,
+                :is_tracking_registry => false,
+                :git_revision => record.commit,
+                :git_source => RELEASE_REPOSITORY,
+                :source => source,
+            ),
+        )
+        info = NamedTuple{fields}(Tuple(values[field] for field in fields))
+        package_info(installed, record.commit, info, pwd())
+        wrong_revision = merge(info, (git_revision="0"^40,))
+        expect_error(
+            () -> package_info(installed, record.commit, wrong_revision, pwd()),
+            "release commit",
+        )
     end
     wrong_tag = fixture_record()
     wrong_tag["tag"] = "v0.1.0-alpha.2"
