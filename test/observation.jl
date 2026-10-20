@@ -35,6 +35,10 @@ function test_output_registration_admission()
         server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
         session = new_session(server; name="registration", command=["cat"])
         pane = only(panes(snapshot(server))).ref
+        # Warm registration without enabling output on the tested connection.
+        open_control(server, session) do connection
+            close(observe_output(connection, pane))
+        end
         open_control(server, session) do connection
             snapshot(connection, session)
             run_command(
@@ -46,10 +50,12 @@ function test_output_registration_admission()
             )
             cancelled = CancellationToken()
             results = Dict{Symbol,Any}()
+            registered = Set{Symbol}()
             # Pre-register waiters so the held request cannot delay target lookup.
             register(name; timeout=5.0, cancel=nothing) = begin
                 stream = LibTmux._new_observation(connection, :output; pane)
                 lock(connection.lock) do
+                    push!(registered, name)
                     notify(connection.changed; all=true)
                 end
                 result = try
@@ -82,7 +88,7 @@ function test_output_registration_admission()
                 expired = @async register(:expired; timeout=0.1)
                 interrupted = @async register(:interrupted; cancel=cancelled)
                 await_observation(connection, "cancelled caller did not register") do
-                    connection.observation.reservations == 3
+                    :expired in registered && :interrupted in registered
                 end
                 cancel!(cancelled)
                 retired = try
