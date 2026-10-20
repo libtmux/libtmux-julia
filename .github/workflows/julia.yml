@@ -121,6 +121,7 @@ jobs:
     env:
       TMPDIR: /tmp
       JULIA_TEST_VERBOSE: 'true'
+      JULIA_CPU_TARGET: generic
     steps:
       - name: Choose owned preparation stage
         run: |
@@ -131,6 +132,7 @@ jobs:
         with:
           version: ${{ matrix.julia }}
           arch: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x64' }}
+          show-versioninfo: true
       - name: Check setup argument conversion offline
         run: python3 dev/check-matrix.py self-test --julia julia
       - name: Prepare Linux build dependencies
