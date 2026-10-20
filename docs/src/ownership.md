@@ -1,14 +1,42 @@
 # Ownership and I/O
 
-| Resource | Owner | Retirement |
-| --- | --- | --- |
-| Private daemon | [`OwnedServer`](@ref) | `close` or [`with_server`](@ref) |
-| Borrowed endpoint | Caller | LibTmux never destroys it implicitly |
-| Control clients | [`ControlConnection`](@ref) | `close` or `open_control` callback |
-| Cancellation callback | [`CancellationSubscription`](@ref) | `close` |
-| Capture/paste spool and temporary buffer | I/O operation | Success/failure cleanup |
-| Buffer returned by `load_buffer` | Caller | Explicit `delete_buffer` |
-| Snapshot/selection | Caller references | Ordinary Julia lifetime |
+## Resource ownership
+
+### [Private daemon](@id overview-private-daemon)
+
+[`OwnedServer`](@ref) owns a private daemon. Close it with `close`, or use
+[`with_server`](@ref) for scoped ownership.
+
+### [Borrowed endpoint](@id overview-borrowed-endpoint)
+
+The caller owns a borrowed endpoint. LibTmux never destroys it implicitly.
+
+### [Control clients](@id overview-control-clients)
+
+[`ControlConnection`](@ref) owns its control clients. Close the connection
+with `close`, or use the `open_control` callback.
+
+### [Cancellation callback](@id overview-cancellation-callback)
+
+[`CancellationSubscription`](@ref) owns the callback registration. Call
+`close` to retire it.
+
+### [Capture and paste storage](@id overview-capture-paste-spool-and-temporary-buffer)
+
+The I/O operation owns its capture or paste spool and temporary buffer. It
+cleans them up on success and failure.
+
+### [Loaded buffer](@id overview-buffer-returned-by-fload-buffer)
+
+The caller owns the buffer returned by `load_buffer`. Delete it explicitly
+with `delete_buffer`.
+
+### [Snapshots and selections](@id overview-snapshot-selection)
+
+The caller holds references to snapshots and selections. They follow ordinary
+Julia lifetimes.
+
+## [I/O and cancellation](@id overview)
 
 Remote functions return normal results. For concurrency, call them from
 [`Threads.@spawn`](https://docs.julialang.org/en/v1/base/multi-threading/#Base.Threads.%40spawn) and fetch their results. Cancellation wakes owned work
