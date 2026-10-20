@@ -144,15 +144,18 @@ jobs:
       - name: Cache isolated Julia tool depot
         uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
         with:
-          cache-name: libtmux-julia-matrix-depot-v1
+          cache-name: libtmux-julia-matrix-depot-${{ env.JULIA_CPU_TARGET }}-v2
           depot: ${{ runner.temp }}/libtmux-julia-matrix/depot
           delete-old-caches: "false"
         env:
           JULIA_DEPOT_PATH: ${{ runner.temp }}/libtmux-julia-matrix/depot
       - name: Prepare Julia tools and external consumers
-        run: >-
-          python3 dev/check-matrix.py prepare "$MATRIX_STAGE"
-          --threads '${{ matrix.threads }}'
+        run: |
+          set -o pipefail
+          mkdir -p "$MATRIX_STAGE/logs"
+          python3 dev/check-matrix.py prepare "$MATRIX_STAGE" \
+            --threads '${{ matrix.threads }}' \
+            2>&1 | tee "$MATRIX_STAGE/logs/preparation.log"
       - name: Check prepared cell offline
         run: >-
           python3 dev/check-matrix.py run "$MATRIX_STAGE"
