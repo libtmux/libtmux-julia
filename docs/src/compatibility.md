@@ -78,5 +78,5 @@ are separate work; excluded platforms are not acceptance gates.
 ```@raw html
 <p>See <a href="../source/CONTRIBUTING.md.html">the contributor guide</a> and
 <a href="../source/docs/capabilities.toml.html">the capability manifest</a>
-included in this build for scope and evidence.</p>
+for scope and evidence.</p>
 ```
