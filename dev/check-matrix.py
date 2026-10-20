@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Prepare isolated Julia tooling, then record offline quality and matrix cells."""
 
 from __future__ import annotations
@@ -9,25 +13,31 @@ import ctypes
 import hashlib
 import json
 import os
-import re
-from pathlib import Path
 import platform
+import re
+import selectors
 import shutil
 import signal
-import selectors
 import subprocess
 import sys
-import tempfile
 import tarfile
-import urllib.request
+import tempfile
 import time
 import tomllib
+import urllib.request
 import uuid
+from collections.abc import Iterable, Mapping
+from pathlib import Path
+from typing import Any, NotRequired, TypedDict
 
 ROOT = Path(__file__).resolve().parent.parent
 PINNED_TOOLS = {
-    "Aqua": "0.8.18", "JuliaFormatter": "2.14.0", "Documenter": "1.17.0",
-    "Tables": "1.14.0", "JSON": "1.9.0", "YAML": "0.4.17",
+    "Aqua": "0.8.18",
+    "JuliaFormatter": "2.14.0",
+    "Documenter": "1.17.0",
+    "Tables": "1.14.0",
+    "JSON": "1.9.0",
+    "YAML": "0.4.17",
     "ModelContextProtocol": "0.7.0",
 }
 
@@ -35,9 +45,20 @@ PINNED_TOOLS = {
 # Keep that optional workload out of tool setup; the normal format gate still runs.
 TOOL_PREFERENCES = "[JuliaFormatter]\nprecompile_workload = false\n"
 
-DELIVERY_PHASES = frozenset(("extensions", "docs", "doc-snippets", "doc-contextual",
-                            "imports", "external-examples", "external-launchers",
-                            "readme-commands", "api-export", "api-export-check"))
+DELIVERY_PHASES = frozenset(
+    (
+        "extensions",
+        "docs",
+        "doc-snippets",
+        "doc-contextual",
+        "imports",
+        "external-examples",
+        "external-launchers",
+        "readme-commands",
+        "api-export",
+        "api-export-check",
+    )
+)
 SUITES = ("runtime", "delivery")
 TMUX_SHA256 = {
     "3.0a": "4ad1df28b4afa969e59c08061b45082fdc49ff512f30fc8e43217d7b0e5f8db9",
@@ -65,7 +86,48 @@ MINIMUM_JULIA = "1.13.1"
 HARD_WORK_SECONDS = 15 * 60
 
 
-def tmux_configure_command(target, version, os_name):
+class QaCell(TypedDict):
+    label: str
+    os: str
+    runner: str
+    arch: str
+    julia: str
+    tmux: str
+    threads: int
+    suites: tuple[str, ...]
+    status: str
+    suite: NotRequired[str]
+    job_label: NotRequired[str]
+
+
+class CleanupReceipt(TypedDict):
+    descendant_retirement: str
+    reaped: list[int]
+    killed: list[int]
+    survivors: list[int]
+    temporary_directory_removed: NotRequired[bool]
+
+
+class PhaseResult(TypedDict):
+    name: str
+    command: list[str]
+    status: str
+    hard_limit_seconds: float
+    pid: NotRequired[int]
+    invocation: NotRequired[str]
+    direct_child_reaped: NotRequired[bool]
+    exit_code: NotRequired[int | None]
+    reason: NotRequired[str]
+    log_complete: NotRequired[bool]
+    cleanup: NotRequired[CleanupReceipt]
+    seconds: NotRequired[float]
+    log: NotRequired[str]
+    target_seconds: NotRequired[float]
+    over_target: NotRequired[bool]
+    skipped: NotRequired[list[str]]
+
+
+def tmux_configure_command(target: Path, version: str, os_name: str) -> list[str]:
     command = ["./configure", f"--prefix={target}"]
     if os_name == "Darwin":
         command.append("--enable-utf8proc")
@@ -74,7 +136,7 @@ def tmux_configure_command(target, version, os_name):
     return command
 
 
-def build_tmux(args):
+def build_tmux(args: argparse.Namespace) -> None:
     stage = checked_stage(args.stage, create=True)
     target = stage / "tmux" / args.version
     binary = target / "bin" / "tmux"
@@ -84,13 +146,21 @@ def build_tmux(args):
         url = f"https://github.com/tmux/tmux/releases/download/{args.version}/tmux-{args.version}.tar.gz"
         with urllib.request.urlopen(url) as source, archive.open("wb") as output:
             shutil.copyfileobj(source, output)
-        if hashlib.sha256(archive.read_bytes()).hexdigest() != TMUX_SHA256[args.version]:
-            raise ValueError("tmux source digest differs from the pinned official release")
+        if (
+            hashlib.sha256(archive.read_bytes()).hexdigest()
+            != TMUX_SHA256[args.version]
+        ):
+            raise ValueError(
+                "tmux source digest differs from the pinned official release"
+            )
         with tarfile.open(archive) as source:
             source.extractall(target, filter="data")
         source_root = target / f"tmux-{args.version}"
-        subprocess.run(tmux_configure_command(target, args.version, platform.system()),
-                       cwd=source_root, check=True)
+        subprocess.run(
+            tmux_configure_command(target, args.version, platform.system()),
+            cwd=source_root,
+            check=True,
+        )
         subprocess.run(["make", "-j2"], cwd=source_root, check=True)
         subprocess.run(["make", "install"], cwd=source_root, check=True)
     observed = subprocess.check_output([str(binary), "-V"], text=True).strip()
@@ -102,7 +172,7 @@ def build_tmux(args):
 SKIPPED_PATTERN = re.compile(r"(?:^|\s)SKIPPED\b.*|Warning: .*\bskipped\b.*")
 
 
-def skipped_checks(log):
+def skipped_checks(log: Path) -> list[str]:
     """Lines in a phase log that report a check skipped on this tmux release."""
     if not log.is_file():
         return []
@@ -114,25 +184,49 @@ def skipped_checks(log):
     return found
 
 
-def report_skipped(result):
+def report_skipped(result: dict[str, Any]) -> None:
     """Surface skipped checks in the result and the job summary; a skip is not a pass."""
-    skipped = [(item["name"], line) for item in result["phases"] for line in item.get("skipped", [])]
-    result["skipped_checks"] = [dict(phase=name, detail=line) for name, line in skipped]
+    skipped = [
+        (item["name"], line)
+        for item in result["phases"]
+        for line in item.get("skipped", [])
+    ]
+    result["skipped_checks"] = [
+        {"phase": name, "detail": line} for name, line in skipped
+    ]
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if skipped and summary:
-        with open(summary, "a", encoding="utf-8") as output:
+        with Path(summary).open("a", encoding="utf-8") as output:
             output.write("### Skipped checks\n\n")
             output.writelines(f"- `{name}`: {line}\n" for name, line in skipped)
 
 
-def qa_cells():
-    cells = []
+def qa_cells() -> list[QaCell]:
+    cells: list[QaCell] = []
 
-    def add(os_name, runner, arch, julia, tmux, threads=1, suites=SUITES):
+    def add(
+        os_name: str,
+        runner: str,
+        arch: str,
+        julia: str,
+        tmux: str,
+        threads: int = 1,
+        suites: tuple[str, ...] = SUITES,
+    ) -> None:
         label = f"{os_name}-{arch}-julia{julia}-tmux{tmux}-t{threads}"
-        cells.append(dict(label=label, os=os_name, runner=runner, arch=arch,
-                          julia=julia, tmux=tmux, threads=threads, suites=tuple(suites),
-                          status="NOT RUN"))
+        cells.append(
+            {
+                "label": label,
+                "os": os_name,
+                "runner": runner,
+                "arch": arch,
+                "julia": julia,
+                "tmux": tmux,
+                "threads": threads,
+                "suites": tuple(suites),
+                "status": "NOT RUN",
+            }
+        )
 
     add("Linux", "ubuntu-24.04", "x86_64", MINIMUM_JULIA, MINIMUM_TMUX)
     add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.7c", 4)
@@ -140,19 +234,38 @@ def qa_cells():
     return cells
 
 
-def rejection_cells():
-    return [dict(label=f"Linux-x86_64-julia{MINIMUM_JULIA}-tmux{tmux}-rejection", tmux=tmux,
-                 job_label=f"Reject tmux {tmux}",
-                 real_old="true" if tmux in PRE_PROBE_TMUX else "false",
-                 suite="old-daemon" if tmux in PRE_PROBE_TMUX else "rejection")
-            for tmux in REJECTED_TMUX]
+def rejection_cells() -> list[dict[str, str]]:
+    return [
+        {
+            "label": f"Linux-x86_64-julia{MINIMUM_JULIA}-tmux{tmux}-rejection",
+            "tmux": tmux,
+            "job_label": f"Reject tmux {tmux}",
+            "real_old": "true" if tmux in PRE_PROBE_TMUX else "false",
+            "suite": "old-daemon" if tmux in PRE_PROBE_TMUX else "rejection",
+        }
+        for tmux in REJECTED_TMUX
+    ]
 
 
-def source_digest():
+def source_digest() -> str:
     digest = hashlib.sha256()
-    inputs = ("Project.toml", "README.md", "CHANGELOG.md", "LICENSE", ".github/workflows",
-              "src", "ext", "test", "schema", "docs", "examples", "packages",
-              "dev", "benchmark")
+    inputs = (
+        "Project.toml",
+        "pyproject.toml",
+        "README.md",
+        "CHANGELOG.md",
+        "LICENSE",
+        ".github/workflows",
+        "src",
+        "ext",
+        "test",
+        "schema",
+        "docs",
+        "examples",
+        "packages",
+        "dev",
+        "benchmark",
+    )
     for base in inputs:
         root = ROOT / base
         files = [root] if root.is_file() else root.rglob("*")
@@ -162,7 +275,10 @@ def source_digest():
             relative = path.relative_to(ROOT)
             if relative.parts[:2] == ("benchmark", "results"):
                 continue
-            if any(part in ("build", "__pycache__", ".git", "node_modules") for part in relative.parts):
+            if any(
+                part in ("build", "__pycache__", ".git", "node_modules")
+                for part in relative.parts
+            ):
                 continue
             if path.name.startswith("Manifest") or path.suffix in (".log", ".pyc"):
                 continue
@@ -172,7 +288,7 @@ def source_digest():
     return digest.hexdigest()
 
 
-def checked_stage(path, *, create=False):
+def checked_stage(path: str | Path, *, create: bool = False) -> Path:
     stage = Path(path).resolve()
     if stage == ROOT or ROOT in stage.parents:
         raise ValueError("the prepared stage must be outside the checkout")
@@ -180,7 +296,9 @@ def checked_stage(path, *, create=False):
     if create:
         stage.mkdir(parents=True, exist_ok=True)
         if not marker.exists() and any(stage.iterdir()):
-            raise ValueError("preparation requires an empty stage or an owned matrix stage")
+            raise ValueError(
+                "preparation requires an empty stage or an owned matrix stage"
+            )
         if not marker.exists():
             marker.write_text(str(uuid.uuid4()))
     elif not marker.is_file():
@@ -188,7 +306,7 @@ def checked_stage(path, *, create=False):
     return stage
 
 
-def signal_group(process, number):
+def signal_group(process: subprocess.Popen[bytes], number: int) -> None:
     try:
         os.killpg(process.pid, number)
     except ProcessLookupError:
@@ -201,7 +319,7 @@ def signal_group(process, number):
             raise
 
 
-def enable_subreaper():
+def enable_subreaper() -> None:
     """Linux reparents orphaned descendants to this runner for bounded cleanup."""
     if sys.platform == "linux":
         libc = ctypes.CDLL(None, use_errno=True)
@@ -209,7 +327,7 @@ def enable_subreaper():
             raise OSError(ctypes.get_errno(), "cannot own orphaned test descendants")
 
 
-def retire(process):
+def retire(process: subprocess.Popen[bytes]) -> bool:
     for number, grace in ((signal.SIGINT, 3), (signal.SIGTERM, 2), (signal.SIGKILL, 5)):
         if process.poll() is not None:
             return True
@@ -221,9 +339,14 @@ def retire(process):
     return process.poll() is not None
 
 
-def retire_orphans(budget=10):
+def retire_orphans(budget: float = 10) -> CleanupReceipt:
     """Reap only our children, including detached daemons adopted on Linux."""
-    answer = dict(descendant_retirement="unverified on this platform", reaped=[], killed=[], survivors=[])
+    answer: CleanupReceipt = {
+        "descendant_retirement": "unverified on this platform",
+        "reaped": [],
+        "killed": [],
+        "survivors": [],
+    }
     if sys.platform != "linux":
         return answer
     children = Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children")
@@ -254,31 +377,58 @@ def retire_orphans(budget=10):
                     os.close(descriptor)
 
 
-def phase(name, argv, *, cwd, env, log, budget, completion=False):
+def phase(
+    name: str,
+    argv: list[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    log: Path,
+    budget: float,
+    completion: bool = False,
+) -> PhaseResult:
     """Stream original output; bound work and cleanup independently."""
     start = time.monotonic()
     log.parent.mkdir(parents=True, exist_ok=True)
-    answer = dict(name=name, command=argv, status="NOT RUN", hard_limit_seconds=budget)
+    answer: PhaseResult = {
+        "name": name,
+        "command": argv,
+        "status": "NOT RUN",
+        "hard_limit_seconds": budget,
+    }
     process = None
     tee = None
     receipt = log.with_suffix(".toml")
     receipt.unlink(missing_ok=True)
     invocation = uuid.uuid4().hex
     temporary = tempfile.mkdtemp(prefix="ltj-check-", dir="/tmp")
-    env = dict(env, JULIA_TEST_VERBOSE="true", TMPDIR=temporary,
-               LIBTMUX_TEST_TMPDIR=temporary)
+    env = dict(
+        env, JULIA_TEST_VERBOSE="true", TMPDIR=temporary, LIBTMUX_TEST_TMPDIR=temporary
+    )
     if completion:
-        env.update(LIBTMUX_TEST_COMPLETION=str(receipt), LIBTMUX_TEST_INVOCATION=invocation)
+        env.update(
+            LIBTMUX_TEST_COMPLETION=str(receipt), LIBTMUX_TEST_INVOCATION=invocation
+        )
     else:
         env.pop("LIBTMUX_TEST_COMPLETION", None)
         env.pop("LIBTMUX_TEST_INVOCATION", None)
     print(f"PHASE START {name} invocation={invocation}", flush=True)
     try:
-        tee = subprocess.Popen(["tee", str(log)], stdin=subprocess.PIPE, start_new_session=True)
-        process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                                   stdout=tee.stdin, stderr=subprocess.STDOUT, start_new_session=True)
+        tee = subprocess.Popen(
+            ["tee", str(log)], stdin=subprocess.PIPE, start_new_session=True
+        )
+        process = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=tee.stdin,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        assert tee.stdin is not None
         tee.stdin.close()
-        answer.update(pid=process.pid, invocation=invocation)
+        answer.update({"pid": process.pid, "invocation": invocation})
         try:
             process.wait(timeout=max(0, budget))
             answer["status"] = "PASS" if process.returncode == 0 else "FAIL"
@@ -287,21 +437,36 @@ def phase(name, argv, *, cwd, env, log, budget, completion=False):
         if completion and answer["status"] == "PASS":
             try:
                 report = tomllib.loads(receipt.read_text())
-                valid = (report["invocation"] == invocation and report["pid"] == process.pid
-                         and report["status"] == "PASS" and bool(report["files"])
-                         and all(row["outcome"] == "RETURNED" for row in report["files"]))
+                valid = (
+                    report["invocation"] == invocation
+                    and report["pid"] == process.pid
+                    and report["status"] == "PASS"
+                    and bool(report["files"])
+                    and all(row["outcome"] == "RETURNED" for row in report["files"])
+                )
             except (OSError, ValueError, KeyError, TypeError):
                 valid = False
             if not valid:
-                answer.update(status="INCOMPLETE", reason="missing, stale or incomplete test receipt")
+                answer.update(
+                    {
+                        "status": "INCOMPLETE",
+                        "reason": "missing, stale or incomplete test receipt",
+                    }
+                )
     except KeyboardInterrupt:
         answer["status"] = "INTERRUPTED"
     except FileNotFoundError:
         answer["reason"] = "required executable is unavailable"
     finally:
         if process is not None:
-            answer.update(direct_child_reaped=retire(process), exit_code=process.returncode)
+            answer.update(
+                {
+                    "direct_child_reaped": retire(process),
+                    "exit_code": process.returncode,
+                }
+            )
         if tee is not None:
+            assert tee.stdin is not None
             if not tee.stdin.closed:
                 tee.stdin.close()
             try:
@@ -310,29 +475,43 @@ def phase(name, argv, *, cwd, env, log, budget, completion=False):
                 retire(tee)
             answer["log_complete"] = tee.returncode == 0
         answer["cleanup"] = retire_orphans()
-        if not answer["cleanup"]["survivors"] and answer.get("direct_child_reaped", True):
+        if not answer["cleanup"]["survivors"] and answer.get(
+            "direct_child_reaped", True
+        ):
             shutil.rmtree(temporary)
             answer["cleanup"]["temporary_directory_removed"] = True
         else:
             answer["cleanup"]["temporary_directory_removed"] = False
-        if answer["status"] == "PASS" and (answer["cleanup"]["killed"] or
-                answer["cleanup"]["survivors"] or not answer.get("log_complete", False)):
-            answer.update(status="FAIL", reason="test process left descendants or incomplete output")
+        if answer["status"] == "PASS" and (
+            answer["cleanup"]["killed"]
+            or answer["cleanup"]["survivors"]
+            or not answer.get("log_complete", False)
+        ):
+            answer.update(
+                {
+                    "status": "FAIL",
+                    "reason": "test process left descendants or incomplete output",
+                }
+            )
         answer["seconds"] = time.monotonic() - start
         answer["log"] = str(log)
-        print(f"PHASE END {name} {answer['status']} {answer['seconds']:.3f}s", flush=True)
+        print(
+            f"PHASE END {name} {answer['status']} {answer['seconds']:.3f}s", flush=True
+        )
     return answer
 
 
-PACKAGE_SPECIFICATIONS = r'''
+PACKAGE_SPECIFICATIONS = r"""
 using Pkg
 function package_specifications(arguments)
     pairs = [split(argument, '='; limit=2) for argument in arguments]
     [PackageSpec(name=String(first(pair)), version=VersionNumber(last(pair))) for pair in pairs]
 end
-'''
+"""
 
-PREPARE = PACKAGE_SPECIFICATIONS + r'''
+PREPARE = (
+    PACKAGE_SPECIFICATIONS
+    + r"""
 root, project = ARGS[1:2]
 Pkg.activate(project)
 Pkg.develop([PackageSpec(path=root),
@@ -346,19 +525,26 @@ for package in packages
         error("resolved quality tool differs from its admitted version: " * package.name)
 end
 Pkg.precompile()
-'''
+"""
+)
 
 
-def environment(stage, *, offline):
+def environment(stage: Path, *, offline: bool) -> dict[str, str]:
     env = os.environ.copy()
     env.pop("TMUX", None)
     env.pop("TMUX_PANE", None)
-    env.update(JULIA_DEPOT_PATH=str(stage / "depot"), JULIA_LOAD_PATH="@:@stdlib",
-               JULIA_PKG_OFFLINE="true" if offline else "false", JULIA_PKG_PRECOMPILE_AUTO="0")
+    env.update(
+        JULIA_DEPOT_PATH=str(stage / "depot"),
+        JULIA_LOAD_PATH="@:@stdlib",
+        JULIA_PKG_OFFLINE="true" if offline else "false",
+        JULIA_PKG_PRECOMPILE_AUTO="0",
+    )
     return env
 
 
-def seed_registry_cache(source_depot, consumer_depot):
+def seed_registry_cache(
+    source_depot: Path, consumer_depot: Path
+) -> list[dict[str, Any]]:
     """Copy registry bytes without sharing writable files or extending DEPOT_PATH."""
     source = source_depot / "registries"
     destination = consumer_depot / "registries"
@@ -367,9 +553,12 @@ def seed_registry_cache(source_depot, consumer_depot):
     if destination.exists() or destination.is_symlink():
         raise ValueError("consumer registry seeding requires an empty destination")
     entries = sorted(source.rglob("*"))
-    if not entries or any(path.is_symlink() or not (path.is_file() or path.is_dir())
-                          for path in entries):
-        raise ValueError("registry cache must contain only regular files and directories")
+    if not entries or any(
+        path.is_symlink() or not (path.is_file() or path.is_dir()) for path in entries
+    ):
+        raise ValueError(
+            "registry cache must contain only regular files and directories"
+        )
     records = []
     for path in entries:
         relative = path.relative_to(source)
@@ -380,13 +569,22 @@ def seed_registry_cache(source_depot, consumer_depot):
         expected = hashlib.sha256(path.read_bytes()).hexdigest()
         copied.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, copied)
-        if copied.samefile(path) or hashlib.sha256(copied.read_bytes()).hexdigest() != expected:
-            raise ValueError("consumer registry copy failed independent-byte verification")
-        records.append(dict(file=str(relative), sha256=expected, bytes=copied.stat().st_size))
+        if (
+            copied.samefile(path)
+            or hashlib.sha256(copied.read_bytes()).hexdigest() != expected
+        ):
+            raise ValueError(
+                "consumer registry copy failed independent-byte verification"
+            )
+        records.append(
+            {"file": str(relative), "sha256": expected, "bytes": copied.stat().st_size}
+        )
     return records
 
 
-def seed_stdlib_cache(source_depot, consumer_depot, version, modules):
+def seed_stdlib_cache(
+    source_depot: Path, consumer_depot: Path, version: str, modules: Iterable[str]
+) -> list[dict[str, Any]]:
     source = source_depot / "compiled" / version
     destination = consumer_depot / "compiled" / version
     if destination.exists() or destination.is_symlink():
@@ -399,7 +597,9 @@ def seed_stdlib_cache(source_depot, consumer_depot, version, modules):
         if not directory.is_dir():
             continue
         for path in sorted(directory.iterdir()):
-            if path.suffix not in (".ji", ".so", ".dylib") or path.name.startswith("jl_"):
+            if path.suffix not in (".ji", ".so", ".dylib") or path.name.startswith(
+                "jl_"
+            ):
                 continue
             if path.is_symlink() or not path.is_file():
                 raise ValueError("stdlib cache must contain regular completed files")
@@ -408,23 +608,35 @@ def seed_stdlib_cache(source_depot, consumer_depot, version, modules):
             expected = hashlib.sha256(path.read_bytes()).hexdigest()
             copied.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, copied)
-            if copied.samefile(path) or hashlib.sha256(copied.read_bytes()).hexdigest() != expected:
+            if (
+                copied.samefile(path)
+                or hashlib.sha256(copied.read_bytes()).hexdigest() != expected
+            ):
                 raise ValueError("stdlib copy failed independent-byte verification")
-            records.append(dict(file=str(relative), sha256=expected, bytes=copied.stat().st_size))
+            records.append(
+                {
+                    "file": str(relative),
+                    "sha256": expected,
+                    "bytes": copied.stat().st_size,
+                }
+            )
     return records
 
 
-def stdlib_cache_profile(julia, env):
-    program = '''println(VERSION)
+def stdlib_cache_profile(julia: str, env: Mapping[str, str]) -> dict[str, Any]:
+    program = """println(VERSION)
     println("v", VERSION.major, ".", VERSION.minor)
     foreach(println, filter(name -> isdir(joinpath(Sys.STDLIB, name)), readdir(Sys.STDLIB)))
-    '''
-    lines = subprocess.check_output([julia, "--startup-file=no", "--history-file=no",
-                                     "-e", program], env=env, text=True).splitlines()
-    return dict(julia=lines[0], version=lines[1], modules=lines[2:])
+    """
+    lines = subprocess.check_output(
+        [julia, "--startup-file=no", "--history-file=no", "-e", program],
+        env=env,
+        text=True,
+    ).splitlines()
+    return {"julia": lines[0], "version": lines[1], "modules": lines[2:]}
 
 
-def prepare(args):
+def prepare(args: argparse.Namespace) -> None:
     started_preparation = time.monotonic()
     stage = checked_stage(args.stage, create=True)
     initial_digest = source_digest()
@@ -432,168 +644,387 @@ def prepare(args):
     project.mkdir(exist_ok=True)
     (project / "LocalPreferences.toml").write_text(TOOL_PREFERENCES)
     env = environment(stage, offline=False)
-    argv = [args.julia, "--startup-file=no", f"--project={project}", "-e", PREPARE,
-            str(ROOT), str(project), *[f"{name}={version}" for name, version in PINNED_TOOLS.items()]]
+    argv = [
+        args.julia,
+        "--startup-file=no",
+        f"--project={project}",
+        "-e",
+        PREPARE,
+        str(ROOT),
+        str(project),
+        *[f"{name}={version}" for name, version in PINNED_TOOLS.items()],
+    ]
     # Preparation is a separate tier: package resolution/network/precompilation.
     subprocess.run(argv, cwd=ROOT, env=env, check=True)
-    subprocess.run([args.julia, "--startup-file=no", "--compile=min", "-O0",
-                    f"--project={project}", "-e",
-                    "using Aqua, LibTmux, LibTmuxWorkspace, LibTmuxMCP, ModelContextProtocol, JSON, Tables"],
-                   cwd=ROOT, env=env, check=True)
-    subprocess.run(format_warmup_command(args, project), cwd=ROOT,
-                   env=environment(stage, offline=True), check=True)
+    subprocess.run(
+        [
+            args.julia,
+            "--startup-file=no",
+            "--compile=min",
+            "-O0",
+            f"--project={project}",
+            "-e",
+            "using Aqua, LibTmux, LibTmuxWorkspace, LibTmuxMCP, ModelContextProtocol, JSON, Tables",
+        ],
+        cwd=ROOT,
+        env=env,
+        check=True,
+    )
+    subprocess.run(
+        format_warmup_command(args, project),
+        cwd=ROOT,
+        env=environment(stage, offline=True),
+        check=True,
+    )
     consumers = stage / ("consumers-" + uuid.uuid4().hex)
     started = time.monotonic()
     registry_files = seed_registry_cache(stage / "depot", consumers / "depot")
-    registry_seed = dict(seconds=time.monotonic() - started, files=registry_files)
+    registry_seed = {"seconds": time.monotonic() - started, "files": registry_files}
     started = time.monotonic()
     profile = stdlib_cache_profile(args.julia, env)
-    stdlib_files = seed_stdlib_cache(stage / "depot", consumers / "depot",
-                                     profile["version"], profile["modules"])
-    stdlib_seed = dict(seconds=time.monotonic() - started, profile=profile, files=stdlib_files)
-    subprocess.run([args.julia, "--startup-file=no", "--compile=yes", "-O2",
-                    str(ROOT / "dev/check-consumers.jl"), "prepare", str(consumers)],
-                   cwd=ROOT, env=env, check=True)
+    stdlib_files = seed_stdlib_cache(
+        stage / "depot", consumers / "depot", profile["version"], profile["modules"]
+    )
+    stdlib_seed = {
+        "seconds": time.monotonic() - started,
+        "profile": profile,
+        "files": stdlib_files,
+    }
+    subprocess.run(
+        [
+            args.julia,
+            "--startup-file=no",
+            "--compile=yes",
+            "-O2",
+            str(ROOT / "dev/check-consumers.jl"),
+            "prepare",
+            str(consumers),
+        ],
+        cwd=ROOT,
+        env=env,
+        check=True,
+    )
     if initial_digest != source_digest():
-        raise ValueError("source changed during preparation; rerun with stable source (dependency cache retained)")
-    metadata = dict(schema_version=1, source_digest=initial_digest, tools=PINNED_TOOLS,
-                    seconds=time.monotonic() - started_preparation,
-                    consumers=str(consumers), project=str(project), registry_seed=registry_seed,
-                    stdlib_seed=stdlib_seed,
-                    tool_preferences=tomllib.loads(TOOL_PREFERENCES))
+        raise ValueError(
+            "source changed during preparation; rerun with stable source (dependency cache retained)"
+        )
+    metadata = {
+        "schema_version": 1,
+        "source_digest": initial_digest,
+        "tools": PINNED_TOOLS,
+        "seconds": time.monotonic() - started_preparation,
+        "consumers": str(consumers),
+        "project": str(project),
+        "registry_seed": registry_seed,
+        "stdlib_seed": stdlib_seed,
+        "tool_preferences": tomllib.loads(TOOL_PREFERENCES),
+    }
     (stage / "prepared.json").write_text(json.dumps(metadata, indent=2) + "\n")
-    print("PASS prepared dependencies and immutable external consumers; no timed checks run")
+    print(
+        "PASS prepared dependencies and immutable external consumers; no timed checks run"
+    )
 
 
-def format_warmup_command(args, project):
-    return [args.julia, "--startup-file=no", f"--threads={args.threads}",
-            f"--project={project}", str(ROOT / "dev/check-quality.jl"), "format"]
+def format_warmup_command(args: argparse.Namespace, project: Path) -> list[str]:
+    return [
+        args.julia,
+        "--startup-file=no",
+        f"--threads={args.threads}",
+        f"--project={project}",
+        str(ROOT / "dev/check-quality.jl"),
+        "format",
+    ]
 
 
-def command_plan(args, stage, metadata):
+def command_plan(
+    args: argparse.Namespace, stage: Path, metadata: dict[str, Any]
+) -> list[tuple[str, list[str], float, str]]:
     project = metadata["project"]
-    normal = [args.julia, "--startup-file=no", f"--threads={args.threads}", f"--project={project}"]
+    normal = [
+        args.julia,
+        "--startup-file=no",
+        f"--threads={args.threads}",
+        f"--project={project}",
+    ]
     minimal = [*normal, "--compile=min", "-O0"]
     commands = []
-    def add(name, argv, budget, tier):
+
+    def add(name: str, argv: list[str], budget: float, tier: str) -> None:
         commands.append((name, argv, budget, tier))
+
     add("core-unit", [*minimal, "test/runtests.jl", "unit"], 30, "unit")
-    add("workspace-unit", [*minimal, "packages/LibTmuxWorkspace/test/runtests.jl", "unit"], 30, "unit")
-    add("mcp-unit", [*minimal, "packages/LibTmuxMCP/test/runtests.jl", "unit"], 30, "unit")
+    add(
+        "workspace-unit",
+        [*minimal, "packages/LibTmuxWorkspace/test/runtests.jl", "unit"],
+        30,
+        "unit",
+    )
+    add(
+        "mcp-unit",
+        [*minimal, "packages/LibTmuxMCP/test/runtests.jl", "unit"],
+        30,
+        "unit",
+    )
     add("quality", [*minimal, "dev/check-quality.jl", "quality"], 30, "quality")
     add("format", [*normal, "dev/check-quality.jl", "format"], 30, "quality")
     add("generated", [*minimal, "dev/generate-criteria.jl", "--check"], 30, "quality")
-    add("generated-options", [*minimal, "dev/generate-options.jl", "--check"], 30, "quality")
-    add("consumer-diagnostics", [*minimal, "dev/check-consumers.jl", "--self-test"], 30, "quality")
-    add("test-progress", [sys.executable, "dev/test-progress.py", args.julia], 5, "quality")
-    add("example-inventory", [*minimal, "dev/check-doc-examples.jl", "check"], 30, "quality")
-    add("readme-links", [*minimal, "dev/check-readme-commands.jl", "static"], 30, "quality")
+    add(
+        "generated-options",
+        [*minimal, "dev/generate-options.jl", "--check"],
+        30,
+        "quality",
+    )
+    add(
+        "consumer-diagnostics",
+        [*minimal, "dev/check-consumers.jl", "--self-test"],
+        30,
+        "quality",
+    )
+    add(
+        "test-progress",
+        [sys.executable, "dev/test-progress.py", args.julia],
+        5,
+        "quality",
+    )
+    add(
+        "example-inventory",
+        [*minimal, "dev/check-doc-examples.jl", "check"],
+        30,
+        "quality",
+    )
+    add(
+        "readme-links",
+        [*minimal, "dev/check-readme-commands.jl", "static"],
+        30,
+        "quality",
+    )
     add("core-normal", [*normal, "test/runtests.jl", "all"], 300, "outer")
-    add("workspace-normal", [*normal, "packages/LibTmuxWorkspace/test/runtests.jl", "all"], 300, "outer")
-    add("mcp-normal", [*normal, "packages/LibTmuxMCP/test/runtests.jl", "all"], 300, "outer")
+    add(
+        "workspace-normal",
+        [*normal, "packages/LibTmuxWorkspace/test/runtests.jl", "all"],
+        300,
+        "outer",
+    )
+    add(
+        "mcp-normal",
+        [*normal, "packages/LibTmuxMCP/test/runtests.jl", "all"],
+        300,
+        "outer",
+    )
     add("mcp-product", [*normal, "packages/LibTmuxMCP/test/product.jl"], 300, "outer")
-    add("mcp-stopped-reader", [sys.executable, "packages/LibTmuxMCP/test/stdio_backpressure.py",
-                              args.julia, project, "--compile", "normal", "--threads",
-                              str(args.threads)], 300, "outer")
+    add(
+        "mcp-stopped-reader",
+        [
+            sys.executable,
+            "packages/LibTmuxMCP/test/stdio_backpressure.py",
+            args.julia,
+            project,
+            "--compile",
+            "normal",
+            "--threads",
+            str(args.threads),
+        ],
+        300,
+        "outer",
+    )
     extensions = 'using Test, LibTmux; include("test/criteria.jl"); include("test/json_extension.jl"); include("test/tables_extension.jl")'
     add("extensions", [*normal, "-e", extensions], 300, "outer")
     add("docs", [*normal, "docs/make.jl"], 300, "outer")
     add("api-export", [*normal, "docs/export-api.jl"], 300, "outer")
     add("api-export-check", [*normal, "docs/test-export-api.jl"], 300, "outer")
     add("doc-snippets", [*normal, "dev/check-doc-examples.jl", "doctest"], 300, "outer")
-    add("doc-contextual", [*normal, "dev/check-doc-examples.jl", "contextual"], 300, "outer")
-    add("imports", [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]], 300, "outer")
-    add("external-examples", [*minimal, "dev/check-consumers.jl", "examples", metadata["consumers"]], 300, "outer")
-    add("external-launchers", [*minimal, "dev/check-consumers.jl", "launchers", metadata["consumers"]], 300, "outer")
-    add("readme-commands", [*normal, "dev/check-readme-commands.jl", "commands"], 300, "outer")
+    add(
+        "doc-contextual",
+        [*normal, "dev/check-doc-examples.jl", "contextual"],
+        300,
+        "outer",
+    )
+    add(
+        "imports",
+        [*minimal, "dev/check-consumers.jl", "check", metadata["consumers"]],
+        300,
+        "outer",
+    )
+    add(
+        "external-examples",
+        [*minimal, "dev/check-consumers.jl", "examples", metadata["consumers"]],
+        300,
+        "outer",
+    )
+    add(
+        "external-launchers",
+        [*minimal, "dev/check-consumers.jl", "launchers", metadata["consumers"]],
+        300,
+        "outer",
+    )
+    add(
+        "readme-commands",
+        [*normal, "dev/check-readme-commands.jl", "commands"],
+        300,
+        "outer",
+    )
     return commands
 
 
-def run(args):
+def run(args: argparse.Namespace) -> int:
     enable_subreaper()
     stage = checked_stage(args.stage)
     metadata = json.loads((stage / "prepared.json").read_text())
     if metadata["source_digest"] != source_digest():
-        raise ValueError("source changed since preparation; prepare a fresh source snapshot before checks")
+        raise ValueError(
+            "source changed since preparation; prepare a fresh source snapshot before checks"
+        )
     preferences = Path(metadata["project"]) / "LocalPreferences.toml"
     if tomllib.loads(preferences.read_text()) != metadata["tool_preferences"]:
-        raise ValueError("tool preferences changed since preparation; prepare a fresh stage")
+        raise ValueError(
+            "tool preferences changed since preparation; prepare a fresh stage"
+        )
     env = environment(stage, offline=True)
-    env.update(LIBTMUX_TEST_TMUX=args.tmux, LIBTMUX_TEST_CLI_COMPILE="normal",
-               LIBTMUX_TEST_MINIMAL_CHILD="0", JULIA_TEST_VERBOSE="true")
-    work_seconds = HARD_WORK_SECONDS
+    env.update(
+        LIBTMUX_TEST_TMUX=args.tmux,
+        LIBTMUX_TEST_CLI_COMPILE="normal",
+        LIBTMUX_TEST_MINIMAL_CHILD="0",
+        JULIA_TEST_VERBOSE="true",
+    )
+    work_seconds: float = HARD_WORK_SECONDS
     if "MATRIX_JOB_DEADLINE" in env:
-        work_seconds = min(work_seconds, max(0, float(env["MATRIX_JOB_DEADLINE"]) - time.time() - 180))
+        work_seconds = min(
+            work_seconds, max(0, float(env["MATRIX_JOB_DEADLINE"]) - time.time() - 180)
+        )
     deadline = time.monotonic() + work_seconds
-    result = dict(schema_version=2, source_digest=metadata["source_digest"],
-                  platform=platform.system(), machine=platform.machine(), kernel=platform.release(),
-                  wsl="microsoft" in platform.release().lower(), threads=args.threads,
-                  tools=metadata["tools"], status="NOT RUN", phases=[], suite=args.suite,
-                  tier=args.tier, active_phase=None)
+    phases: list[PhaseResult] = []
+    result = {
+        "schema_version": 2,
+        "source_digest": metadata["source_digest"],
+        "platform": platform.system(),
+        "machine": platform.machine(),
+        "kernel": platform.release(),
+        "wsl": "microsoft" in platform.release().lower(),
+        "threads": args.threads,
+        "tools": metadata["tools"],
+        "status": "NOT RUN",
+        "phases": phases,
+        "suite": args.suite,
+        "tier": args.tier,
+        "active_phase": None,
+    }
     result["invocation"] = uuid.uuid4().hex
-    result.update(hard_work_seconds=work_seconds, preparation_seconds=metadata.get("seconds"))
+    result.update(
+        hard_work_seconds=work_seconds, preparation_seconds=metadata.get("seconds")
+    )
     suffix = "" if args.suite == "all" else f"-{args.suite}"
-    destination = stage / f"results-{args.tier}{suffix}-t{args.threads}-{result['invocation'][:8]}.json"
+    destination = (
+        stage
+        / f"results-{args.tier}{suffix}-t{args.threads}-{result['invocation'][:8]}.json"
+    )
     log_directory = stage / "logs" / result["invocation"]
 
-    def save():
+    def save() -> None:
         temporary = destination.with_suffix(".tmp")
         temporary.write_text(json.dumps(result, indent=2) + "\n")
         temporary.replace(destination)
 
     save()
-    for key, argv in (("julia", [args.julia, "--startup-file=no", "--version"]),
-                      ("tmux", [args.tmux, "-V"])):
+    for key, argv in (
+        ("julia", [args.julia, "--startup-file=no", "--version"]),
+        ("tmux", [args.tmux, "-V"]),
+    ):
         resolved = shutil.which(argv[0])
         if resolved is None:
             result["reason"] = f"{key} executable is unavailable"
             break
         result[key] = subprocess.check_output(argv, env=env, text=True).strip()
     else:
-        expected = ((args.expected_julia, result["julia"].removeprefix("julia version "), "Julia"),
-                    (args.expected_tmux, result["tmux"].removeprefix("tmux "), "tmux"),
-                    (args.expected_os, result["platform"], "OS"),
-                    (args.expected_arch, result["machine"], "architecture"))
-        mismatch = next((name for requested, actual, name in expected if requested and requested != actual), None)
+        expected = (
+            (
+                args.expected_julia,
+                result["julia"].removeprefix("julia version "),
+                "Julia",
+            ),
+            (args.expected_tmux, result["tmux"].removeprefix("tmux "), "tmux"),
+            (args.expected_os, result["platform"], "OS"),
+            (args.expected_arch, result["machine"], "architecture"),
+        )
+        mismatch = next(
+            (
+                name
+                for requested, actual, name in expected
+                if requested and requested != actual
+            ),
+            None,
+        )
         if mismatch:
             result["reason"] = f"observed {mismatch} differs from the requested cell"
         else:
             commands = selected_commands(args, stage, metadata)
-            result.update(status="RUNNING", planned_phases=[item[0] for item in commands])
+            result.update(
+                status="RUNNING", planned_phases=[item[0] for item in commands]
+            )
             try:
-                for name, argv, budget, tier in commands:
+                for name, argv, budget, _tier in commands:
                     result["active_phase"] = name
                     save()
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        result.update(status="TIMEOUT", reason="hard work limit reached")
+                        result.update(
+                            status="TIMEOUT", reason="hard work limit reached"
+                        )
                         break
-                    native_suite = any(argument.endswith("/test/runtests.jl") or
-                                       argument == "test/runtests.jl" for argument in argv)
-                    item = phase(name, argv, cwd=ROOT, env=env, log=log_directory / f"{name}.log",
-                                 budget=remaining, completion=native_suite)
-                    item.update(target_seconds=budget, over_target=item["seconds"] > budget)
+                    native_suite = any(
+                        argument.endswith("/test/runtests.jl")
+                        or argument == "test/runtests.jl"
+                        for argument in argv
+                    )
+                    item = phase(
+                        name,
+                        argv,
+                        cwd=ROOT,
+                        env=env,
+                        log=log_directory / f"{name}.log",
+                        budget=remaining,
+                        completion=native_suite,
+                    )
+                    item.update(
+                        {
+                            "target_seconds": budget,
+                            "over_target": item["seconds"] > budget,
+                        }
+                    )
                     item["skipped"] = skipped_checks(log_directory / f"{name}.log")
-                    result["phases"].append(item)
+                    phases.append(item)
                     result["active_phase"] = None
                     save()
                     print(f"{item['status']} {name} {item['seconds']:.3f}s", flush=True)
                     for line in item["skipped"]:
                         print(f"::warning title=Skipped in {name}::{line}", flush=True)
-                    if item["status"] in ("TIMEOUT", "INTERRUPTED") or item["cleanup"]["survivors"]:
+                    if (
+                        item["status"] in ("TIMEOUT", "INTERRUPTED")
+                        or item["cleanup"]["survivors"]
+                    ):
                         result["status"] = item["status"]
                         break
                 report_skipped(result)
-                completed = {item["name"] for item in result["phases"]}
-                result["not_run"] = [name for name, *_ in commands if name not in completed]
+                completed = {item["name"] for item in phases}
+                result["not_run"] = [
+                    name for name, *_ in commands if name not in completed
+                ]
                 if result["status"] == "RUNNING":
-                    result["status"] = "PASS" if not result["not_run"] and result["phases"] and all(
-                        p["status"] == "PASS" for p in result["phases"]) else "FAIL"
+                    result["status"] = (
+                        "PASS"
+                        if not result["not_run"]
+                        and phases
+                        and all(p["status"] == "PASS" for p in phases)
+                        else "FAIL"
+                    )
                 if metadata["source_digest"] != source_digest():
                     result.update(status="STALE", reason="source changed during checks")
             except BaseException as error:
-                result.update(status="INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL",
-                              error_type=type(error).__name__)
+                result.update(
+                    status="INTERRUPTED"
+                    if isinstance(error, KeyboardInterrupt)
+                    else "FAIL",
+                    error_type=type(error).__name__,
+                )
                 raise
             finally:
                 save()
@@ -602,34 +1033,56 @@ def run(args):
     return 0 if result["status"] == "PASS" else 1
 
 
-def selected_commands(args, stage, metadata):
-    return [item for item in command_plan(args, stage, metadata)
-            if (args.tier == "all" or item[3] == args.tier)
-            and (args.suite == "all" or (item[0] in DELIVERY_PHASES) == (args.suite == "delivery"))]
+def selected_commands(
+    args: argparse.Namespace, stage: Path, metadata: dict[str, Any]
+) -> list[tuple[str, list[str], float, str]]:
+    return [
+        item
+        for item in command_plan(args, stage, metadata)
+        if (args.tier == "all" or item[3] == args.tier)
+        and (
+            args.suite == "all"
+            or (item[0] in DELIVERY_PHASES) == (args.suite == "delivery")
+        )
+    ]
 
 
-def artifacts(stage):
+def artifacts(stage: str | Path) -> int:
     """Export readable evidence without local paths or known credential values."""
     stage = checked_stage(stage)
     destination = stage / "artifacts"
     destination.mkdir(exist_ok=True)
     deadline = time.monotonic() + 30
-    replacements = [(str(stage), "<stage>"), (str(ROOT), "<checkout>"),
-                    (str(Path.home()), "<home>")]
-    replacements += [(path.replace(str(Path.home()), "~", 1), replacement)
-                     for path, replacement in list(replacements)
-                     if path.startswith(str(Path.home()) + os.sep)]
+    replacements = [
+        (str(stage), "<stage>"),
+        (str(ROOT), "<checkout>"),
+        (str(Path.home()), "<home>"),
+    ]
+    replacements += [
+        (path.replace(str(Path.home()), "~", 1), replacement)
+        for path, replacement in list(replacements)
+        if path.startswith(str(Path.home()) + os.sep)
+    ]
     replacements.append(("~/", "<home>/"))
-    replacements += [(value, "<redacted>") for key, value in os.environ.items()
-                     if re.search(r"TOKEN|SECRET|PASSWORD|CREDENTIAL", key) and len(value) >= 8]
+    replacements += [
+        (value, "<redacted>")
+        for key, value in os.environ.items()
+        if re.search(r"TOKEN|SECRET|PASSWORD|CREDENTIAL", key) and len(value) >= 8
+    ]
 
-    def sanitize(text):
-        for value, replacement in sorted(replacements, key=lambda pair: len(pair[0]), reverse=True):
+    def sanitize(text: str) -> str:
+        for value, replacement in sorted(
+            replacements, key=lambda pair: len(pair[0]), reverse=True
+        ):
             text = text.replace(value, replacement)
         return text
 
-    sources = [*stage.glob("results-*.json"), *stage.glob("prepared.json"),
-               *stage.glob("logs/**/*.log"), *stage.glob("logs/**/*.toml")]
+    sources = [
+        *stage.glob("results-*.json"),
+        *stage.glob("prepared.json"),
+        *stage.glob("logs/**/*.log"),
+        *stage.glob("logs/**/*.toml"),
+    ]
     incomplete = []
     for source in sources:
         exported = destination / source.relative_to(stage)
@@ -638,7 +1091,9 @@ def artifacts(stage):
             for line in original:
                 if time.monotonic() >= deadline:
                     incomplete.append(source.name)
-                    output.write("\nARTIFACT EXPORT INTERRUPTED: finalization deadline\n")
+                    output.write(
+                        "\nARTIFACT EXPORT INTERRUPTED: finalization deadline\n"
+                    )
                     break
                 output.write(sanitize(line))
     rows = []
@@ -652,11 +1107,23 @@ def artifacts(stage):
             summary.append(f"  INCOMPLETE {result['active_phase']}\n")
         for item in result["phases"]:
             if "log" in item and "invocation" in item:
-                receipts[Path(item["log"]).with_suffix(".toml")] = (item["invocation"], item["pid"])
-            rows.append(dict(name=item["name"], status=item["status"], seconds=item["seconds"],
-                             target_seconds=item.get("target_seconds", "")))
-            summary.append(f"  {item['status']} {item['name']}: {item['seconds']:.3f}s"
-                           + (" (over diagnostic target)" if item.get("over_target") else "") + "\n")
+                receipts[Path(item["log"]).with_suffix(".toml")] = (
+                    item["invocation"],
+                    item["pid"],
+                )
+            rows.append(
+                {
+                    "name": item["name"],
+                    "status": item["status"],
+                    "seconds": item["seconds"],
+                    "target_seconds": item.get("target_seconds", ""),
+                }
+            )
+            summary.append(
+                f"  {item['status']} {item['name']}: {item['seconds']:.3f}s"
+                + (" (over diagnostic target)" if item.get("over_target") else "")
+                + "\n"
+            )
         for name in result.get("not_run", []):
             summary.append(f"  NOT RUN {name}\n")
     for source in stage.glob("logs/**/*.toml"):
@@ -666,30 +1133,42 @@ def artifacts(stage):
                 summary.append(f"Unmatched test receipt: {source.name}\n")
                 continue
             for row in receipt["files"]:
-                rows.append(dict(name=row["file"], status=row["outcome"], seconds=row["seconds"],
-                                 target_seconds=""))
+                rows.append(
+                    {
+                        "name": row["file"],
+                        "status": row["outcome"],
+                        "seconds": row["seconds"],
+                        "target_seconds": "",
+                    }
+                )
         except (ValueError, KeyError):
             summary.append(f"Incomplete test receipt: {source.name}\n")
     with (destination / "timings.csv").open("w", newline="") as output:
-        writer = csv.DictWriter(output, fieldnames=("name", "status", "seconds", "target_seconds"))
+        writer = csv.DictWriter(
+            output, fieldnames=("name", "status", "seconds", "target_seconds")
+        )
         writer.writeheader()
         writer.writerows(sorted(rows, key=lambda row: row["seconds"], reverse=True))
-    summary.append("File and command timings overlap; add neither to their enclosing command.\n")
+    summary.append(
+        "File and command timings overlap; add neither to their enclosing command.\n"
+    )
     if incomplete:
         summary.append(f"Incomplete artifact exports: {', '.join(incomplete)}\n")
     rendered = sanitize("".join(summary))
     (destination / "summary.txt").write_text(rendered)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+        with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
             output.write("```text\n" + rendered + "```\n")
     print(rendered)
     return 1 if incomplete else 0
 
 
-def self_test(julia=None):
+def self_test(julia: str | None = None) -> None:
     enable_subreaper()
     if julia:
-        script = PACKAGE_SPECIFICATIONS + r'''
+        script = (
+            PACKAGE_SPECIFICATIONS
+            + r"""
 specifications = package_specifications(["Aqua=0.8.18", "JSON=1.9.0"])
 @assert length(specifications) == 2
 @assert specifications[1].name == "Aqua"
@@ -697,9 +1176,12 @@ specifications = package_specifications(["Aqua=0.8.18", "JSON=1.9.0"])
 @assert specifications[2].name == "JSON"
 @assert specifications[2].version == v"1.9.0"
 println("PASS admitted version arguments construct real Pkg specifications")
-'''
-        subprocess.run([julia, "--startup-file=no", "--compile=min", "-O0", "-e", script],
-                       check=True)
+"""
+        )
+        subprocess.run(
+            [julia, "--startup-file=no", "--compile=min", "-O0", "-e", script],
+            check=True,
+        )
     with tempfile.TemporaryDirectory(prefix="libtmux-julia-matrix-test-") as directory:
         base = Path(directory)
         compiled = base / "tool-depot" / "compiled" / "v1.13"
@@ -710,7 +1192,9 @@ println("PASS admitted version arguments construct real Pkg specifications")
         (compiled / "Pkg" / "cache.pidfile").write_text("unfinished")
         (compiled / "Pkg" / "jl_incomplete.so").write_text("unfinished")
         destination = base / "stdlib-consumer"
-        copied = seed_stdlib_cache(compiled.parent.parent, destination, "v1.13", ["Pkg"])
+        copied = seed_stdlib_cache(
+            compiled.parent.parent, destination, "v1.13", ["Pkg"]
+        )
         assert [item["file"] for item in copied] == ["Pkg/cache.ji", "Pkg/cache.so"]
         assert not (destination / "compiled" / "v1.13" / "LibTmux").exists()
         copy = destination / "compiled" / "v1.13" / "Pkg" / "cache.ji"
@@ -724,7 +1208,9 @@ println("PASS admitted version arguments construct real Pkg specifications")
             raise AssertionError("stdlib seeding overwrote a consumer cache")
         (compiled / "Pkg" / "linked.ji").symlink_to(compiled / "Pkg" / "cache.ji")
         try:
-            seed_stdlib_cache(compiled.parent.parent, base / "linked-stdlib", "v1.13", ["Pkg"])
+            seed_stdlib_cache(
+                compiled.parent.parent, base / "linked-stdlib", "v1.13", ["Pkg"]
+            )
         except ValueError:
             pass
         else:
@@ -757,49 +1243,116 @@ println("PASS admitted version arguments construct real Pkg specifications")
         else:
             raise AssertionError("registry seeding accepted a shared symbolic link")
         assert tmux_configure_command(base, "3.7c", "Darwin") == [
-            "./configure", f"--prefix={base}", "--enable-utf8proc", "--enable-jemalloc"]
+            "./configure",
+            f"--prefix={base}",
+            "--enable-utf8proc",
+            "--enable-jemalloc",
+        ]
         assert tmux_configure_command(base, "3.3a", "Darwin") == [
-            "./configure", f"--prefix={base}", "--enable-utf8proc"]
+            "./configure",
+            f"--prefix={base}",
+            "--enable-utf8proc",
+        ]
         assert tmux_configure_command(base, "3.7c", "Linux") == [
-            "./configure", f"--prefix={base}"]
+            "./configure",
+            f"--prefix={base}",
+        ]
         literal = "; $(touch must-not-exist)"
-        ok = phase("literal", [sys.executable, "-c", "import sys; print(sys.argv[1])", literal],
-                   cwd=base, env=os.environ.copy(), log=base / "literal.log", budget=0.9)
-        assert ok["status"] == "PASS" and (base / "literal.log").read_text().strip() == literal
+        ok = phase(
+            "literal",
+            [sys.executable, "-c", "import sys; print(sys.argv[1])", literal],
+            cwd=base,
+            env=os.environ.copy(),
+            log=base / "literal.log",
+            budget=0.9,
+        )
+        assert (
+            ok["status"] == "PASS"
+            and (base / "literal.log").read_text().strip() == literal
+        )
         assert not (base / "must-not-exist").exists()
-        failed = phase("failure", [sys.executable, "-c", "raise SystemExit(7)"],
-                       cwd=base, env=os.environ.copy(), log=base / "failure.log", budget=0.9)
+        failed = phase(
+            "failure",
+            [sys.executable, "-c", "raise SystemExit(7)"],
+            cwd=base,
+            env=os.environ.copy(),
+            log=base / "failure.log",
+            budget=0.9,
+        )
         assert failed["status"] == "FAIL" and failed["exit_code"] == 7
-        absent = phase("missing", [str(base / "missing")], cwd=base,
-                       env=os.environ.copy(), log=base / "missing.log", budget=0.9)
+        absent = phase(
+            "missing",
+            [str(base / "missing")],
+            cwd=base,
+            env=os.environ.copy(),
+            log=base / "missing.log",
+            budget=0.9,
+        )
         assert absent["status"] == "NOT RUN"
-        timed = phase("deadline", [sys.executable, "-c", "import threading; threading.Event().wait()"],
-                      cwd=base, env=os.environ.copy(), log=base / "deadline.log", budget=0.05)
+        timed = phase(
+            "deadline",
+            [sys.executable, "-c", "import threading; threading.Event().wait()"],
+            cwd=base,
+            env=os.environ.copy(),
+            log=base / "deadline.log",
+            budget=0.05,
+        )
         assert timed["status"] == "TIMEOUT" and timed["direct_child_reaped"]
-        incomplete = phase("incomplete", [sys.executable, "-c", "pass"], cwd=base,
-                           env=os.environ.copy(), log=base / "incomplete.log", budget=1, completion=True)
+        incomplete = phase(
+            "incomplete",
+            [sys.executable, "-c", "pass"],
+            cwd=base,
+            env=os.environ.copy(),
+            log=base / "incomplete.log",
+            budget=1,
+            completion=True,
+        )
         assert incomplete["status"] == "INCOMPLETE"
         for content in ('invocation = "stale"\n', 'invocation = "truncated'):
-            code = "import os; open(os.environ['LIBTMUX_TEST_COMPLETION'], 'w').write(" + repr(content) + ")"
-            incomplete = phase("bad-receipt", [sys.executable, "-c", code], cwd=base,
-                               env=os.environ.copy(), log=base / "bad.log", budget=1, completion=True)
+            code = (
+                "import os; open(os.environ['LIBTMUX_TEST_COMPLETION'], 'w').write("
+                + repr(content)
+                + ")"
+            )
+            incomplete = phase(
+                "bad-receipt",
+                [sys.executable, "-c", code],
+                cwd=base,
+                env=os.environ.copy(),
+                log=base / "bad.log",
+                budget=1,
+                completion=True,
+            )
             assert incomplete["status"] == "INCOMPLETE"
         if sys.platform == "linux":
             child = "import threading; threading.Event().wait()"
-            code = ("import subprocess,sys,threading; "
-                    f"subprocess.Popen([sys.executable,'-c',{child!r}],start_new_session=True); "
-                    "print('DETACHED_CHILD_STARTED',flush=True); threading.Event().wait()")
-            cancelled = phase("detached", [sys.executable, "-c", code], cwd=base,
-                              env=os.environ.copy(), log=base / "detached.log", budget=0.2)
+            code = (
+                "import subprocess,sys,threading; "
+                f"subprocess.Popen([sys.executable,'-c',{child!r}],start_new_session=True); "
+                "print('DETACHED_CHILD_STARTED',flush=True); threading.Event().wait()"
+            )
+            cancelled = phase(
+                "detached",
+                [sys.executable, "-c", code],
+                cwd=base,
+                env=os.environ.copy(),
+                log=base / "detached.log",
+                budget=0.2,
+            )
             assert cancelled["status"] == "TIMEOUT"
-            assert cancelled["cleanup"]["reaped"] and not cancelled["cleanup"]["survivors"]
+            assert (
+                cancelled["cleanup"]["reaped"] and not cancelled["cleanup"]["survivors"]
+            )
             assert cancelled["cleanup"]["temporary_directory_removed"]
         log = base / "skipped.log"
-        log.write_text("PASS core\n\u250c Warning: control suites skipped: below 3.7\n"
-                       "SKIPPED README.md fence 3: control acquisition needs tmux 3.7\nPASS x\n")
+        log.write_text(
+            "PASS core\n\u250c Warning: control suites skipped: below 3.7\n"
+            "SKIPPED README.md fence 3: control acquisition needs tmux 3.7\nPASS x\n"
+        )
         assert skipped_checks(log) == [
             "Warning: control suites skipped: below 3.7",
-            "SKIPPED README.md fence 3: control acquisition needs tmux 3.7"]
+            "SKIPPED README.md fence 3: control acquisition needs tmux 3.7",
+        ]
         assert skipped_checks(base / "absent.log") == []
         cells = qa_cells()
         assert [
@@ -843,50 +1396,90 @@ println("PASS admitted version arguments construct real Pkg specifications")
         needed = set(tomllib.loads((ROOT / "Project.toml").read_text())["weakdeps"])
         for suite in ("LibTmuxWorkspace", "LibTmuxMCP"):
             source = (ROOT / "packages" / suite / "test" / "old_daemon.jl").read_text()
-            needed |= set(re.findall(r"(?m)^\s*(?:using|import)\s+([A-Za-z0-9_]+)", source))
+            needed |= set(
+                re.findall(r"(?m)^\s*(?:using|import)\s+([A-Za-z0-9_]+)", source)
+            )
         needed -= {"Test", "LibTmux", "LibTmuxWorkspace", "LibTmuxMCP"}
         missing = sorted(name for name in needed if f'"{name}"' not in prepare)
         assert not missing, f"reject environment lacks {missing}"
-        assert not {cell["tmux"] for cell in rejected} & {cell["tmux"] for cell in cells}
+        assert not {cell["tmux"] for cell in rejected} & {
+            cell["tmux"] for cell in cells
+        }
         assert all(cell["tmux"] != MINIMUM_TMUX for cell in rejected)
         assert len({cell["label"] for cell in rejected}) == len(rejected)
-        from types import SimpleNamespace
-        from unittest.mock import patch
         from contextlib import redirect_stdout
         from io import StringIO
-        args = SimpleNamespace(stage=str(base), julia="julia", tmux="tmux", threads=1,
-                               tier="all", suite="all", expected_julia=None,
-                               expected_tmux=None, expected_os=None, expected_arch=None)
-        metadata = dict(source_digest="fixed", tools={}, project=str(base), consumers=str(base),
-                        tool_preferences=tomllib.loads(TOOL_PREFERENCES))
+        from unittest.mock import patch
+
+        args = argparse.Namespace(
+            stage=str(base),
+            julia="julia",
+            tmux="tmux",
+            threads=1,
+            tier="all",
+            suite="all",
+            expected_julia=None,
+            expected_tmux=None,
+            expected_os=None,
+            expected_arch=None,
+        )
+        metadata = {
+            "source_digest": "fixed",
+            "tools": {},
+            "project": str(base),
+            "consumers": str(base),
+            "tool_preferences": tomllib.loads(TOOL_PREFERENCES),
+        }
         all_names = [item[0] for item in selected_commands(args, base, metadata)]
         budgets = {
-            name: budget for name, _, budget, _ in selected_commands(args, base, metadata)
+            name: budget
+            for name, _, budget, _ in selected_commands(args, base, metadata)
         }
         assert budgets["format"] == 30
         assert format_warmup_command(args, base) == [
-            "julia", "--startup-file=no", "--threads=1", f"--project={base}",
-            str(ROOT / "dev/check-quality.jl"), "format",
+            "julia",
+            "--startup-file=no",
+            "--threads=1",
+            f"--project={base}",
+            str(ROOT / "dev/check-quality.jl"),
+            "format",
         ]
-        partitions = []
+        partitions: list[str] = []
         for suite in SUITES:
             args.suite = suite
-            partitions.extend(item[0] for item in selected_commands(args, base, metadata))
+            partitions.extend(
+                item[0] for item in selected_commands(args, base, metadata)
+            )
         assert len(partitions) == len(set(partitions)) == len(all_names)
         assert set(partitions) == set(all_names)
-        assert DELIVERY_PHASES <= set(all_names)
+        assert set(all_names) >= DELIVERY_PHASES
         args.suite = "all"
         (base / ".libtmux-julia-matrix").touch()
         (base / "LocalPreferences.toml").write_text(TOOL_PREFERENCES)
         (base / "prepared.json").write_text(json.dumps(metadata))
-        plan = [("first", [], 30, "unit"), ("second", [], 30, "unit")]
-        with patch(__name__ + ".source_digest", return_value="fixed"), \
-             patch.object(shutil, "which", return_value="binary"), \
-             patch.object(subprocess, "check_output", return_value="version"), \
-             patch(__name__ + ".command_plan", return_value=plan), \
-             patch(__name__ + ".phase", side_effect=[
-                 dict(name="first", status="FAIL", seconds=0.01, cleanup={"survivors": []}), KeyboardInterrupt()]), \
-             redirect_stdout(StringIO()):
+        plan: list[tuple[str, list[str], float, str]] = [
+            ("first", [], 30, "unit"),
+            ("second", [], 30, "unit"),
+        ]
+        with (
+            patch(__name__ + ".source_digest", return_value="fixed"),
+            patch.object(shutil, "which", return_value="binary"),
+            patch.object(subprocess, "check_output", return_value="version"),
+            patch(__name__ + ".command_plan", return_value=plan),
+            patch(
+                __name__ + ".phase",
+                side_effect=[
+                    {
+                        "name": "first",
+                        "status": "FAIL",
+                        "seconds": 0.01,
+                        "cleanup": {"survivors": []},
+                    },
+                    KeyboardInterrupt(),
+                ],
+            ),
+            redirect_stdout(StringIO()),
+        ):
             try:
                 run(args)
             except KeyboardInterrupt:
@@ -894,45 +1487,87 @@ println("PASS admitted version arguments construct real Pkg specifications")
             else:
                 raise AssertionError("matrix interruption was swallowed")
         retained = json.loads(next(base.glob("results-all-t1-*.json")).read_text())
-        assert retained["status"] == "INTERRUPTED" and retained["active_phase"] == "second"
+        assert (
+            retained["status"] == "INTERRUPTED" and retained["active_phase"] == "second"
+        )
         assert retained["phases"][0]["status"] == "FAIL"
-        with patch(__name__ + ".source_digest", return_value="fixed"), \
-             patch.object(shutil, "which", return_value="binary"), \
-             patch.object(subprocess, "check_output", return_value="version"), \
-             patch(__name__ + ".command_plan", return_value=[("slow", [], 0.001, "unit"),
-                                                             ("following", [], 30, "unit")]), \
-             patch(__name__ + ".phase", side_effect=[
-                 dict(name="slow", status="PASS", seconds=0.01, cleanup={"survivors": []}),
-                 dict(name="following", status="PASS", seconds=0.01, cleanup={"survivors": []})]), \
-             redirect_stdout(StringIO()):
+        with (
+            patch(__name__ + ".source_digest", return_value="fixed"),
+            patch.object(shutil, "which", return_value="binary"),
+            patch.object(subprocess, "check_output", return_value="version"),
+            patch(
+                __name__ + ".command_plan",
+                return_value=[
+                    ("slow", [], 0.001, "unit"),
+                    ("following", [], 30, "unit"),
+                ],
+            ),
+            patch(
+                __name__ + ".phase",
+                side_effect=[
+                    {
+                        "name": "slow",
+                        "status": "PASS",
+                        "seconds": 0.01,
+                        "cleanup": {"survivors": []},
+                    },
+                    {
+                        "name": "following",
+                        "status": "PASS",
+                        "seconds": 0.01,
+                        "cleanup": {"survivors": []},
+                    },
+                ],
+            ),
+            redirect_stdout(StringIO()),
+        ):
             assert run(args) == 0
-        reports = [json.loads(path.read_text()) for path in base.glob("results-all-t1-*.json")]
+        reports = [
+            json.loads(path.read_text()) for path in base.glob("results-all-t1-*.json")
+        ]
         passed = next(report for report in reports if report["status"] == "PASS")
         assert passed["phases"][0]["over_target"] and len(passed["phases"]) == 2
         logs = base / "logs" / "probe"
         logs.mkdir(parents=True)
         (logs / "failure.log").write_text(
-            f"{Path.home()}/private failed: original assertion\n~/private failure\nsecret-value\n")
-        with patch.dict(os.environ, {"TEST_SECRET": "secret-value"}), redirect_stdout(StringIO()):
+            f"{Path.home()}/private failed: original assertion\n~/private failure\nsecret-value\n"
+        )
+        with (
+            patch.dict(os.environ, {"TEST_SECRET": "secret-value"}),
+            redirect_stdout(StringIO()),
+        ):
             assert artifacts(base) == 0
         exported = (base / "artifacts" / "logs" / "probe" / "failure.log").read_text()
         assert str(Path.home()) not in exported and "secret-value" not in exported
         assert "~/" not in exported
         assert "original assertion" in exported
         assert "INCOMPLETE second" in (base / "artifacts" / "summary.txt").read_text()
-    print("PASS owned preparation, bounded cleanup, diagnostic overruns and retained sanitized artifacts")
+    print(
+        "PASS owned preparation, bounded cleanup, diagnostic overruns and retained sanitized artifacts"
+    )
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     matrix = sub.add_parser("matrix")
-    matrix.add_argument("--split", action="store_true", help="emit runtime and delivery jobs for every cell")
-    matrix.add_argument("--rejection", action="store_true",
-                        help="emit the unsupported releases whose refusal is asserted")
+    matrix.add_argument(
+        "--split",
+        action="store_true",
+        help="emit runtime and delivery jobs for every cell",
+    )
+    matrix.add_argument(
+        "--rejection",
+        action="store_true",
+        help="emit the unsupported releases whose refusal is asserted",
+    )
     self_check = sub.add_parser("self-test")
-    self_check.add_argument("--julia", help="also check real Pkg argument conversion offline")
-    build = sub.add_parser("build-tmux", help="setup only: download, verify and build one pinned release")
+    self_check.add_argument(
+        "--julia", help="also check real Pkg argument conversion offline"
+    )
+    build = sub.add_parser(
+        "build-tmux", help="setup only: download, verify and build one pinned release"
+    )
     build.add_argument("stage")
     build.add_argument("version", choices=tuple(TMUX_SHA256))
     export = sub.add_parser("artifacts", help="sanitize logs and results for upload")
@@ -946,7 +1581,9 @@ def main():
     execution.add_argument("--julia", default="julia")
     execution.add_argument("--tmux", default="tmux")
     execution.add_argument("--threads", type=int, choices=(1, 4), default=1)
-    execution.add_argument("--tier", choices=("unit", "quality", "outer", "all"), default="all")
+    execution.add_argument(
+        "--tier", choices=("unit", "quality", "outer", "all"), default="all"
+    )
     execution.add_argument("--suite", choices=("all", *SUITES), default="all")
     for option in ("julia", "tmux", "os", "arch"):
         execution.add_argument(f"--expected-{option}")
@@ -957,8 +1594,11 @@ def main():
         elif args.command == "matrix":
             cells = qa_cells()
             if args.split:
-                cells = [dict(cell, suite=suite, job_label=f"{cell['label']}-{suite}")
-                         for cell in cells for suite in cell["suites"]]
+                cells = [
+                    {**cell, "suite": suite, "job_label": f"{cell['label']}-{suite}"}
+                    for cell in cells
+                    for suite in cell["suites"]
+                ]
             print(json.dumps({"include": cells}))
         elif args.command == "self-test":
             self_test(args.julia)

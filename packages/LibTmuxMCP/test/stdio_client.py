@@ -1,37 +1,64 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Outer check of the actual Julia child process and newline protocol."""
+
+from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import selectors
 import subprocess
 import sys
 import time
+from pathlib import Path
+from typing import Any
 
 
-def main():
+def main() -> None:
     julia, project = sys.argv[1:]
-    command = [julia, "--startup-file=no", f"--project={project}",
-               "--compiled-modules=existing", str(Path(__file__).with_name("stdio_child.jl"))]
+    command = [
+        julia,
+        "--startup-file=no",
+        f"--project={project}",
+        "--compiled-modules=existing",
+        str(Path(__file__).with_name("stdio_child.jl")),
+    ]
     started = time.perf_counter()
-    child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, bufsize=0)
+    child = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    stdin, stdout, stderr = child.stdin, child.stdout, child.stderr
+    assert stdin is not None and stdout is not None and stderr is not None
     selector = selectors.DefaultSelector()
-    selector.register(child.stdout, selectors.EVENT_READ, "stdout")
-    selector.register(child.stderr, selectors.EVENT_READ, "stderr")
+    selector.register(stdout, selectors.EVENT_READ, "stdout")
+    selector.register(stderr, selectors.EVENT_READ, "stderr")
     pending = bytearray()
     diagnostics = bytearray()
 
-    def send(request_id, method, params=None):
-        metadata = {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                    "io.modelcontextprotocol/clientCapabilities": {}}
-        value = {"jsonrpc": "2.0", "method": method,
-                 "params": {"_meta": metadata, **(params or {})}}
+    def send(
+        request_id: int | str | None, method: str, params: dict[str, Any] | None = None
+    ) -> None:
+        metadata = {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+        }
+        value: dict[str, Any] = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": {"_meta": metadata, **(params or {})},
+        }
         if request_id is not None:
             value["id"] = request_id
-        child.stdin.write(json.dumps(value).encode() + b"\n")
+        stdin.write(json.dumps(value).encode() + b"\n")
 
-    def receive():
+    def receive() -> dict[str, Any]:
         deadline = time.perf_counter() + 45
         while b"\n" not in pending:
             remaining = deadline - time.perf_counter()
@@ -51,7 +78,8 @@ def main():
                     assert len(pending) <= 8 * 1024 * 1024
         line, _, rest = pending.partition(b"\n")
         pending[:] = rest
-        return json.loads(line)
+        response: dict[str, Any] = json.loads(line)
+        return response
 
     try:
         send(1, "server/discover")
@@ -61,9 +89,19 @@ def main():
         listed = receive()
         assert listed["id"] == 2
         assert [tool["name"] for tool in listed["result"]["tools"]] == ["wait"]
-        send("long", "tools/call", {"name": "wait", "arguments": {},
-             "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                       "io.modelcontextprotocol/clientCapabilities": {}, "progressToken": "p"}})
+        send(
+            "long",
+            "tools/call",
+            {
+                "name": "wait",
+                "arguments": {},
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                    "progressToken": "p",
+                },
+            },
+        )
         progress = receive()
         assert progress["method"] == "notifications/progress"
         send(3, "server/discover")
@@ -71,20 +109,22 @@ def main():
         send(None, "notifications/cancelled", {"requestId": "long"})
         send(4, "ping")
         assert receive()["id"] == 4
-        child.stdin.close()
+        stdin.close()
         child.wait(timeout=10)
         assert child.returncode == 0, diagnostics.decode(errors="replace")
-        remaining = bytes(pending) + child.stdout.read()
+        remaining = bytes(pending) + stdout.read()
         assert not remaining, "cancelled tool emitted a late response"
-        diagnostics.extend(child.stderr.read())
+        diagnostics.extend(stderr.read())
         assert not diagnostics, diagnostics.decode(errors="replace")
-        print(f"PASS real stdio discovery/list/progress/cancel/fairness/EOF {time.perf_counter()-started:.3f}s")
+        print(
+            f"PASS real stdio discovery/list/progress/cancel/fairness/EOF {time.perf_counter() - started:.3f}s"
+        )
     finally:
         if child.poll() is None:
             child.kill()
             child.wait()
         selector.close()
-        for pipe in (child.stdin, child.stdout, child.stderr):
+        for pipe in (stdin, stdout, stderr):
             pipe.close()
 
 

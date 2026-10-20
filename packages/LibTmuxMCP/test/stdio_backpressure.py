@@ -1,54 +1,86 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Outer regression: default Julia stdio retires after EOF with a stopped reader."""
+
+from __future__ import annotations
 
 import argparse
 import json
 import os
-from pathlib import Path
 import selectors
 import socket
 import subprocess
 import threading
 import time
+from pathlib import Path
+from typing import Any
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("julia")
     parser.add_argument("project")
     parser.add_argument("--compile", choices=("normal", "minimal"), default="normal")
     parser.add_argument("--threads", type=int, default=4)
-    parser.add_argument("--compiled-modules", choices=("yes", "no", "existing"), default="yes")
+    parser.add_argument(
+        "--compiled-modules", choices=("yes", "no", "existing"), default="yes"
+    )
     args = parser.parse_args()
-    command = [args.julia, "--startup-file=no", f"--project={args.project}",
-               f"--threads={args.threads}", f"--compiled-modules={args.compiled_modules}"]
+    command = [
+        args.julia,
+        "--startup-file=no",
+        f"--project={args.project}",
+        f"--threads={args.threads}",
+        f"--compiled-modules={args.compiled_modules}",
+    ]
     if args.compile == "minimal":
         command.extend(["--compile=min", "-O0"])
     command.extend([str(Path(__file__).with_name("stdio_child.jl")), "backpressure"])
     started = time.monotonic()
-    child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, bufsize=0)
+    child = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
     ready, completed = socket.socketpair()
+    stdin, stdout, stderr = child.stdin, child.stdout, child.stderr
+    assert stdin is not None and stdout is not None and stderr is not None
     selector = selectors.DefaultSelector()
-    selector.register(child.stdout, selectors.EVENT_READ, "stdout")
-    selector.register(child.stderr, selectors.EVENT_READ, "stderr")
+    selector.register(stdout, selectors.EVENT_READ, "stdout")
+    selector.register(stderr, selectors.EVENT_READ, "stderr")
     selector.register(ready, selectors.EVENT_READ, "exit")
     diagnostics = bytearray()
 
-    def reap():
+    def reap() -> None:
         child.wait()
         completed.sendall(b"x")
 
     watcher = threading.Thread(target=reap)
     watcher.start()
 
-    def send(request_id, method, params=None):
-        value = {"jsonrpc": "2.0", "id": request_id, "method": method,
-                 "params": {"_meta": {
-                     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                     "io.modelcontextprotocol/clientCapabilities": {}}, **(params or {})}}
-        child.stdin.write(json.dumps(value).encode() + b"\n")
+    def send(
+        request_id: int | str | None, method: str, params: dict[str, Any] | None = None
+    ) -> None:
+        value = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                },
+                **(params or {}),
+            },
+        }
+        stdin.write(json.dumps(value).encode() + b"\n")
 
-    def next_byte(deadline):
+    def next_byte(deadline: float) -> bytes:
         while True:
             remaining = deadline - time.monotonic()
             assert remaining > 0, "stdio response deadline"
@@ -60,7 +92,9 @@ def main():
                     assert byte, f"child exited before response: {diagnostics!r}"
                     return byte
                 if key.data == "exit":
-                    raise AssertionError(f"child exited before response: {diagnostics!r}")
+                    raise AssertionError(
+                        f"child exited before response: {diagnostics!r}"
+                    )
                 chunk = os.read(key.fd, 65536)
                 if chunk:
                     diagnostics.extend(chunk)
@@ -80,9 +114,9 @@ def main():
         assert next_byte(time.monotonic() + 45) == b"{"
         # Exactly one response byte establishes write entry; no further reads
         # can drain the output before the process has retired.
-        selector.unregister(child.stdout)
+        selector.unregister(stdout)
         retired = time.monotonic()
-        child.stdin.close()
+        stdin.close()
         deadline = retired + 0.9
         while True:
             remaining = deadline - time.monotonic()
@@ -102,14 +136,24 @@ def main():
         assert not watcher.is_alive(), "process reaper did not join"
         elapsed = time.monotonic() - retired
         assert child.returncode == 0, diagnostics.decode(errors="replace")
-        trailing = child.stdout.read(8 * 1024**2 + 1)
-        assert len(trailing) < 2 * 1024**2, f"response drained instead of blocking: {len(trailing)} bytes"
-        diagnostics.extend(child.stderr.read(1024 * 1024 + 1))
+        trailing = stdout.read(8 * 1024**2 + 1)
+        assert len(trailing) < 2 * 1024**2, (
+            f"response drained instead of blocking: {len(trailing)} bytes"
+        )
+        diagnostics.extend(stderr.read(1024 * 1024 + 1))
         assert not diagnostics, diagnostics.decode(errors="replace")
-        print(json.dumps({"status": "PASS", "eof_retirement_ms": elapsed * 1000,
-                          "partial_response_bytes": len(trailing) + 1,
-                          "whole_seconds": time.monotonic() - started,
-                          "compile": args.compile, "threads": args.threads}))
+        print(
+            json.dumps(
+                {
+                    "status": "PASS",
+                    "eof_retirement_ms": elapsed * 1000,
+                    "partial_response_bytes": len(trailing) + 1,
+                    "whole_seconds": time.monotonic() - started,
+                    "compile": args.compile,
+                    "threads": args.threads,
+                }
+            )
+        )
     finally:
         if watcher.is_alive():
             child.kill()
@@ -118,7 +162,7 @@ def main():
         selector.close()
         ready.close()
         completed.close()
-        for pipe in (child.stdin, child.stdout, child.stderr):
+        for pipe in (stdin, stdout, stderr):
             pipe.close()
 
 

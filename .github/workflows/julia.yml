@@ -24,6 +24,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Prepare Python quality tools
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: '0.12.0'
+          enable-cache: false
+      - name: Acquire Python quality dependencies
+        run: |
+          uvx ruff@0.16.1 --version
+          uvx mypy@2.4.0 --version
+      - name: Check Python helpers offline
+        run: |
+          uvx --offline ruff@0.16.1 check
+          uvx --offline ruff@0.16.1 format --check
+          uvx --offline mypy@2.4.0
+          python3 dev/check-release-tag.py self-test
+          python3 benchmark/startup.py --self-test
+          python3 benchmark/mcp_client.py --self-test
       - name: Verify release tag metadata
         if: >-
           github.event_name == 'push' &&

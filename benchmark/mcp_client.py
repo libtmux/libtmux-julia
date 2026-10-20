@@ -1,6 +1,14 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Selector-driven installed-MCP measurements; one bounded sample per invocation."""
+
+from __future__ import annotations
+
 import argparse
-from collections import deque
+import contextlib
 import hashlib
 import json
 import os
@@ -11,51 +19,86 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
+from pathlib import Path
+from types import FrameType
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from resource import struct_rusage
 
 PROTOCOL = "2026-07-28"
 FRAME_LIMIT = 8 * 1024 * 1024
 DIAGNOSTIC_LIMIT = 1024 * 1024
-TOOLS = ("list_panes", "capture_pane", "send_keys", "paste_text", "resize_pane",
-         "kill_pane", "run_operations", "create_session", "teardown_session",
-         "wait_for_text", "send_keys_and_wait")
+TOOLS = (
+    "list_panes",
+    "capture_pane",
+    "send_keys",
+    "paste_text",
+    "resize_pane",
+    "kill_pane",
+    "run_operations",
+    "create_session",
+    "teardown_session",
+    "wait_for_text",
+    "send_keys_and_wait",
+)
 
 
 class MeasurementError(Exception):
     """A measurement could not establish its stated boundary."""
 
 
-def frame(identity, method, params=None):
-    metadata = {"io.modelcontextprotocol/protocolVersion": PROTOCOL,
-                "io.modelcontextprotocol/clientCapabilities": {}}
+def frame(
+    identity: int | str | None, method: str, params: dict[str, Any] | None = None
+) -> bytes:
+    metadata = {
+        "io.modelcontextprotocol/protocolVersion": PROTOCOL,
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }
     arguments = dict(params or {})
     metadata.update(arguments.pop("_meta", {}))
     arguments["_meta"] = metadata
-    message = {"jsonrpc": "2.0", "method": method, "params": arguments}
+    message: dict[str, Any] = {"jsonrpc": "2.0", "method": method, "params": arguments}
     if identity is not None:
         message["id"] = identity
-    return (json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+    return (
+        json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n"
+    ).encode()
 
 
-def checked_result(message):
+def checked_result(message: dict[str, Any]) -> dict[str, Any]:
     if "error" in message or "result" not in message:
         raise MeasurementError("protocol request failed")
-    result = message["result"]
+    result: dict[str, Any] = message["result"]
     if result.get("isError", False):
-        code = result.get("structuredContent", {}).get("error", {}).get("code", "unknown")
+        code = (
+            result.get("structuredContent", {}).get("error", {}).get("code", "unknown")
+        )
         raise MeasurementError("tool failed: " + str(code)[:64])
     return result
 
 
 class Client:
     """Own a child, its pipes and one blocking waitpid watcher; never poll readiness."""
-    def __init__(self, command, deadline):
+
+    def __init__(self, command: list[str], deadline: float) -> None:
         self.deadline = deadline
         self.started_ns = time.perf_counter_ns()
         environment = dict(os.environ)
         environment.pop("TMUX", None)
         environment.pop("TMUX_PANE", None)
-        self.child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                      stderr=subprocess.PIPE, bufsize=0, env=environment)
+        self.child = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+            env=environment,
+        )
+        stdin, stdout, stderr = self.child.stdin, self.child.stdout, self.child.stderr
+        assert stdin is not None and stdout is not None and stderr is not None
+        self.stdin, self.stdout, self.stderr = stdin, stdout, stderr
         self.spawned_ns = time.perf_counter_ns()
         try:
             self.selector = selectors.DefaultSelector()
@@ -63,29 +106,34 @@ class Client:
         except BaseException:
             self.child.kill()
             self.child.wait()
-            for pipe in (self.child.stdin, self.child.stdout, self.child.stderr):
+            for pipe in (self.stdin, self.stdout, self.stderr):
                 pipe.close()
             if hasattr(self, "selector"):
                 self.selector.close()
             raise
         self.pending = bytearray()
-        self.messages = deque()
+        self.messages: deque[tuple[dict[str, Any], int, int, str]] = deque()
         self.pending_output = bytearray()
         self.message_bytes = 0
         self.stdout_bytes = self.stderr_bytes = self.stdin_bytes = 0
         self.stdout_digest, self.stderr_digest = hashlib.sha256(), hashlib.sha256()
-        self.exit_ns = None
-        self.usage = None
-        self.reap_error = None
+        self.exit_ns: int | None = None
+        self.usage: struct_rusage | None = None
+        self.reap_error: str | None = None
         self.paused = False
-        self.wire_samples = []
+        self.wire_samples: list[dict[str, Any]] = []
         try:
-            for pipe, label in ((self.child.stdout, "stdout"), (self.child.stderr, "stderr")):
+            for pipe, label in (
+                (self.stdout, "stdout"),
+                (self.stderr, "stderr"),
+            ):
                 os.set_blocking(pipe.fileno(), False)
                 self.selector.register(pipe, selectors.EVENT_READ, label)
-            os.set_blocking(self.child.stdin.fileno(), False)
+            os.set_blocking(self.stdin.fileno(), False)
             self.selector.register(self.exit_reader, selectors.EVENT_READ, "exit")
-            self.watcher = threading.Thread(target=self._reap, name="mcp-benchmark-waitpid")
+            self.watcher = threading.Thread(
+                target=self._reap, name="mcp-benchmark-waitpid"
+            )
             self.watcher.start()
         except BaseException:
             self.child.kill()
@@ -93,11 +141,11 @@ class Client:
             self.selector.close()
             self.exit_reader.close()
             self.exit_writer.close()
-            for pipe in (self.child.stdin, self.child.stdout, self.child.stderr):
+            for pipe in (self.stdin, self.stdout, self.stderr):
                 pipe.close()
             raise
 
-    def _reap(self):
+    def _reap(self) -> None:
         try:
             if hasattr(os, "wait4"):
                 _, status, self.usage = os.wait4(self.child.pid, 0)
@@ -105,24 +153,22 @@ class Client:
             else:
                 self.child.wait()
             self.exit_ns = time.perf_counter_ns()
-        except BaseException as error:
+        except BaseException as error:  # noqa: BLE001 - Report watcher failures to its owner.
             self.reap_error = type(error).__name__
         finally:
             self.exit_writer.sendall(b"x")
 
-    def _remaining(self, deadline):
+    def _remaining(self, deadline: float) -> float:
         remaining = min(self.deadline, deadline) - time.perf_counter()
         if remaining <= 0:
             raise MeasurementError("event deadline exceeded")
         return remaining
 
-    def _unregister(self, stream):
-        try:
-            self.selector.unregister(stream)
-        except KeyError:
-            pass
+    def _unregister(self, descriptor: int) -> None:
+        with contextlib.suppress(KeyError):
+            self.selector.unregister(descriptor)
 
-    def _accept_stdout(self, chunk):
+    def _accept_stdout(self, chunk: bytes) -> None:
         self.stdout_bytes += len(chunk)
         self.stdout_digest.update(chunk)
         self.pending.extend(chunk)
@@ -135,10 +181,16 @@ class Client:
             self.message_bytes += len(line) + 1
             if len(self.messages) >= 64 or self.message_bytes > FRAME_LIMIT:
                 raise MeasurementError("unconsumed reply queue exceeded bound")
-            self.messages.append((data, time.perf_counter_ns(), len(line) + 1,
-                                  hashlib.sha256(line + b"\n").hexdigest()))
+            self.messages.append(
+                (
+                    data,
+                    time.perf_counter_ns(),
+                    len(line) + 1,
+                    hashlib.sha256(line + b"\n").hexdigest(),
+                )
+            )
 
-    def pump(self, deadline):
+    def pump(self, deadline: float) -> None:
         events = self.selector.select(self._remaining(deadline))
         if not events:
             raise MeasurementError("event deadline exceeded")
@@ -151,10 +203,10 @@ class Client:
                 self.stdin_bytes += count
                 del self.pending_output[:count]
                 if not self.pending_output:
-                    self._unregister(self.child.stdin)
+                    self._unregister(self.stdin.fileno())
             elif key.data == "exit":
                 self.exit_reader.recv(1)
-                self._unregister(self.exit_reader)
+                self._unregister(self.exit_reader.fileno())
                 if self.reap_error:
                     raise MeasurementError("process watcher failed: " + self.reap_error)
             else:
@@ -163,7 +215,7 @@ class Client:
                 except BlockingIOError:
                     continue
                 if not chunk:
-                    self._unregister(key.fileobj)
+                    self._unregister(key.fd)
                 elif key.data == "stdout":
                     self._accept_stdout(chunk)
                 else:
@@ -172,27 +224,42 @@ class Client:
                     if self.stderr_bytes > DIAGNOSTIC_LIMIT:
                         raise MeasurementError("diagnostics exceeded byte bound")
 
-    def send(self, identity, method, params=None, *, timeout=30):
+    def send(
+        self,
+        identity: int | str | None,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float = 30,
+    ) -> int:
         if self.child.returncode is not None:
             raise MeasurementError("child exited before request")
         data = frame(identity, method, params)
         if self.pending_output or len(data) > 2 * 1024 * 1024:
             raise MeasurementError("outgoing request exceeded bound")
         self.pending_output.extend(data)
-        self.selector.register(self.child.stdin, selectors.EVENT_WRITE, "stdin")
+        self.selector.register(self.stdin, selectors.EVENT_WRITE, "stdin")
         deadline = time.perf_counter() + timeout
         while self.pending_output:
             self.pump(deadline)
         return len(data)
 
-    def receive(self, *, identity=None, progress=None, timeout=30):
+    def receive(
+        self,
+        *,
+        identity: int | str | None = None,
+        progress: int | str | None = None,
+        timeout: float = 30,
+    ) -> tuple[dict[str, Any], int, int, str]:
         deadline = time.perf_counter() + timeout
         while True:
             for index, item in enumerate(self.messages):
                 data = item[0]
                 matches = (identity is not None and data.get("id") == identity) or (
-                    progress is not None and data.get("method") == "notifications/progress"
-                    and data.get("params", {}).get("progressToken") == progress)
+                    progress is not None
+                    and data.get("method") == "notifications/progress"
+                    and data.get("params", {}).get("progressToken") == progress
+                )
                 if matches:
                     del self.messages[index]
                     self.message_bytes -= item[2]
@@ -201,46 +268,89 @@ class Client:
                 raise MeasurementError("child exited before expected reply")
             self.pump(deadline)
 
-    def request(self, identity, method, params=None, *, timeout=30, label=None):
+    def request(
+        self,
+        identity: int | str,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float = 30,
+        label: str | None = None,
+    ) -> tuple[dict[str, Any], int]:
         started = time.perf_counter_ns()
         request_bytes = self.send(identity, method, params, timeout=timeout)
-        response, received, response_bytes, digest = self.receive(identity=identity, timeout=timeout)
+        response, received, response_bytes, digest = self.receive(
+            identity=identity, timeout=timeout
+        )
         checked_result(response)
-        self.wire_samples.append({"phase": label or method, "elapsed_ns": received - started,
-                                  "request_bytes": request_bytes, "response_bytes": response_bytes,
-                                  "response_sha256": digest})
+        self.wire_samples.append(
+            {
+                "phase": label or method,
+                "elapsed_ns": received - started,
+                "request_bytes": request_bytes,
+                "response_bytes": response_bytes,
+                "response_sha256": digest,
+            }
+        )
         return response, response_bytes
 
-    def call(self, identity, name, arguments=None, *, label=None):
-        response, _ = self.request(identity, "tools/call", {"name": name, "arguments": arguments or {}},
-                                   label=label or name)
-        return checked_result(response)["structuredContent"]
+    def call(
+        self,
+        identity: int | str,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        *,
+        label: str | None = None,
+    ) -> dict[str, Any]:
+        response, _ = self.request(
+            identity,
+            "tools/call",
+            {"name": name, "arguments": arguments or {}},
+            label=label or name,
+        )
+        content: dict[str, Any] = checked_result(response)["structuredContent"]
+        return content
 
-    def wait_progress(self, identity):
+    def wait_progress(self, identity: int | str) -> None:
         started = time.perf_counter_ns()
-        sent = self.send(identity, "tools/call", {"name": "wait_for_text",
-            "arguments": {"text": "absent-benchmark-marker"}, "_meta": {"progressToken": identity}})
+        sent = self.send(
+            identity,
+            "tools/call",
+            {
+                "name": "wait_for_text",
+                "arguments": {"text": "absent-benchmark-marker"},
+                "_meta": {"progressToken": identity},
+            },
+        )
         data, received, count, digest = self.receive(progress=identity)
         if data["params"].get("message") != "waiting":
             raise MeasurementError("wait did not reach its observation boundary")
-        self.wire_samples.append({"phase": "wait_progress", "elapsed_ns": received - started,
-                                  "request_bytes": sent, "response_bytes": count,
-                                  "response_sha256": digest})
+        self.wire_samples.append(
+            {
+                "phase": "wait_progress",
+                "elapsed_ns": received - started,
+                "request_bytes": sent,
+                "response_bytes": count,
+                "response_sha256": digest,
+            }
+        )
 
-    def pause_stdout(self):
-        self._unregister(self.child.stdout)
+    def pause_stdout(self) -> None:
+        self._unregister(self.stdout.fileno())
         self.paused = True
 
-    def first_paused_byte(self, timeout=30):
+    def first_paused_byte(self, timeout: float = 30) -> None:
         selector = selectors.DefaultSelector()
         try:
-            selector.register(self.child.stdout, selectors.EVENT_READ, "stdout")
+            selector.register(self.stdout, selectors.EVENT_READ, "stdout")
             selector.register(self.exit_reader, selectors.EVENT_READ, "exit")
             deadline = time.perf_counter() + timeout
             events = selector.select(self._remaining(deadline))
             if not events or any(key.data == "exit" for key, _ in events):
-                raise MeasurementError("writer did not enter before child exit/deadline")
-            byte = os.read(self.child.stdout.fileno(), 1)
+                raise MeasurementError(
+                    "writer did not enter before child exit/deadline"
+                )
+            byte = os.read(self.stdout.fileno(), 1)
             if not byte:
                 raise MeasurementError("stdout ended before writer entry")
             self.stdout_bytes += 1
@@ -248,10 +358,10 @@ class Client:
         finally:
             selector.close()
 
-    def eof_and_join(self):
-        self._unregister(self.child.stdin)
+    def eof_and_join(self) -> tuple[int, int]:
+        self._unregister(self.stdin.fileno())
         eof_ns = time.perf_counter_ns()
-        self.child.stdin.close()
+        self.stdin.close()
         while self.exit_ns is None:
             self.pump(self.deadline)
         self.watcher.join()
@@ -259,12 +369,17 @@ class Client:
             raise MeasurementError("launcher exit was not clean")
         # A paused pipe stays unread until the child has exited. Only then drain
         # its finite remaining bytes, without interpreting a partial reply.
-        for pipe, label in ((self.child.stdout, "stdout"), (self.child.stderr, "stderr")):
+        for pipe, label in (
+            (self.stdout, "stdout"),
+            (self.stderr, "stderr"),
+        ):
             while True:
                 try:
                     chunk = os.read(pipe.fileno(), 65536)
-                except BlockingIOError:
-                    raise MeasurementError("pipe remained open after direct child exit")
+                except BlockingIOError as error:
+                    raise MeasurementError(
+                        "pipe remained open after direct child exit"
+                    ) from error
                 if not chunk:
                     break
                 if label == "stdout" and not self.paused:
@@ -281,50 +396,67 @@ class Client:
                         raise MeasurementError("diagnostics exceeded byte bound")
         return eof_ns, self.exit_ns
 
-    def report(self):
+    def report(self) -> dict[str, Any]:
         rss = None
         if self.usage is not None:
             rss = self.usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024)
-        return {"spawn_ns": self.spawned_ns - self.started_ns, "exit_code": self.child.returncode,
-                "stdin_bytes": self.stdin_bytes, "stdout_bytes": self.stdout_bytes,
-                "stderr_bytes": self.stderr_bytes, "stdout_sha256": self.stdout_digest.hexdigest(),
-                "stderr_sha256": self.stderr_digest.hexdigest(), "child_max_rss_bytes": rss,
-                "child_user_seconds": None if self.usage is None else self.usage.ru_utime,
-                "child_system_seconds": None if self.usage is None else self.usage.ru_stime,
-                "samples": self.wire_samples}
+        return {
+            "spawn_ns": self.spawned_ns - self.started_ns,
+            "exit_code": self.child.returncode,
+            "stdin_bytes": self.stdin_bytes,
+            "stdout_bytes": self.stdout_bytes,
+            "stderr_bytes": self.stderr_bytes,
+            "stdout_sha256": self.stdout_digest.hexdigest(),
+            "stderr_sha256": self.stderr_digest.hexdigest(),
+            "child_max_rss_bytes": rss,
+            "child_user_seconds": None if self.usage is None else self.usage.ru_utime,
+            "child_system_seconds": None if self.usage is None else self.usage.ru_stime,
+            "samples": self.wire_samples,
+        }
 
-    def close(self):
+    def close(self) -> None:
         if self.child.returncode is None:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 self.child.kill()
-            except ProcessLookupError:
-                pass
         self.watcher.join()
         self.selector.close()
         self.exit_reader.close()
         self.exit_writer.close()
-        for pipe in (self.child.stdin, self.child.stdout, self.child.stderr):
+        for pipe in (self.stdin, self.stdout, self.stderr):
             pipe.close()
 
 
-def run_sample(command, options, deadline, *, backpressure):
+def run_sample(
+    command: list[str],
+    options: argparse.Namespace,
+    deadline: float,
+    *,
+    backpressure: bool,
+) -> dict[str, Any]:
     client = Client(command, deadline)
-    result = {"kind": "backpressure" if backpressure else "workflow", "status": "running"}
+    result: dict[str, Any] = {
+        "kind": "backpressure" if backpressure else "workflow",
+        "status": "running",
+    }
     try:
-        response, _ = client.request("discover", "server/discover", timeout=options.startup,
-                                     label="discovery")
+        response, _ = client.request(
+            "discover", "server/discover", timeout=options.startup, label="discovery"
+        )
         result["process_to_discovery_ns"] = time.perf_counter_ns() - client.started_ns
         result["supported_versions"] = checked_result(response)["supportedVersions"]
         _, catalog_bytes = client.request("catalog1", "tools/list", label="catalog")
         if backpressure:
             try:
                 import fcntl
-                capacity = fcntl.fcntl(client.child.stdout.fileno(), fcntl.F_GETPIPE_SZ)
+
+                capacity = fcntl.fcntl(client.stdout.fileno(), fcntl.F_GETPIPE_SZ)
                 original_capacity = capacity
                 if catalog_bytes - 1 <= capacity and hasattr(fcntl, "F_SETPIPE_SZ"):
                     try:
-                        fcntl.fcntl(client.child.stdout.fileno(), fcntl.F_SETPIPE_SZ, 4096)
-                        capacity = fcntl.fcntl(client.child.stdout.fileno(), fcntl.F_GETPIPE_SZ)
+                        fcntl.fcntl(client.stdout.fileno(), fcntl.F_SETPIPE_SZ, 4096)
+                        capacity = fcntl.fcntl(
+                            client.stdout.fileno(), fcntl.F_GETPIPE_SZ
+                        )
                     except OSError:
                         pass
             except (ImportError, AttributeError, OSError):
@@ -348,39 +480,70 @@ def run_sample(command, options, deadline, *, backpressure):
             cancelled_ns = time.perf_counter_ns()
             client.send(None, "notifications/cancelled", {"requestId": "blocked-wait"})
             eof_ns, exit_ns = client.eof_and_join()
-            result.update({"backpressure_proven": True, "pipe_capacity_bytes": capacity,
-                           "original_pipe_capacity_bytes": original_capacity,
-                           "expected_reply_bytes": catalog_bytes, "bytes_consumed_before_eof": 1,
-                           "writer_entry_ns": writer_entry_ns,
-                           "bytes_drained_after_exit": client.stdout_bytes - prior_stdout_bytes - 1,
-                           "cancel_to_exit_ns": exit_ns - cancelled_ns,
-                           "eof_to_exit_ns": exit_ns - eof_ns})
+            result.update(
+                {
+                    "backpressure_proven": True,
+                    "pipe_capacity_bytes": capacity,
+                    "original_pipe_capacity_bytes": original_capacity,
+                    "expected_reply_bytes": catalog_bytes,
+                    "bytes_consumed_before_eof": 1,
+                    "writer_entry_ns": writer_entry_ns,
+                    "bytes_drained_after_exit": client.stdout_bytes
+                    - prior_stdout_bytes
+                    - 1,
+                    "cancel_to_exit_ns": exit_ns - cancelled_ns,
+                    "eof_to_exit_ns": exit_ns - eof_ns,
+                }
+            )
         else:
             first = client.call("list-first", "list_panes", label="first_list")
             if len(first["panes"]) != 1 or not first["panes"][0]["caller"]:
                 raise MeasurementError("fixture pane policy changed")
-            captured = client.call("capture-first", "capture_pane", label="first_capture")
+            captured = client.call(
+                "capture-first", "capture_pane", label="first_capture"
+            )
             capture_digest = hashlib.sha256(captured["text"].encode()).hexdigest()
             result["capture_text_bytes"] = len(captured["text"].encode())
             for index in range(options.warm):
                 client.call(f"list-{index}", "list_panes", label="warm_list")
-                actual = client.call(f"capture-{index}", "capture_pane", label="warm_capture")
-                if hashlib.sha256(actual["text"].encode()).hexdigest() != capture_digest:
-                    raise MeasurementError("capture content changed between equal workloads")
-            created = client.call("create", "create_session", {"name": "benchmark-owned", "command": ["/bin/cat"]})
-            result["application_owned_session_created"] = created["ownership"] == "application"
+                actual = client.call(
+                    f"capture-{index}", "capture_pane", label="warm_capture"
+                )
+                if (
+                    hashlib.sha256(actual["text"].encode()).hexdigest()
+                    != capture_digest
+                ):
+                    raise MeasurementError(
+                        "capture content changed between equal workloads"
+                    )
+            created = client.call(
+                "create",
+                "create_session",
+                {"name": "benchmark-owned", "command": ["/bin/cat"]},
+            )
+            result["application_owned_session_created"] = (
+                created["ownership"] == "application"
+            )
             client.wait_progress("waiting")
             client.call("concurrent", "list_panes", label="unrelated_list_during_wait")
             cancelled_ns = time.perf_counter_ns()
             client.send(None, "notifications/cancelled", {"requestId": "waiting"})
-            discovered, _ = client.request("after-cancel", "server/discover",
-                                           label="reader_discovery_after_cancel")
-            if checked_result(discovered)["supportedVersions"] != result["supported_versions"]:
+            discovered, _ = client.request(
+                "after-cancel", "server/discover", label="reader_discovery_after_cancel"
+            )
+            if (
+                checked_result(discovered)["supportedVersions"]
+                != result["supported_versions"]
+            ):
                 raise MeasurementError("discovery profile changed after cancellation")
             eof_ns, exit_ns = client.eof_and_join()
-            result.update({"cancel_to_exit_ns": exit_ns - cancelled_ns,
-                           "eof_to_exit_ns": exit_ns - eof_ns,
-                           "cancellation_retirement": "EOF-joined upper bound; no cancellation acknowledgement"})
+            result.update(
+                {
+                    "cancel_to_exit_ns": exit_ns - cancelled_ns,
+                    "eof_to_exit_ns": exit_ns - eof_ns,
+                    "cancellation_retirement": "EOF-joined upper bound; no cancellation acknowledgement",
+                }
+            )
             if client.messages or client.pending:
                 raise MeasurementError("unexpected late protocol output")
         result["status"] = "pass"
@@ -397,10 +560,12 @@ def run_sample(command, options, deadline, *, backpressure):
         options.results.append(result)
 
 
-def self_test():
+def self_test() -> None:
     data = json.loads(frame("one", "tools/call", {"_meta": {"progressToken": "p"}}))
     assert data["params"]["_meta"]["progressToken"] == "p"
-    assert data["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"] == PROTOCOL
+    assert (
+        data["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"] == PROTOCOL
+    )
     assert "id" not in json.loads(frame(None, "notifications/cancelled"))
     client = object.__new__(Client)
     client.stdout_bytes = client.message_bytes = 0
@@ -413,10 +578,12 @@ def self_test():
     assert client.messages[0][0]["result"]["text"] == "λ"
     assert client.stdout_bytes == len(raw)
     assert checked_result(client.messages[0][0])["text"] == "λ"
-    responder = ("import json,sys\n"
-                 "for line in sys.stdin:\n"
-                 " request=json.loads(line)\n"
-                 " print(json.dumps({'id':request['id'],'result':{'ok':True}}),flush=True)\n")
+    responder = (
+        "import json,sys\n"
+        "for line in sys.stdin:\n"
+        " request=json.loads(line)\n"
+        " print(json.dumps({'id':request['id'],'result':{'ok':True}}),flush=True)\n"
+    )
     child = Client([sys.executable, "-u", "-c", responder], time.perf_counter() + 0.9)
     try:
         response, _ = child.request("test", "ping", timeout=0.9)
@@ -428,7 +595,7 @@ def self_test():
     print("PASS benchmark framing and owned-process event checks")
 
 
-def main():
+def main() -> None:
     if sys.argv[1:] == ["--self-test"]:
         self_test()
         return
@@ -442,32 +609,63 @@ def main():
     parser.add_argument("--budget", type=float, default=180)
     parser.add_argument("--startup", type=float, default=90)
     options = parser.parse_args()
-    if not (0 <= options.warm <= 64 and 0 < options.budget <= 600 and 0 < options.startup <= 180):
+    if not (
+        0 <= options.warm <= 64
+        and 0 < options.budget <= 600
+        and 0 < options.startup <= 180
+    ):
         parser.error("warm, budget or startup limit is out of range")
     options.results = []
-    command = [options.launcher, "--socket", options.socket, "--tmux", options.tmux,
-               "--caller-pane", options.pane, "--allow-pane", options.pane,
-               "--timeout", "30", "--workers", "2", "--capacity", "4", "--allow-create"]
+    command = [
+        options.launcher,
+        "--socket",
+        options.socket,
+        "--tmux",
+        options.tmux,
+        "--caller-pane",
+        options.pane,
+        "--allow-pane",
+        options.pane,
+        "--timeout",
+        "30",
+        "--workers",
+        "2",
+        "--capacity",
+        "4",
+        "--allow-create",
+    ]
     for tool in TOOLS:
         command.extend(["--tool", tool])
     started = time.perf_counter_ns()
     deadline = time.perf_counter() + options.budget
-    report = {"schema_version": 1, "status": "running", "protocol": PROTOCOL,
-              "python": sys.version.split()[0], "platform": sys.platform, "samples": options.results}
-    def interrupted(_number, _frame):
+    report = {
+        "schema_version": 1,
+        "status": "running",
+        "protocol": PROTOCOL,
+        "python": sys.version.split()[0],
+        "platform": sys.platform,
+        "samples": options.results,
+    }
+
+    def interrupted(_number: int, _frame: FrameType | None) -> None:
         raise MeasurementError("benchmark driver interrupted")
+
     signal.signal(signal.SIGTERM, interrupted)
     try:
         run_sample(command, options, deadline, backpressure=False)
         run_sample(command, options, deadline, backpressure=True)
-        report["status"] = "pass" if all(item["status"] == "pass" for item in options.results) else "partial"
+        report["status"] = (
+            "pass"
+            if all(item["status"] == "pass" for item in options.results)
+            else "partial"
+        )
     except BaseException as error:
         report["status"] = "fail"
         report["error_type"] = type(error).__name__
         raise
     finally:
         report["client_driver_body_ns"] = time.perf_counter_ns() - started
-        with open(options.output, "x", encoding="utf-8") as destination:
+        with Path(options.output).open("x", encoding="utf-8") as destination:
             json.dump(report, destination, indent=2, ensure_ascii=False)
             destination.write("\n")
 

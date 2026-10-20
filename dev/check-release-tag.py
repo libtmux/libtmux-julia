@@ -1,3 +1,8 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Verify a tagged LibTmux source release before a public Git install."""
 
 from __future__ import annotations
@@ -7,12 +12,13 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
-
+from typing import Any, NoReturn
 
 EXPECTED_REPOSITORY = "libtmux/libtmux-julia"
 PUBLIC_REPOSITORY_URL = "https://github.com/libtmux/libtmux-julia.git"
@@ -51,7 +57,7 @@ PACKAGES = (
 )
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     raise ReleaseCheckError(message)
 
 
@@ -74,8 +80,7 @@ def run_git(arguments: list[str], *, cwd: Path) -> str:
             cwd=cwd,
             text=True,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
     except OSError as error:
@@ -111,7 +116,9 @@ def read_project(checkout: Path, commit: str, package: Package) -> dict[str, Any
     return metadata
 
 
-def validate_package_metadata(metadata: dict[str, Any], package: Package, tag: str) -> None:
+def validate_package_metadata(
+    metadata: dict[str, Any], package: Package, tag: str
+) -> None:
     version = tag.removeprefix("v")
     if metadata.get("name") != package.name:
         fail(f"{package.project} has an unexpected package name")
@@ -128,20 +135,28 @@ def release_packages(checkout: Path, commit: str, tag: str) -> list[dict[str, st
     for package in PACKAGES:
         metadata = read_project(checkout, commit, package)
         validate_package_metadata(metadata, package, tag)
-        tree_ref = f"{commit}^{{tree}}" if package.subdir is None else f"{commit}:{package.subdir}"
+        tree_ref = (
+            f"{commit}^{{tree}}"
+            if package.subdir is None
+            else f"{commit}:{package.subdir}"
+        )
         packages.append(
             {
                 "name": package.name,
                 "uuid": package.uuid,
                 "version": version,
                 "subdir": package.subdir or "",
-                "tree": sha(run_git(["rev-parse", tree_ref], cwd=checkout), "package tree"),
+                "tree": sha(
+                    run_git(["rev-parse", tree_ref], cwd=checkout), "package tree"
+                ),
             }
         )
     return packages
 
 
-def validate_event(event: dict[str, Any], *, tag: str, commit: str, ref: str, repository: str) -> None:
+def validate_event(
+    event: dict[str, Any], *, tag: str, commit: str, ref: str, repository: str
+) -> None:
     tag = tag_name(tag)
     commit = sha(commit, "workflow commit")
     expected_ref = f"refs/tags/{tag}"
@@ -158,7 +173,10 @@ def validate_event(event: dict[str, Any], *, tag: str, commit: str, ref: str, re
     if event.get("forced") is not False:
         fail("release tags must not be force-updated")
     payload_repository = event.get("repository")
-    if not isinstance(payload_repository, dict) or payload_repository.get("full_name") != EXPECTED_REPOSITORY:
+    if (
+        not isinstance(payload_repository, dict)
+        or payload_repository.get("full_name") != EXPECTED_REPOSITORY
+    ):
         fail("push event repository is not canonical")
     if sha(str(event.get("after", "")), "push event commit") != commit:
         fail("push event commit does not match the workflow commit")
@@ -167,7 +185,9 @@ def validate_event(event: dict[str, Any], *, tag: str, commit: str, ref: str, re
 def remote_tag_commit(checkout: Path, repository_url: str, tag: str) -> str:
     tag = tag_name(tag)
     direct = f"refs/tags/{tag}"
-    output = run_git(["ls-remote", "--tags", repository_url, direct + "*"], cwd=checkout)
+    output = run_git(
+        ["ls-remote", "--tags", repository_url, direct + "*"], cwd=checkout
+    )
     references: dict[str, str] = {}
     for line in output.splitlines():
         try:
@@ -182,7 +202,10 @@ def remote_tag_commit(checkout: Path, repository_url: str, tag: str) -> str:
 
 
 def require_clean_checkout(checkout: Path, commit: str) -> None:
-    if sha(run_git(["rev-parse", "HEAD^{commit}"], cwd=checkout), "checkout commit") != commit:
+    if (
+        sha(run_git(["rev-parse", "HEAD^{commit}"], cwd=checkout), "checkout commit")
+        != commit
+    ):
         fail("checkout does not match the workflow commit")
     if run_git(["status", "--porcelain=v1", "--untracked-files=all"], cwd=checkout):
         fail("checkout is dirty")
@@ -203,7 +226,9 @@ def toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=True)
 
 
-def write_release_record(path: Path, *, tag: str, commit: str, packages: list[dict[str, str]]) -> None:
+def write_release_record(
+    path: Path, *, tag: str, commit: str, packages: list[dict[str, str]]
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "schema_version = 1",
@@ -258,7 +283,7 @@ def preflight(
     write_release_record(output, tag=tag, commit=commit, packages=packages)
 
 
-def expect_error(action: Callable[[], None], fragment: str) -> None:
+def expect_error(action: Callable[[], object], fragment: str) -> None:
     try:
         action()
     except ReleaseCheckError as error:
@@ -272,12 +297,27 @@ def git(arguments: list[str], *, cwd: Path) -> str:
 
 
 def self_test() -> None:
-    with tempfile.TemporaryDirectory(prefix="libtmux-julia-release-self-test-") as directory:
+    with tempfile.TemporaryDirectory(
+        prefix="libtmux-julia-release-self-test-"
+    ) as directory:
         root = Path(directory)
-        source, remote, record = root / "source", root / "remote.git", root / "release.toml"
+        source, remote, record = (
+            root / "source",
+            root / "remote.git",
+            root / "release.toml",
+        )
         git(["init", "-q", str(source)], cwd=root)
         git(["-C", str(source), "config", "user.name", "release check"], cwd=root)
-        git(["-C", str(source), "config", "user.email", "release-check@example.invalid"], cwd=root)
+        git(
+            [
+                "-C",
+                str(source),
+                "config",
+                "user.email",
+                "release-check@example.invalid",
+            ],
+            cwd=root,
+        )
         for package in PACKAGES:
             project = source / package.project
             project.parent.mkdir(parents=True, exist_ok=True)
@@ -290,8 +330,13 @@ def self_test() -> None:
         git(["-C", str(source), "add", "."], cwd=root)
         git(["-C", str(source), "commit", "-qm", "release fixture"], cwd=root)
         git(["-C", str(source), "branch", "-M", "master"], cwd=root)
-        commit = sha(git(["-C", str(source), "rev-parse", "HEAD"], cwd=root), "fixture commit")
-        git(["-C", str(source), "tag", "-a", "v0.1.0-alpha.1", "-m", "release fixture"], cwd=root)
+        commit = sha(
+            git(["-C", str(source), "rev-parse", "HEAD"], cwd=root), "fixture commit"
+        )
+        git(
+            ["-C", str(source), "tag", "-a", "v0.1.0-alpha.1", "-m", "release fixture"],
+            cwd=root,
+        )
         git(["init", "-q", "--bare", str(remote)], cwd=root)
         remote_url = remote.as_uri()
         git(["-C", str(source), "remote", "add", "origin", remote_url], cwd=root)
@@ -340,9 +385,15 @@ def self_test() -> None:
             ],
             cwd=root,
         )
-        assert git(["-C", str(shallow), "rev-parse", "--is-shallow-repository"], cwd=root) == "true"
+        assert (
+            git(["-C", str(shallow), "rev-parse", "--is-shallow-repository"], cwd=root)
+            == "true"
+        )
         require_trunk_ancestry(shallow, remote_url, commit)
-        assert git(["-C", str(shallow), "rev-parse", "--is-shallow-repository"], cwd=root) == "false"
+        assert (
+            git(["-C", str(shallow), "rev-parse", "--is-shallow-repository"], cwd=root)
+            == "false"
+        )
         expect_error(lambda: tag_name("alpha.1"), "v-prefixed")
         expect_error(lambda: tag_name("v0.1.0/escape"), "v-prefixed")
         expect_error(
@@ -389,12 +440,16 @@ def self_test() -> None:
         )
         wrong_package = dict(read_project(source, commit, PACKAGES[0]), name="Wrong")
         expect_error(
-            lambda: validate_package_metadata(wrong_package, PACKAGES[0], "v0.1.0-alpha.1"),
+            lambda: validate_package_metadata(
+                wrong_package, PACKAGES[0], "v0.1.0-alpha.1"
+            ),
             "package name",
         )
         wrong_version = dict(read_project(source, commit, PACKAGES[0]), version="0.1.0")
         expect_error(
-            lambda: validate_package_metadata(wrong_version, PACKAGES[0], "v0.1.0-alpha.1"),
+            lambda: validate_package_metadata(
+                wrong_version, PACKAGES[0], "v0.1.0-alpha.1"
+            ),
             "does not match",
         )
         (source / "untracked").write_text("dirty\n")
@@ -415,7 +470,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("self-test", help="run deterministic release-validation checks")
-    verify = commands.add_parser("verify", help="validate a pushed tag and write a release record")
+    verify = commands.add_parser(
+        "verify", help="validate a pushed tag and write a release record"
+    )
     verify.add_argument("--checkout", type=Path, required=True)
     verify.add_argument("--event", type=Path, required=True)
     verify.add_argument("--tag", required=True)
@@ -438,7 +495,7 @@ def main() -> int:
                 output=arguments.output.resolve(),
             )
     except (OSError, ReleaseCheckError) as error:
-        print(f"NOT RUN: {error}", file=os.sys.stderr)
+        print(f"NOT RUN: {error}", file=sys.stderr)
         return 2
     print("PASS release tag verification")
     return 0

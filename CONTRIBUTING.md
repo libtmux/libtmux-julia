@@ -31,6 +31,43 @@ Prepare toolchains and package dependencies before timed test loops. Report
 preparation separately; include process startup and fixture setup/cleanup in
 each check's whole-command time.
 
+## Python helpers
+
+Python helpers require Python 3.12 or newer. Each executable script declares
+its interpreter requirement and runtime dependencies in inline script
+metadata. They currently use only the standard library (`dependencies = []`).
+Run them directly with uv, or use the prepared Python interpreter in test
+subprocesses. Tests must not acquire an interpreter or install dependencies.
+
+Prepare the pinned quality tools outside timed loops:
+
+```console
+$ uvx ruff@0.16.1 --version
+```
+
+```console
+$ uvx mypy@2.4.0 --version
+```
+
+Check lint, formatting and strict types offline from the repository root:
+
+```console
+$ uvx --offline ruff@0.16.1 check
+```
+
+```console
+$ uvx --offline ruff@0.16.1 format --check
+```
+
+```console
+$ uvx --offline mypy@2.4.0
+```
+
+The shared [configuration](pyproject.toml) targets Python 3.12. CI runs these
+checks before admitting the Julia matrix. Keep protocol output, process
+ownership, cleanup and genuine failure evidence covered by the existing
+helper self-tests when changing a Python runner.
+
 ## Checks
 
 Run unit tests without starting tmux:
