@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+#### Release installation checks use normal Julia compilation
+
+Verify installed packages with Julia's normal compiler and cache behavior.
+Child imports and launcher checks receive only their isolated environment,
+so inherited credentials stay out of failure diagnostics.
+
+#### Accept annotated release tags
+
+The release check binds a tag push to its public tag object and the commit
+it names. Annotated and lightweight tags retain the same metadata and trunk
+checks.
+
 ## 0.1.0 - 2026-10-20
 
 #### CI no longer runs macOS
