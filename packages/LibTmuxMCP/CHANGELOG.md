@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0 - 2026-10-20
+
 #### Require Julia 1.13.1 and tmux 3.7c
 
 Require Julia 1.13.1 and tmux 3.7c for the MCP application. Install MCP as a

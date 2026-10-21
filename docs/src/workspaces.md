@@ -25,7 +25,7 @@ $ cd libtmux-julia
 ```
 
 ```console
-$ git checkout adoption-2026-10-18
+$ git checkout master
 ```
 
 Create a local environment for the example:

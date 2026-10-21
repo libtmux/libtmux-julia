@@ -39,7 +39,7 @@ directory, add the core and MCP package from the same rebuild branch:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="adoption-2026-10-18"; Pkg.add([Pkg.PackageSpec(url=repo, rev=revision), Pkg.PackageSpec(url=repo, rev=revision, subdir="packages/LibTmuxMCP")])'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="master"; Pkg.add([Pkg.PackageSpec(url=repo, rev=revision), Pkg.PackageSpec(url=repo, rev=revision, subdir="packages/LibTmuxMCP")])'
 ```
 
 Install a launcher bound to that environment with
@@ -318,7 +318,7 @@ ownership.
 
 ## Support and status
 
-- **Alpha.** The packages are unregistered. Registry publication is pending.
+- **Experimental.** The packages are unregistered. Registry publication is pending.
 - **Protocol.** Modern discovery uses `2026-07-28`. The legacy initialize
   profile is `2025-11-25`.
 - **Julia 1.13.1 or newer and tmux 3.7c or newer.**

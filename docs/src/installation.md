@@ -1,6 +1,6 @@
 # Install from source
 
-The packages are unregistered. Install the rebuild branch
+The packages are unregistered. Install `master`
 in the Julia project that will use them. `Manifest.toml` records the
 requested revision and package tree hashes. The MCP and workspace companions
 are experimental; their guides record supported behavior and limitations.
@@ -15,7 +15,7 @@ $ julia \
     -e 'using Pkg
         Pkg.activate(".")
         repo = "https://github.com/libtmux/libtmux-julia.git"
-        revision = "adoption-2026-10-18"
+        revision = "master"
         Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
@@ -34,7 +34,7 @@ $ julia \
     -e 'using Pkg
         Pkg.activate(".")
         repo = "https://github.com/libtmux/libtmux-julia.git"
-        revision = "adoption-2026-10-18"
+        revision = "master"
         Pkg.add([
             Pkg.PackageSpec(url=repo, rev=revision),
             Pkg.PackageSpec(
@@ -69,7 +69,7 @@ $ julia \
     -e 'using Pkg
         Pkg.activate(".")
         repo = "https://github.com/libtmux/libtmux-julia.git"
-        revision = "adoption-2026-10-18"
+        revision = "master"
         Pkg.add([
             Pkg.PackageSpec(url=repo, rev=revision),
             Pkg.PackageSpec(
@@ -94,5 +94,5 @@ $ bin/libtmux-workspace --help
 [Load a workspace](workspaces.md) describes validation, planning, loading and
 freezing.
 
-The alpha is not in the General registry. Registry registration is a later
-maintainer action.
+Version `0.1.0` is prepared for registration. The packages are not in the
+General registry yet; registration requires a separate maintainer action.

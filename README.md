@@ -48,12 +48,12 @@ for MCP or workspace configuration:
 ## Quick start
 
 The package is unregistered. From your Julia project's directory, add the
-core from the rebuild branch:
+core from `master`:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="adoption-2026-10-18"; Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="master"; Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
 Use Julia 1.13.1 or newer and tmux 3.7c or newer. Have `tmux` on your `PATH`,
@@ -269,7 +269,7 @@ $ cd libtmux-julia
 ```
 
 ```console
-$ git checkout adoption-2026-10-18
+$ git checkout master
 ```
 
 ```console
@@ -413,7 +413,7 @@ The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
 
 ## Support and status
 
-- **Alpha.** The packages are unregistered and their APIs may change. Pkg
+- **Initial release.** The packages are unregistered and their APIs may change. Pkg
   records the requested revision and package tree in your `Manifest.toml`.
 - **Standard library only.** The core imports only Julia standard libraries.
   The JSON and Tables integrations are optional extensions.
