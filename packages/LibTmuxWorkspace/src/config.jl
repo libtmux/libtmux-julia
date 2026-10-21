@@ -53,8 +53,8 @@ struct CommandConfig
     enter::Union{Nothing,Bool}
 end
 struct PaneConfig
-    commands::Tuple
-    before::Tuple
+    commands::Tuple{Vararg{CommandConfig}}
+    before::Tuple{Vararg{CommandConfig}}
     start_directory::Union{Nothing,String}
     environment::Union{Nothing,Tuple}
     shell::Union{Nothing,String}
@@ -66,7 +66,7 @@ struct WindowConfig
     name::String
     index::Union{Nothing,Int}
     start_directory::Union{Nothing,String}
-    before::Tuple
+    before::Tuple{Vararg{CommandConfig}}
     environment::Tuple
     options::Tuple
     options_after::Tuple
@@ -74,7 +74,7 @@ struct WindowConfig
     shell::Union{Nothing,String}
     suppress_history::Union{Nothing,Bool}
     focus::Bool
-    panes::Tuple
+    panes::Tuple{Vararg{PaneConfig}}
 end
 @noinline Base.@nospecializeinfer function _runtime_window_config(
     name,
@@ -112,12 +112,12 @@ struct WorkspaceConfig
     session_name::String
     start_directory::Union{Nothing,String}
     before_script::Union{Nothing,String}
-    before::Tuple
+    before::Tuple{Vararg{CommandConfig}}
     environment::Tuple
     options::Tuple
     global_options::Tuple
     suppress_history::Bool
-    windows::Tuple
+    windows::Tuple{Vararg{WindowConfig}}
     source_path::Union{Nothing,String}
 end
 
