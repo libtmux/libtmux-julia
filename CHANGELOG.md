@@ -4,9 +4,9 @@
 
 #### CI no longer runs macOS
 
-The Julia workflow runs its Linux cells only. macOS stays supported on a
-best-effort basis, and CI coverage for it is highly limited. The READMEs,
-the compatibility guide and the contributing guide say so. (#34)
+The Julia workflow runs its Linux configurations only. macOS and psmux are
+excluded from CI and current support; earlier platform results remain
+historical evidence. (#34, #32)
 
 #### The release workflow checks a tag install again
 
@@ -14,6 +14,44 @@ The job that installs a pushed release tag into a fresh Julia environment
 read fields Pkg does not provide and failed after a successful install. It
 now checks each installed package's name, version, source, revision and
 tree, and its self-test is built from Pkg's own package fields. (#34)
+
+#### Require Julia 1.13.1 and tmux 3.7c
+
+Require Julia 1.13.1 and tmux 3.7c across the core, MCP and workspace packages.
+Unsupported or replaced daemons are refused before effects. JSON layouts
+require tmux 3.8. (#32)
+
+#### Query captured state and scoped relationships
+
+Inspect operational pane state, look up captured entities by identity, and
+filter related entities with native Julia collections. Scoped observations
+preserve coverage, ordering and the distinction between shared windows and
+their session links. (#32)
+
+#### Wait for output within a shared deadline
+
+Wait for text, a predicate or an inactivity interval with a shared deadline
+and cancellation. Concurrent callers keep their own registration budgets;
+a text match or quiet output does not prove command success. (#32)
+
+#### Maintain panes and inspect configuration
+
+Maintain panes and inspect bounded option, environment, hook and buffer
+inventories. Pane operations preserve literal window names, and callers
+retain cancellation causes and cleanup failures. (#32)
+
+#### Follow task-first guides and installation examples
+
+Use task-first guides, executable tmux examples and native API references.
+MCP and workspace installation recipes show how to bind their launchers to
+the selected consumer project. (#32)
+
+#### Identify CI failures and retain partial results
+
+Identify the active file and nested testset, retain original failures and
+partial artifacts, and continue independent files after failures. Linux
+checks cover isolated installs and installed workflows, with bounded cleanup
+and portable Julia caches. (#32)
 
 ## 0.1.0-alpha.2 - 2026-10-18
 

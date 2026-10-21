@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+#### Require Julia 1.13.1 and tmux 3.7c
+
+Require Julia 1.13.1 and tmux 3.7c for the MCP application. Install MCP as a
+separate package and bind its launcher to the selected consumer project.
+(#32)
+
+#### Scope, filter and page pane discovery
+
+Discover panes within a session or window, filter and project captured
+fields, and continue pages only while the observation remains unchanged.
+Wait tools share core waits and accept shorter per-call budgets. (#32)
+
+#### Preserve whole-call effects
+
+Inspect effects from hooks, earlier batch items, cancellation and cleanup
+when a tool fails. Effects describe the whole call, including work completed
+before an error. (#32)
+
+#### Report the installed package version
+
+Keep the reported MCP server version aligned with installed package metadata
+after upgrades and normal precompilation. (#32)
+
 ## 0.1.0-alpha.2 - 2026-10-18
 
 #### Report refused tmux releases
