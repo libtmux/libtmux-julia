@@ -25,6 +25,11 @@
             @test any(w -> w.name == "#{literal}", windows(snapshot(server)))
             LibTmux.select_layout(server, extra, :even_horizontal)
             version = only(read_formats(server, extra, FormatField("version"))).value
+            captured_layout = snapshot(server, extra).layout
+            @test select_layout(server, extra, captured_layout) isa CommandResult
+            if !LibTmux._version_at_least(version, "3.8")
+                @test_throws UnsupportedCapability select_layout(server, extra, "{\"V\":2}")
+            end
             if version in ("3.3", "3.3a", "3.4")
                 @test_throws UnsupportedCapability select_layout(
                     server,
@@ -67,7 +72,7 @@ end
             executable,
             raw"""#!/bin/sh
 if [ "$6" = run-shell ]; then
-    printf 'unknown command: %s3.7\n' "${8%\#\{version\}}" >&2
+    printf 'unknown command: %s3.7c\n' "${8%\#\{version\}}" >&2
     exit 1
 fi
 shift 7
@@ -85,7 +90,7 @@ esac
         )
         chmod(executable, 0o700)
         write(executable * ".codec", "A\\\\B\\tC\\nD\n")
-        write(executable * ".metadata", "100\t200\t3.7\t$socket\n")
+        write(executable * ".metadata", "100\t200\t3.7c\t$socket\n")
         server = Server(socket_path=socket, tmux=executable)
         identity = ServerIdentity(socket_path=socket, generation="100:200")
         session_ref = SessionRef(identity, "\$0")

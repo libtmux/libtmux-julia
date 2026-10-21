@@ -95,6 +95,9 @@ mutable struct ObservationStream
     error::Union{Nothing,Exception}
     cleanup_done::Bool
     reserved::Bool
+    _wait_decoder::Union{Nothing,TextDecoder}
+    _wait_cursor::ObservationCursor
+    _wait_active::Bool
 end
 
 mutable struct _ObservationHub <: _ControlObservationState
@@ -107,7 +110,7 @@ mutable struct _ObservationHub <: _ControlObservationState
     cleanup::Vector{ObservationStream}
     reservations::Int
     worker::Union{Nothing,Task}
-    output_lock::ReentrantLock
+    output_enabling::Bool
     output_enabled::Bool
     terminal::Bool
     cleaning::Bool
@@ -131,7 +134,7 @@ function _observation_hub(connection)
             ObservationStream[],
             0,
             nothing,
-            ReentrantLock(),
+            false,
             false,
             false,
             false,
@@ -454,6 +457,9 @@ function _new_observation(
             nothing,
             false,
             true,
+            nothing,
+            cursor,
+            false,
         )
         finalizer(_finalize_observation!, stream)
         push!(hub.streams, WeakRef(stream))
@@ -514,6 +520,59 @@ function _observation_target(connection, target, started, timeout, cancel)
     window
 end
 
+function _enable_observation_output(connection, hub, started, timeout, cancel)
+    interruption = Ref{Union{Nothing,Exception}}(nothing)
+    interrupt(error) = lock(connection.lock) do
+        if interruption[] === nothing
+            interruption[] = error
+            notify(connection.changed; all=true)
+        end
+    end
+    timer, timer_task = _owned_timer(
+        () -> interrupt(DeadlineExceeded(Float64(timeout), false, nothing)),
+        _snapshot_remaining(started, Float64(timeout)),
+    )
+    registration =
+        cancel === nothing ? nothing :
+        on_cancel(() -> interrupt(RequestCancelled(false)), cancel)
+    enabling = false
+    try
+        enabling = lock(connection.lock) do
+            while hub.output_enabling && !hub.terminal && interruption[] === nothing
+                wait(connection.changed)
+            end
+            interruption[] === nothing || throw(interruption[])
+            _observation_hub(connection)
+            hub.output_enabled && return false
+            hub.output_enabling = true
+        end
+        if enabling
+            result = _control_request(
+                connection,
+                ["refresh-client", "-f", "!no-output"],
+                _ControlReplyPolicy(; diagnostics=true);
+                timeout=_snapshot_remaining(started, Float64(timeout)),
+                cancel,
+            )
+            result.failed && throw(ControlCommandError(result, "refresh-client"))
+            lock(connection.lock) do
+                hub.output_enabled = true
+            end
+        end
+    finally
+        if enabling
+            lock(connection.lock) do
+                hub.output_enabling = false
+                notify(connection.changed; all=true)
+            end
+        end
+        close(timer)
+        wait(timer_task)
+        registration === nothing || close(registration)
+    end
+    nothing
+end
+
 """
     observe_output(connection, pane; capacity=64, max_bytes=1048576, after=nothing,
                    timeout=5.0, cancel=nothing)
@@ -536,19 +595,7 @@ function observe_output(
     stream = _new_observation(connection, :output; pane, kwargs...)
     hub = connection.observation::_ObservationHub
     try
-        lock(hub.output_lock) do
-            if !hub.output_enabled
-                result = _control_request(
-                    connection,
-                    ["refresh-client", "-f", "!no-output"],
-                    _ControlReplyPolicy(; diagnostics=true);
-                    timeout=_snapshot_remaining(started, Float64(timeout)),
-                    cancel,
-                )
-                result.failed && throw(ControlCommandError(result, "refresh-client"))
-                hub.output_enabled = true
-            end
-        end
+        _enable_observation_output(connection, hub, started, timeout, cancel)
         _observation_target(connection, pane, started, timeout, cancel) == window ||
             throw(ObservationLost(:target_changed, stream.cursor))
         isopen(stream) || throw(
@@ -652,7 +699,7 @@ function Base.close(stream::ObservationStream)
     nothing
 end
 
-function _take_observation(stream; timeout=nothing, cancel=nothing)
+function _take_observation(stream; timeout=nothing, cancel=nothing, _text_wait::Bool=false)
     connection = stream.connection
     timeout === nothing ||
         (isfinite(timeout) && timeout > 0) ||
@@ -674,6 +721,9 @@ function _take_observation(stream; timeout=nothing, cancel=nothing)
         on_cancel(() -> interrupt(RequestCancelled(false)), cancel)
     try
         lock(connection.lock) do
+            stream._wait_active &&
+                !_text_wait &&
+                throw(ArgumentError("raw reads cannot interleave with an active text wait"))
             if stream.consumer === nothing
                 stream.consumer = current_task()
                 notify(connection.changed; all=true)

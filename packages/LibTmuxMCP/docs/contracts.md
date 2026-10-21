@@ -22,8 +22,9 @@ The default catalog contains [`list_panes`][tool_list_panes],
 - The same policy applies to every item in
   [`run_operations`][tool_run_operations] before any item executes.
 
-With `--caller-pane`, a call that omits `target` uses that pane. Calls that name
-another pane are denied.
+With `--caller-pane`, a call that omits `target` uses that pane. Add
+`--allow-pane` to restrict explicit targets; `--caller-pane` alone permits
+calls to other panes. Pane restrictions do not sandbox commands sent to a shell.
 
 ## Batches
 

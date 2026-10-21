@@ -1,0 +1,11 @@
+[tool.ruff]
+required-version = "==0.16.1"
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = ["I", "UP", "B", "C4", "SIM", "PTH", "RUF", "FA100"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["dev", "benchmark", "packages/LibTmuxMCP/test"]

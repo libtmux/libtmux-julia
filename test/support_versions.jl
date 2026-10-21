@@ -60,7 +60,7 @@
         @test !occursin("is unsupported", message(version))
     end
     @test startswith(message(""), "tmux version is unsupported;")
-    @test LibTmux.MINIMUM_TMUX_VERSION == "3.3a"
+    @test LibTmux.MINIMUM_TMUX_VERSION == "3.7c"
     for chain in (
         ("next-3.7", "3.7-rc", "3.7-rc3", "3.7", "3.7a"),
         ("next-3.4", "3.4-rc", "3.4"),
@@ -94,6 +94,17 @@
         sprint(showerror, UnsupportedTmuxVersion("", "could not be read")),
     )
     @test LibTmux._batch_sent(error) === false
+
+    # Mirrored layouts need 3.5; pre-release builds rank by the release they name.
+    for version in ("3.5", "3.7d", "3.8-rc2", "next-3.9")
+        @test LibTmux._check_layout_version("main-vertical-mirrored", version) === nothing
+    end
+    for version in ("3.3a", "3.4", "next-3.5", "3.5-rc1", "master")
+        @test_throws UnsupportedCapability LibTmux._check_layout_version(
+            "main-vertical-mirrored",
+            version,
+        )
+    end
 end
 
 @testset "version gates use the release ranking" begin

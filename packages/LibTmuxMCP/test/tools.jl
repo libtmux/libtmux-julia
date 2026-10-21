@@ -6,22 +6,115 @@ tool_result(app, name, args=Dict(); kwargs...) =
 pane_target(ref) = Dict("paneId"=>string(ref.id), "generation"=>ref.server.generation)
 
 if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
-    @testset "MCP failures preserve possible effects after process admission" begin
+    @testset "MCP waits expose per-call total budgets" begin
+        endpoint = Server(socket_path="/tmp/libtmux-julia-uncontacted/s")
+        caller = PaneRef(
+            ServerIdentity(socket_path=endpoint.socket_path, generation="1:1"),
+            "%0",
+        )
+        app = Application(endpoint; caller, allowed_tools=("wait_for_text",), timeout=0.9)
+        try
+            properties = only(tools(app)).input_schema["properties"]
+            @test haskey(properties, "timeoutSeconds")
+            plan = try
+                LibTmuxMCP._plan_tool(
+                    app,
+                    "wait_for_text",
+                    Dict("text"=>"ready", "timeoutSeconds"=>0.05),
+                )
+            catch error
+                error
+            end
+            @test plan isa NamedTuple
+            plan isa NamedTuple && @test plan.args["timeoutSeconds"] == 0.05
+            for invalid in (0, -1, true, NaN, Inf, 1.0)
+                result = tool_result(
+                    app,
+                    "wait_for_text",
+                    Dict("text"=>"ready", "timeoutSeconds"=>invalid),
+                )
+                @test result.is_error &&
+                      result.structured_content["error"]["effects"] == "none"
+            end
+        finally
+            close(app)
+        end
+    end
+
+    @testset "MCP call owner preserves validation and deferred callback admission" begin
+        mktempdir("/tmp"; prefix="ltj-mcp-") do directory
+            endpoint = Server(socket_path=joinpath(directory, "s"))
+            caller = PaneRef(
+                ServerIdentity(socket_path=endpoint.socket_path, generation="1:1"),
+                "%0",
+            )
+            app =
+                Application(endpoint; caller, allowed_tools=("capture_pane",), timeout=0.9)
+            name = SubString("capture_pane suffix", 1, 12)
+            cancelled = CancellationToken()
+            cancel!(cancelled)
+            try
+                for (arguments, token, code) in (
+                    (Dict("lines"=>0), CancellationToken(), "invalid_arguments"),
+                    (Dict("maxBytes"=>1), cancelled, "cancelled"),
+                    (Dict("maxBytes"=>1), CancellationToken(), "operation_failed"),
+                )
+                    result = tool_result(app, name, arguments; cancel=token, progress=1)
+                    detail = result.structured_content["error"]
+                    @test result.is_error &&
+                          (detail["code"], detail["effects"]) == (code, "none")
+                    @test isempty(app._active) && isopen(app)
+                end
+                close(app)
+                result = tool_result(app, name, Dict("maxBytes"=>1); progress=1)
+                detail = result.structured_content["error"]
+                @test result.is_error &&
+                      (detail["code"], detail["effects"]) == ("closed", "none")
+                @test isempty(app._active) && !isopen(app)
+            finally
+                close(app)
+            end
+        end
+    end
+
+    @testset "MCP failures preserve whole-call I/O admission" begin
         result = CommandResult(UInt8[0x61], UInt8[], 0, 0)
         for failure in (
             ProcessIOError(:stdout, EOFError(), result),
             OutputLimitExceeded(:stdout, 1, result),
         )
-            @test LibTmuxMCP._tool_error(failure, "send_keys")["effects"] == "possible"
-            @test LibTmuxMCP._tool_error(failure, "capture_pane")["effects"] == "none"
+            @test LibTmuxMCP._tool_error(failure, true)["effects"] == "possible"
+            @test LibTmuxMCP._tool_error(failure, false)["effects"] == "none"
+        end
+        @testset "cancelled expired calls preserve admission" begin
+            token = CancellationToken()
+            cancel!(token)
+            for admitted in (false, true)
+                effects = Ref(admitted)
+                context = LibTmuxMCP._ToolContext(
+                    time_ns() - UInt64(1_000_000_000),
+                    0.1,
+                    token,
+                    identity,
+                    effects,
+                )
+                failure = try
+                    LibTmuxMCP._tool_kwargs(context)
+                catch error
+                    error
+                end
+                @test failure isa RequestCancelled
+                @test effects[] === admitted
+            end
         end
     end
 
-    @testset "MCP reports an unsupported tmux release without effects" begin
+    @testset "MCP version failures preserve admitted effects" begin
         failure = LibTmux.UnsupportedTmuxVersion("3.2a", "3.3a", "")
-        for name in ("capture_pane", "send_keys", "kill_pane")
-            error = LibTmuxMCP._tool_error(failure, name)
-            @test error["code"] == "unsupported_tmux" && error["effects"] == "none"
+        for admitted in (false, true)
+            error = LibTmuxMCP._tool_error(failure, admitted)
+            @test error["code"] == "unsupported_tmux"
+            @test error["effects"] == (admitted ? "possible" : "none")
             @test occursin("3.3a", error["message"])
             @test occursin("Upgrade tmux", error["message"])
         end
@@ -29,7 +122,23 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
             LibTmux.CommandResult(UInt8[], UInt8[], 1, 0),
             "version probe",
         )
-        @test LibTmuxMCP._tool_error(probe, "kill_pane")["effects"] == "none"
+        for admitted in (false, true)
+            error = LibTmuxMCP._tool_error(probe, admitted)
+            @test error["effects"] == (admitted ? "possible" : "none")
+        end
+    end
+
+    @testset "MCP names the operation that a tmux release cannot support" begin
+        failure = LibTmux.UnsupportedCapability(
+            :open_control,
+            "control acquisition requires tmux 3.7",
+        )
+        for admitted in (false, true)
+            error = LibTmuxMCP._tool_error(failure, admitted)
+            @test error["code"] == "unsupported_capability" &&
+                  error["effects"] == (admitted ? "possible" : "none")
+            @test occursin("3.7", error["message"])
+        end
     end
 
     @testset "MCP application catalog is pure and policy is copied" begin
@@ -47,7 +156,7 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
             catalog,
         )
         @test all(tool -> tool.task_support === :forbidden, catalog)
-        @test only(filter(tool->tool.name=="capture_pane", catalog)).annotations["readOnlyHint"]
+        @test !only(filter(tool->tool.name=="capture_pane", catalog)).annotations["readOnlyHint"]
         @test !only(filter(tool->tool.name=="send_keys", catalog)).annotations["idempotentHint"]
         @test all(
             tool -> "target" in tool.input_schema["required"],
@@ -135,6 +244,14 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
         @test close(app) === nothing
     end
 
+end
+
+if isempty(ARGS) || any(arg -> arg in ("effects", "integration", "all"), ARGS)
+    if isdefined(Main, :include_test_file)
+        Main.include_test_file(@__MODULE__, joinpath(@__DIR__, "effects.jl"))
+    else
+        Base.include(@__MODULE__, joinpath(@__DIR__, "effects.jl"))
+    end
 end
 
 if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
@@ -361,7 +478,7 @@ exit 99
                     @test success_payload["failedIndex"] === nothing
                     @test success_payload["atomic"] === false
                     @test success_payload["error"]["code"] == "result_limit"
-                    @test success_payload["error"]["effects"] == "none"
+                    @test success_payload["error"]["effects"] == "possible"
                     @test only(success_payload["completed"]) == Dict(
                         "tool"=>"capture_pane",
                         "completed"=>true,
@@ -573,6 +690,44 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                 @test !baseline.is_error &&
                       baseline.structured_content["source"] == "baseline"
                 @test baseline.structured_content["continuity"] == "reset"
+                callback_failure = tool_result(
+                    app,
+                    "wait_for_text",
+                    Dict("text"=>"reply:λ-ready");
+                    progress=phase -> error("progress callback stopped"),
+                )
+                @test callback_failure.is_error &&
+                      callback_failure.structured_content["error"]["code"] ==
+                      "operation_failed" &&
+                      callback_failure.structured_content["error"]["effects"] == "possible"
+                @test isempty(clients(snapshot(server)))
+                for (name, result) in
+                    (("send_keys_and_wait", sent), ("wait_for_text", baseline))
+                    schema =
+                        only(filter(tool -> tool.name == name, tools(app))).output_schema
+                    continuity = schema["anyOf"][1]["properties"]["continuity"]
+                    actual = result.structured_content["continuity"]
+                    @test haskey(continuity, "const") ? actual == continuity["const"] :
+                          actual in continuity["enum"]
+                end
+                started = time_ns()
+                limited = tool_result(
+                    app,
+                    "wait_for_text",
+                    Dict("text"=>"not-emitted", "timeoutSeconds"=>0.1),
+                )
+                elapsed = (time_ns() - started) / 1e9
+                deadline_result =
+                    limited.is_error &&
+                    limited.structured_content["error"]["code"] == "deadline"
+                deadline_result ||
+                    println("unexpected wait result: ", limited.structured_content)
+                @test deadline_result
+                @test limited.structured_content["error"]["effects"] == "possible"
+                elapsed < 2.0 ||
+                    println(stderr, "MCP literal deadline call_seconds=", elapsed)
+                @test elapsed < 2.0
+                @test isempty(clients(snapshot(server)))
                 entered = Channel{Any}(2)
                 token = CancellationToken()
                 task = Threads.@spawn begin

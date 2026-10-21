@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+#### Require Julia 1.13.1 and tmux 3.7c
+
+Require Julia 1.13.1 and tmux 3.7c for loading, freezing, control and owned
+buffers. Older tmux releases are refused before a workspace changes them.
+(#32)
+
+#### Preserve planning errors and command-line progress
+
+Keep configuration errors and provenance visible while parsing and planning.
+The installed CLI flushes progress and cleans up its owned output resources
+after failure or interruption. Load and freeze examples use the documented
+configuration format. (#32)
+
 ## 0.1.0-alpha.2 - 2026-10-18
 
 #### Report refused tmux releases

@@ -179,13 +179,11 @@ function configure_isolation(layout::StageLayout)
     append!(LOAD_PATH, ("@", "@stdlib"))
 end
 
-# `Pkg.dependencies()` is keyed by UUID, so finding `info` there already
-# matched the UUID; `PackageInfo` has no UUID field of its own.
 function package_info(
     record::ReleasePackage,
-    commit::AbstractString,
     info,
     checkout::AbstractString,
+    commit::AbstractString,
 )
     require(info.name == record.name, "installed package name is wrong")
     require(info.version == record.version, "installed package version is wrong")
@@ -267,7 +265,7 @@ function installed_packages(record::ReleaseRecord, checkout::AbstractString)
     for package in record.packages
         info = get(dependencies, package.uuid, nothing)
         info === nothing && fail("Pkg did not install $(package.name)")
-        package_info(package, record.commit, info, checkout)
+        package_info(package, info, checkout, record.commit)
     end
 end
 
@@ -428,40 +426,32 @@ function self_test()
             TOML.print(io, manifest)
         end
         verify_manifest(record, project)
+        package = first(record.packages)
+        info = Pkg.API.PackageInfo(
+            name=package.name,
+            version=package.version,
+            tree_hash=package.tree,
+            is_direct_dep=true,
+            is_pinned=false,
+            is_tracking_path=false,
+            is_tracking_repo=true,
+            is_tracking_registry=false,
+            git_revision=record.commit,
+            git_source=record.repository,
+            source=project,
+            dependencies=Dict{String,UUID}(),
+        )
+        checkout = joinpath(directory, "checkout")
+        @assert package_info(package, info, checkout, record.commit)
+        expect_error(
+            () -> package_info(package, info, checkout, repeat("e", 40)),
+            "revision",
+        )
         manifest["deps"]["LibTmuxMCP"][1]["repo-subdir"] = "wrong"
         open(joinpath(project, "Manifest.toml"), "w") do io
             TOML.print(io, manifest)
         end
         expect_error(() -> verify_manifest(record, project), "subdirectory")
-    end
-    installed = record.packages[1]
-    mktempdir(; prefix="libtmux-julia-release-package-self-test-") do source
-        # Shaped like the installed Julia's `Pkg.API.PackageInfo`, so reading a
-        # field it lacks fails here rather than on the first real release.
-        fields = fieldnames(Pkg.API.PackageInfo)
-        values = Dict{Symbol,Any}(field => nothing for field in fields)
-        merge!(
-            values,
-            Dict{Symbol,Any}(
-                :name => installed.name,
-                :version => installed.version,
-                :tree_hash => Base.SHA1(installed.tree),
-                :is_direct_dep => true,
-                :is_tracking_path => false,
-                :is_tracking_repo => true,
-                :is_tracking_registry => false,
-                :git_revision => record.commit,
-                :git_source => RELEASE_REPOSITORY,
-                :source => source,
-            ),
-        )
-        info = NamedTuple{fields}(Tuple(values[field] for field in fields))
-        package_info(installed, record.commit, info, pwd())
-        wrong_revision = merge(info, (git_revision="0"^40,))
-        expect_error(
-            () -> package_info(installed, record.commit, wrong_revision, pwd()),
-            "release commit",
-        )
     end
     wrong_tag = fixture_record()
     wrong_tag["tag"] = "v0.1.0-alpha.2"
@@ -470,11 +460,12 @@ function self_test()
     wrong_package["packages"][1]["name"] = "Wrong"
     expect_error(() -> release_record(wrong_package), "package name")
     mktempdir(; prefix="libtmux-julia-release-stage-self-test-") do checkout
-        stage = mktempdir(; prefix="libtmux-julia-release-stage-")
-        write(joinpath(stage, "release.toml"), "schema_version = 1\\n")
-        layout = stage_layout(stage, checkout)
-        @assert layout.root == abspath(stage)
-        expect_error(() -> stage_layout(checkout, checkout), "outside")
+        mktempdir(; prefix="libtmux-julia-release-stage-") do stage
+            write(joinpath(stage, "release.toml"), "schema_version = 1\\n")
+            layout = stage_layout(stage, checkout)
+            @assert layout.root == abspath(stage)
+            expect_error(() -> stage_layout(checkout, checkout), "outside")
+        end
     end
 end
 
@@ -493,15 +484,20 @@ function main(args)
     verify(options["--release"], options["--stage"], options["--checkout"])
 end
 
-try
-    main(ARGS)
-    println("PASS public tag installation")
-catch error
-    if error isa ReleaseInstallError ||
-       error isa Base.TOML.ParserError ||
-       error isa SystemError
-        println(stderr, "NOT RUN: ", sprint(showerror, error))
-        exit(2)
+if abspath(PROGRAM_FILE) == (@__FILE__)
+    try
+        main(ARGS)
+        println(
+            ARGS == ["--self-test"] ? "PASS offline installation checks" :
+            "PASS public tag installation",
+        )
+    catch error
+        if error isa ReleaseInstallError ||
+           error isa Base.TOML.ParserError ||
+           error isa SystemError
+            println(stderr, "NOT RUN: ", sprint(showerror, error))
+            exit(2)
+        end
+        rethrow()
     end
-    rethrow()
 end

@@ -17,7 +17,7 @@ Julia.
 </div>
 
 [Create a session][new_session], [capture a pane][capture_pane] and read
-everything a server holds into a [snapshot][snapshot]. Then
+sessions, windows, panes and clients into a [snapshot][snapshot]. Then
 [filter it][panewhere] with `filter`, `count` and other Julia collection
 functions. You can also [type into a pane][send_keys] and
 [read what it prints][observe_output].
@@ -36,8 +36,8 @@ and, through the MCP package, agents that share a terminal.
 [API reference](https://libtmux.org/en/julia/latest/reference/) ·
 [Field reference][repo-docs-generated-criteria-md]
 
-The core uses only Julia standard libraries. Add a companion for MCP or
-workspace configuration:
+The core uses only Julia standard libraries. Add an experimental companion
+for MCP or workspace configuration:
 
 | Package | Use it for |
 | --- | --- |
@@ -47,16 +47,17 @@ workspace configuration:
 
 ## Quick start
 
-`v0.1.0-alpha.2` is an unregistered source release. From your Julia project's
-directory, add the core from its public Git tag:
+The package is unregistered. From your Julia project's directory, add the
+core from the rebuild branch:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); Pkg.add(Pkg.PackageSpec(url="https://github.com/libtmux/libtmux-julia.git", rev="v0.1.0-alpha.2"))'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="adoption-2026-10-18"; Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
-Have `tmux` on your `PATH`, then open Julia in that project:
+Use Julia 1.13.1 or newer and tmux 3.7c or newer. Have `tmux` on your `PATH`,
+then open Julia in that project:
 
 ```console
 $ julia --project=.
@@ -214,10 +215,11 @@ reads the cursor with [`observation_cursor`][observation_cursor].
 
 ## Reuse a control connection
 
-### [`open_control`][open_control]: one client for many commands
+### [`open_control`][open_control]: persistent clients for repeated commands
 
 A plain server starts a tmux client process for each command.
-[`open_control`][open_control] keeps one client open for repeated operations.
+[`open_control`][open_control] keeps two clients open for repeated operations
+and cleanup.
 Both yield during I/O, so `Threads.@spawn` and `fetch` overlap calls:
 
 ```julia
@@ -235,7 +237,7 @@ screens = with_server() do server
 end
 ```
 
-`screens` holds both pane captures. The inner block closes the client, and the
+`screens` holds both pane captures. The inner block closes both clients, and the
 outer block closes the server.
 
 A control client counts as attached in tmux. Connection loss is terminal, and
@@ -253,18 +255,21 @@ Each program creates and cleans up its own tmux server:
 | Query shared windows and their panes | [shared_windows.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/shared_windows.jl) |
 | Cancel a waiting control operation | [control_cancel.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/control_cancel.jl) |
 | Send text and subscribe to pane output | [output_stream.jl](https://github.com/libtmux/libtmux-julia/blob/master/examples/output_stream.jl) |
+| Wait for an explicit command completion marker | [command_completion.jl](https://github.com/libtmux/libtmux-julia/blob/589c726499610ce5e96844f6c9a49a41368da5ec/examples/command_completion.jl) |
 
 To run the programs, clone the source:
 
 ```console
 $ git clone \
-    --branch v0.1.0-alpha.2 \
-    --depth 1 \
     https://github.com/libtmux/libtmux-julia.git
 ```
 
 ```console
 $ cd libtmux-julia
+```
+
+```console
+$ git checkout adoption-2026-10-18
 ```
 
 ```console
@@ -282,7 +287,7 @@ configuration and checks its layout, focus and cleanup.
 ## Packages
 
 Each heading links to the package's directory on GitHub. None is in the
-General registry yet, so install from the Git tag, as the
+General registry yet, so install from the same source revision, as the
 [quick start](#quick-start) does.
 
 ### [`LibTmux`](https://github.com/libtmux/libtmux-julia/tree/master/src): the core library
@@ -408,18 +413,16 @@ The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
 
 ## Support and status
 
-- **Alpha.** `v0.1.0-alpha.2` is an unregistered source release, and its APIs
-  may change. Pkg records the requested revision and package tree in your
-  `Manifest.toml`.
+- **Alpha.** The packages are unregistered and their APIs may change. Pkg
+  records the requested revision and package tree in your `Manifest.toml`.
 - **Standard library only.** The core imports only Julia standard libraries.
   The JSON and Tables integrations are optional extensions.
-- **Julia 1.10 or newer and tmux 3.3a or newer.** Operations refuse an older
+- **Julia 1.13.1 or newer and tmux 3.7c or newer.** Operations refuse an older
   or unreadable tmux release before they have any effect.
   [Compatibility][repo-docs-src-compatibility-md] lists the cells that passed
   the complete suite.
-- **Linux, including WSL, and macOS.** CI runs the complete suite on Ubuntu
-  24.04. macOS is supported on a best-effort basis, and CI coverage for it is
-  highly limited. Native Windows tmux is outside scope.
+- **Linux, including WSL.** CI runs Linux only. macOS and psmux are excluded
+  from CI; native Windows tmux is outside scope.
 - **Evidence.** The [capability manifest][repo-docs-capabilities-toml] and the
   [CI results](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
   record what is verified. Benchmark baselines and an independent guide

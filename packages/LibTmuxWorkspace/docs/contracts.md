@@ -115,7 +115,7 @@ A default pane shell must be POSIX-compatible. Readiness executes an owned
 marker command in that shell and consumes an operating-system directory
 notification. The marker is published by atomic rename and checked exactly.
 
-The 900 ms handshake uses no polling, sleeps or tmux waiter channels; cleanup
+The five-second handshake uses no polling, sleeps or tmux waiter channels; cleanup
 removes its private directory, including on cancellation. It proves the shell
 executed the handshake. It does not prove that later jobs finished.
 
@@ -160,7 +160,7 @@ Failures raise [`WorkspaceApplyError`][workspaceapplyerror] with `cause` and a
 
 ### Rollback
 
-`rollback=:created` attempts uncancelled cleanup within 900 ms. It removes the
+`rollback=:created` attempts uncancelled cleanup within five seconds. It removes the
 new session or newly created window links in a borrowed session. It preserves
 borrowed resources and other links to shared windows.
 

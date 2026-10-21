@@ -1,57 +1,77 @@
+include(joinpath(@__DIR__, "..", "dev", "test-diagnostics.jl"))
 using Test
 using LibTmux
 
+finish_test_imports()
+
+const UNIT_FILES = (
+    "server",
+    "process",
+    "cancellation",
+    "text",
+    "model",
+    "lookup",
+    "criteria",
+    "criteria_cooperation",
+    "wire",
+    "sibling_wire",
+    "projection",
+    "format_rows",
+    "options_catalog",
+    "control_protocol",
+    "support_versions",
+)
+const INTEGRATION_FILES = (
+    "fixture_contract",
+    "named_tmux",
+    "lifecycle",
+    "support_check",
+    "support_unreadable",
+    "features",
+    "integration",
+    "acquisition",
+    "operations",
+    "pane_io",
+    "topology",
+    "configuration",
+    "formats",
+    "control",
+    "batches",
+    "observation",
+    "waits",
+    "observation_adversaries",
+    "restart",
+    "control_io",
+    "control_operations",
+    "control_topology",
+    "control_clients",
+    "control_formats",
+    "control_configuration",
+    "control_options",
+    "control_buffers",
+)
+
 suite = isempty(ARGS) ? "all" : only(ARGS)
-suite in ("unit", "integration", "rejection", "old-daemon", "all") ||
-    error("suite must be unit, integration, rejection, old-daemon or all")
-if suite in ("unit", "all")
-    include("server.jl")
-    include("process.jl")
-    include("cancellation.jl")
-    include("text.jl")
-    include("model.jl")
-    include("criteria.jl")
-    include("wire.jl")
-    include("sibling_wire.jl")
-    include("projection.jl")
-    include("format_rows.jl")
-    include("options_catalog.jl")
-    include("control_protocol.jl")
-    include("support_versions.jl")
+files = if suite == "all"
+    (UNIT_FILES..., INTEGRATION_FILES...)
+elseif suite == "unit"
+    UNIT_FILES
+elseif suite == "integration"
+    INTEGRATION_FILES
+elseif suite == "rejection"
+    ("support_rejection",)
+elseif suite == "old-daemon"
+    ("support_unreadable",)
+elseif suite in (UNIT_FILES..., INTEGRATION_FILES...)
+    suite in ("wire", "sibling_wire", "projection") ? ("criteria", suite) : (suite,)
+else
+    error("expected unit, integration, rejection, old-daemon, all, or a test file stem")
 end
-if suite in ("integration", "all")
-    include("fixture_contract.jl")
-    include("named_tmux.jl")
-    include("lifecycle.jl")
-    include("support_check.jl")
-    include("support_unreadable.jl")
-    include("integration.jl")
-    include("acquisition.jl")
-    include("operations.jl")
-    include("pane_io.jl")
-    include("topology.jl")
-    include("configuration.jl")
-    include("formats.jl")
-    include("control.jl")
-    include("batches.jl")
-    include("observation.jl")
-    include("observation_adversaries.jl")
-    include("restart.jl")
-    include("control_io.jl")
-    include("control_operations.jl")
-    include("control_topology.jl")
-    include("control_clients.jl")
-    include("control_formats.jl")
-    include("control_configuration.jl")
-    include("control_options.jl")
-    include("control_buffers.jl")
+if any(file -> file in INTEGRATION_FILES, files) && !("fixture_contract" in files)
+    include("support/owned_tmux.jl")
+    using .OwnedTmux
 end
-if suite == "rejection"
-    # Run against a tmux executable below the supported floor.
-    include("support_rejection.jl")
+for file in files
+    include_test_file(@__MODULE__, joinpath(@__DIR__, file * ".jl"))
 end
-if suite == "old-daemon"
-    # Real tmux 3.0a and 3.1c daemons behind a current client. Their servers
-    # cannot host the owned-daemon fixture the rejection suite builds on.
-    include("support_unreadable.jl")
-end
+finish_test_diagnostics()

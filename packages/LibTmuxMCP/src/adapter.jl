@@ -1,3 +1,5 @@
+include_dependency(joinpath(@__DIR__, "..", "Project.toml"))
+
 const _SUPPORTED_PROTOCOLS = ("2026-07-28", "2025-11-25")
 const _REQUEST_CONTEXT_KEY = :libtmux_mcp_request
 const _PACKAGE_VERSION = Base.pkgversion(@__MODULE__)

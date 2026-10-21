@@ -1,28 +1,40 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
 """Run unchanged exported examples with an audited tmux executable boundary."""
 
 from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import sys
-
+from collections.abc import Mapping
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 FAULT = "libtmux-example-injected-command-failure"
 
 
-def _ps_process_identity(pid):
+def _ps_process_identity(pid: int) -> str | None:
     import subprocess
-    result = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="],
-                            capture_output=True, text=True, check=False)
+
+    result = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "lstart="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     return result.stdout.strip() if result.returncode == 0 else None
 
 
 _DARWIN_PROC_PIDINFO = None
-if sys.platform == "darwin":
+if sys.platform == "darwin" or TYPE_CHECKING:
     import ctypes
+
     try:
+
         class _DarwinBSDInfo(ctypes.Structure):
             _fields_ = [
                 ("flags", ctypes.c_uint32),
@@ -65,7 +77,7 @@ if sys.platform == "darwin":
         pass
 
 
-def _darwin_process_identity(pid, *, fallback=True):
+def _darwin_process_identity(pid: int, *, fallback: bool = True) -> str | None:
     if _DARWIN_PROC_PIDINFO is None:
         return _ps_process_identity(pid) if fallback else None
     info = _DarwinBSDInfo()
@@ -83,7 +95,7 @@ def _darwin_process_identity(pid, *, fallback=True):
     return _ps_process_identity(pid)
 
 
-def process_identity(pid):
+def process_identity(pid: int) -> str | None:
     if sys.platform.startswith("linux"):
         try:
             return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
@@ -94,8 +106,9 @@ def process_identity(pid):
     return _ps_process_identity(pid)
 
 
-def process_identity_self_test():
+def process_identity_self_test() -> None:
     import subprocess
+
     current = process_identity(os.getpid())
     if current is None:
         raise AssertionError("current process has no identity")
@@ -114,7 +127,7 @@ def process_identity_self_test():
     print("PASS process identity lookup")
 
 
-def tmux_boundary(config_path, arguments):
+def tmux_boundary(config_path: str, arguments: list[str]) -> int:
     config = json.loads(Path(config_path).read_text())
     root = Path(config_path).parent
     socket = arguments[arguments.index("-S") + 1] if "-S" in arguments else None
@@ -126,8 +139,14 @@ def tmux_boundary(config_path, arguments):
     started = process_identity(os.getpid())
     if started is None:
         raise RuntimeError("could not identify tmux boundary process")
-    record = dict(pid=os.getpid(), started=started, daemon=daemon, socket=socket)
+    record = {
+        "pid": os.getpid(),
+        "started": started,
+        "daemon": daemon,
+        "socket": socket,
+    }
     if daemon:
+        assert socket is not None
         record["owner"] = (Path(socket).parent / "owner").read_text()
     (root / f"process-{os.getpid()}.json").write_text(json.dumps(record))
     inject = False
@@ -138,30 +157,51 @@ def tmux_boundary(config_path, arguments):
         except FileNotFoundError:
             pass
     if inject:
+        assert socket is not None
         import subprocess
+
         # Confirm a real session exists before failing the subsequent request.
-        result = subprocess.run([config["tmux"], "-N", "-S", socket,
-                                 "list-sessions", "-F", "#{session_id}"],
-                                capture_output=True, check=True, timeout=0.9)
+        result = subprocess.run(
+            [
+                config["tmux"],
+                "-N",
+                "-S",
+                socket,
+                "list-sessions",
+                "-F",
+                "#{session_id}",
+            ],
+            capture_output=True,
+            check=True,
+            timeout=0.9,
+        )
         if not result.stdout.startswith(b"$"):
             raise AssertionError("failure injection did not follow session creation")
-        (root / "fault.json").write_text(json.dumps(dict(
-            sessions=result.stdout.decode(), client=os.getpid(), exit=86)))
+        (root / "fault.json").write_text(
+            json.dumps(
+                {"sessions": result.stdout.decode(), "client": os.getpid(), "exit": 86}
+            )
+        )
         print(FAULT, file=sys.stderr)
         return 86
-    if config["fault"] and "new-session" in arguments and not (root / "fault.json").exists():
+    if (
+        config["fault"]
+        and "new-session" in arguments
+        and not (root / "fault.json").exists()
+    ):
         (root / "armed").touch()
     os.execv(config["tmux"], [config["tmux"], *arguments])
 
 
-def terminate_record(record):
+def terminate_record(record: dict[str, Any]) -> None:
     """Rescue only the recorded process instance after reporting a failed audit."""
     import select
     import signal
+
     pid = record["pid"]
     if process_identity(pid) != record["started"]:
         return
-    if hasattr(os, "pidfd_open"):
+    if sys.platform == "linux":
         try:
             descriptor = os.pidfd_open(pid)
         except ProcessLookupError:
@@ -173,15 +213,20 @@ def terminate_record(record):
             if not select.select([descriptor], [], [], 0.9)[0]:
                 signal.pidfd_send_signal(descriptor, signal.SIGKILL)
                 if not select.select([descriptor], [], [], 0.9)[0]:
-                    raise AssertionError("owned example process did not exit after rescue")
+                    raise AssertionError(
+                        "owned example process did not exit after rescue"
+                    )
         finally:
             os.close(descriptor)
     else:
         watcher = select.kqueue()
         try:
-            event = select.kevent(pid, filter=select.KQ_FILTER_PROC,
-                                 flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-                                 fflags=select.KQ_NOTE_EXIT)
+            event = select.kevent(
+                pid,
+                filter=select.KQ_FILTER_PROC,
+                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                fflags=select.KQ_NOTE_EXIT,
+            )
             try:
                 watcher.control([event], 0, 0)
                 if process_identity(pid) != record["started"]:
@@ -192,45 +237,72 @@ def terminate_record(record):
             if not watcher.control(None, 1, 0.9):
                 os.kill(pid, signal.SIGKILL)
                 if not watcher.control(None, 1, 0.9):
-                    raise AssertionError("owned example process did not exit after rescue")
+                    raise AssertionError(
+                        "owned example process did not exit after rescue"
+                    )
         finally:
             watcher.close()
 
 
-def run_example(command, *, tmux, env, cwd, fault=False, diagnostics=True):
+def run_example(
+    command: list[str],
+    *,
+    tmux: str,
+    env: Mapping[str, str],
+    cwd: str,
+    fault: bool = False,
+    diagnostics: bool = True,
+) -> dict[str, Any]:
     import subprocess
     import tempfile
     import time
+
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="ltj-ex-", dir="/tmp") as directory:
         root = Path(directory)
         config = root / "config.json"
-        config.write_text(json.dumps(dict(tmux=str(Path(tmux).resolve()), fault=fault)))
+        config.write_text(
+            json.dumps({"tmux": str(Path(tmux).resolve()), "fault": fault})
+        )
         wrapper = root / "tmux"
-        wrapper.write_text(f"#!{sys.executable} -S\nimport sys\n"
-                           f"sys.argv = [{str(Path(__file__).resolve())!r}, '--tmux-boundary', "
-                           f"{str(config)!r}, *sys.argv[1:]]\n"
-                           f"__file__ = {str(Path(__file__).resolve())!r}\n"
-                           "exec(compile(open(__file__).read(), __file__, 'exec'))\n")
+        wrapper.write_text(
+            f"#!{sys.executable} -S\nimport sys\n"
+            f"sys.argv = [{str(Path(__file__).resolve())!r}, '--tmux-boundary', "
+            f"{str(config)!r}, *sys.argv[1:]]\n"
+            f"__file__ = {str(Path(__file__).resolve())!r}\n"
+            "exec(compile(open(__file__).read(), __file__, 'exec'))\n"
+        )
         wrapper.chmod(0o700)
         child_env = dict(env, LIBTMUX_TEST_TMUX=str(wrapper), TMPDIR=directory)
         child_env.pop("TMUX", None)
         child_env.pop("TMUX_PANE", None)
         records, problems = [], []
         try:
-            result = subprocess.run(command, cwd=cwd, env=child_env, capture_output=True,
-                                    timeout=60, check=False)
-            records = [json.loads(path.read_text()) for path in root.glob("process-*.json")]
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                env=child_env,
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+            records = [
+                json.loads(path.read_text()) for path in root.glob("process-*.json")
+            ]
             daemons = [item for item in records if item["daemon"]]
             injected = (root / "fault.json").exists()
             if fault:
                 if result.returncode == 0 or not injected:
-                    problems.append("example did not propagate the injected command failure")
+                    problems.append(
+                        "example did not propagate the injected command failure"
+                    )
             elif result.returncode != 0:
                 problems.append(f"example exited {result.returncode}")
             for record in records:
                 if process_identity(record["pid"]) == record["started"]:
-                    problems.append("example left a daemon or client process alive or unreaped")
+                    problems.append(
+                        "example left a daemon or client process alive or unreaped"
+                    )
             for record in daemons:
                 if Path(record["socket"]).parent.exists():
                     problems.append("example left its owned socket directory")
@@ -240,21 +312,29 @@ def run_example(command, *, tmux, env, cwd, fault=False, diagnostics=True):
                     sys.stdout.buffer.write(result.stdout)
                     sys.stderr.buffer.write(result.stderr)
                 raise AssertionError("; ".join(dict.fromkeys(problems)))
-            return dict(fault=fault, daemons=len(daemons), clients=len(records)-len(daemons),
-                        exit=result.returncode, seconds=time.monotonic()-started,
-                        injected=injected)
+            return {
+                "fault": fault,
+                "daemons": len(daemons),
+                "clients": len(records) - len(daemons),
+                "exit": result.returncode,
+                "seconds": time.monotonic() - started,
+                "injected": injected,
+            }
         finally:
             # Also covers checker timeouts. No borrowed/default endpoint is contacted.
-            records = [json.loads(path.read_text()) for path in root.glob("process-*.json")]
+            records = [
+                json.loads(path.read_text()) for path in root.glob("process-*.json")
+            ]
             for record in records:
                 terminate_record(record)
 
 
-def main():
+def main() -> int:
     if sys.argv[1:2] == ["--tmux-boundary"]:
         return tmux_boundary(sys.argv[2], sys.argv[3:])
     import argparse
     import shutil
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tmux", required=True)
     parser.add_argument("--cwd", required=True)
@@ -273,13 +353,18 @@ def main():
     if tmux is None:
         parser.error("tmux executable is unavailable")
     if args.negative_control:
-        program = '''using LibTmux
+        program = """using LibTmux
         owned = open_server(; tmux=ENV["LIBTMUX_TEST_TMUX"])
         new_session(owned.server; name="missing-close", command=["/bin/cat"])
-        '''
+        """
         try:
-            run_example([*command, "-e", program], tmux=tmux, env=os.environ,
-                        cwd=args.cwd, diagnostics=False)
+            run_example(
+                [*command, "-e", program],
+                tmux=tmux,
+                env=os.environ,
+                cwd=args.cwd,
+                diagnostics=False,
+            )
         except AssertionError as error:
             assert "process alive or unreaped" in str(error), str(error)
             assert "socket directory" in str(error), str(error)
@@ -289,12 +374,22 @@ def main():
         return 0
     success = run_example(command, tmux=tmux, env=os.environ, cwd=args.cwd)
     if bool(success["daemons"]) == args.pure:
-        raise AssertionError("example ownership differs from its declared runtime class")
-    print("PASS example success and independent cleanup " + json.dumps(success), flush=True)
+        raise AssertionError(
+            "example ownership differs from its declared runtime class"
+        )
+    print(
+        "PASS example success and independent cleanup " + json.dumps(success),
+        flush=True,
+    )
     if success["daemons"]:
-        failure = run_example(command, tmux=tmux, env=os.environ, cwd=args.cwd, fault=True)
-        print("PASS example failure after session creation and independent cleanup " +
-              json.dumps(failure), flush=True)
+        failure = run_example(
+            command, tmux=tmux, env=os.environ, cwd=args.cwd, fault=True
+        )
+        print(
+            "PASS example failure after session creation and independent cleanup "
+            + json.dumps(failure),
+            flush=True,
+        )
     return 0
 
 

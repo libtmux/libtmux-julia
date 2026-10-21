@@ -1,25 +1,25 @@
+include(joinpath(@__DIR__, "..", "..", "..", "dev", "test-diagnostics.jl"))
 using Test
+
+finish_test_imports()
 
 suite = isempty(ARGS) ? "unit" : only(ARGS)
 suite in ("unit", "integration", "cli", "old-daemon", "all") ||
     error("unknown workspace suite")
-if suite in ("unit", "all")
-    include("config.jl")
-    include("script.jl")
-    include("readiness.jl")
-    include("cli.jl")
-    include("cli_signal.jl")
-end
-if suite in ("integration", "all")
-    include("apply.jl")
-    include("apply_failure.jl")
-    include("apply_cancel.jl")
-end
+files = String[]
+suite in ("unit", "all") &&
+    append!(files, ["config", "script", "readiness", "cli", "cli_signal"])
+suite in ("integration", "all") &&
+    append!(files, ["apply", "apply_failure", "apply_cancel"])
 if suite in ("cli", "all")
     # Outer: launches installed CLI consumers, including their Julia startup.
-    include("cli_integration.jl")
+    push!(files, "cli_integration")
 end
 if suite in ("integration", "old-daemon", "all")
     # Needs real builds; skips unless LIBTMUX_TEST_TMUX and the client are set.
-    include("old_daemon.jl")
+    push!(files, "old_daemon")
 end
+for file in files
+    include_test_file(@__MODULE__, joinpath(@__DIR__, file * ".jl"))
+end
+finish_test_diagnostics()

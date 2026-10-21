@@ -85,13 +85,20 @@
                     alpha.window,
                     "invalid-layout",
                 )
+                @test_throws UnsupportedCapability select_layout(
+                    connection,
+                    alpha.window,
+                    "{\n%exit\n}",
+                )
                 @test connection.submitted == before
-                invalid_checksum =
+                invalid_layout =
+                    startswith(custom_layout, '{') ?
+                    replace(custom_layout, "\"V\":2" => "\"V\":0"; count=1) :
                     (first(custom_layout) == '0' ? "1" : "0") * custom_layout[2:end]
                 @test_throws ControlCommandError select_layout(
                     connection,
                     alpha.window,
-                    invalid_checksum,
+                    invalid_layout,
                 )
                 @test select_layout(connection, alpha.window, "even-h") isa ControlResult
                 if field(alpha.window, "version") in ("3.3", "3.3a", "3.4")

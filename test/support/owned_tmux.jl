@@ -1,6 +1,7 @@
 module OwnedTmux
 
 using FileWatching
+import LibTmux
 
 export Fixture, tmuxcmd, with_tmux
 
@@ -46,6 +47,107 @@ function stop!(process::Base.Process)
         close(timer)
     end
     forced[] && error("owned tmux daemon required SIGKILL during cleanup")
+end
+
+"Stop a test-created forked daemon; Linux waits on its pinned process identity."
+function stop_daemon(tmux, socket; pidfd_symbols=nothing)
+    environment = Dict(
+        "PATH" => get(ENV, "PATH", "/usr/bin:/bin"),
+        "TERM" => "xterm-256color",
+        "SHELL" => "/bin/sh",
+    )
+    command(args...) = setenv(Cmd([tmux, "-N", "-S", socket, args...]), environment)
+    errors = Any[]
+    attempt(f) =
+        try
+            f()
+        catch error
+            push!(errors, error)
+            nothing
+        end
+    descriptor, library, send_signal = -1, nothing, C_NULL
+    attempt() do
+        if Sys.islinux()
+            if pidfd_symbols === nothing
+                library = Base.Libc.Libdl.dlopen("")
+                pidfd_symbols = (
+                    Base.Libc.Libdl.dlsym_e(library, :pidfd_open),
+                    Base.Libc.Libdl.dlsym_e(library, :pidfd_send_signal),
+                )
+            end
+            open_pidfd, send_signal = pidfd_symbols
+            if open_pidfd != C_NULL && send_signal != C_NULL
+                probe = LibTmux._run_process(
+                    command("display-message", "-p", "#{pid}");
+                    timeout=0.9,
+                )
+                if probe.exitcode == 0 && probe.termsignal == 0
+                    pid = parse(Cint, strip(String(probe.stdout)))
+                    descriptor = ccall(open_pidfd, Cint, (Cint, Cuint), pid, 0)
+                    if descriptor < 0
+                        reason = Base.Libc.errno()
+                        reason == Base.Libc.ESRCH && return
+                        reason == Base.Libc.ENOSYS || Base.systemerror("pidfd_open", true)
+                    else
+                        return
+                    end
+                else
+                    diagnostic = String(probe.stderr)
+                    probe.termsignal == 0 && LibTmux._endpoint_absent(diagnostic) && return
+                    error(
+                        "owned tmux PID query failed: exit=$(probe.exitcode), signal=$(probe.termsignal); $diagnostic",
+                    )
+                end
+            end
+        end
+        @warn "pidfd unavailable; owned tmux daemon exit will not be observed"
+    end
+    attempt() do
+        result = LibTmux._run_process(command("kill-server"); timeout=0.9)
+        if result.exitcode != 0 || result.termsignal != 0
+            diagnostic = String(result.stderr)
+            result.termsignal == 0 && LibTmux._endpoint_absent(diagnostic) || error(
+                "owned tmux shutdown failed: exit=$(result.exitcode), signal=$(result.termsignal); $diagnostic",
+            )
+        end
+    end
+    if descriptor >= 0
+        exited = attempt() do
+            FileWatching.poll_fd(Base.RawFD(descriptor), 0.9; readable=true).readable
+        end
+        if exited !== true
+            signalled = attempt() do
+                ccall(
+                    send_signal,
+                    Cint,
+                    (Cint, Cint, Ptr{Cvoid}, Cuint),
+                    descriptor,
+                    Base.SIGKILL,
+                    C_NULL,
+                    0,
+                )
+            end
+            retired = attempt() do
+                FileWatching.poll_fd(Base.RawFD(descriptor), 0.9; readable=true).readable
+            end
+            push!(
+                errors,
+                ErrorException(
+                    "owned tmux daemon exceeded shutdown deadline; SIGKILL result=$signalled; exit observed=$retired",
+                ),
+            )
+        end
+        attempt(
+            () -> Base.systemerror(
+                "close pidfd",
+                ccall(:close, Cint, (Cint,), descriptor) != 0,
+            ),
+        )
+    end
+    library === nothing || attempt(() -> Base.Libc.Libdl.dlclose(library))
+    isempty(errors) ||
+        throw(length(errors) == 1 ? only(errors) : CompositeException(errors))
+    nothing
 end
 
 function await_ready(fixture::Fixture, monitor::FolderMonitor)

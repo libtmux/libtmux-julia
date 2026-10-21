@@ -1,3 +1,23 @@
+# Keep runtime collection lengths out of tuple iteration specializations.
+struct _RuntimeTuplePairs
+    values::Tuple
+    _RuntimeTuplePairs(@nospecialize(values::Tuple)) = new(values)
+end
+function Base.iterate(values::_RuntimeTuplePairs, index::Int=1)
+    index > length(values.values) && return nothing
+    ((index, getfield(values.values, index)), index + 1)
+end
+
+Base.@nospecializeinfer function _runtime_focus_count(@nospecialize(values::Tuple))
+    total = 0
+    index = 1
+    while index <= length(values)
+        total += getproperty(getfield(values, index), :focus)::Bool
+        index += 1
+    end
+    total
+end
+
 """Bound document bytes, nesting and total values before schema normalization."""
 struct ConfigLimits
     max_bytes::Int
@@ -56,6 +76,36 @@ struct WindowConfig
     focus::Bool
     panes::Tuple
 end
+@noinline Base.@nospecializeinfer function _runtime_window_config(
+    name,
+    index,
+    start_directory,
+    before,
+    environment,
+    options,
+    options_after,
+    layout,
+    shell,
+    suppress_history,
+    focus,
+    @nospecialize(panes::Tuple)
+)
+    WindowConfig(
+        name,
+        index,
+        start_directory,
+        before,
+        environment,
+        options,
+        options_after,
+        layout,
+        shell,
+        suppress_history,
+        focus,
+        panes,
+    )
+end
+
 """Validated, owned values. Version 1 also accepts unversioned tmuxp documents."""
 struct WorkspaceConfig
     schema_version::Int
@@ -270,9 +320,9 @@ function _window(value, path)
     panes isa AbstractVector || _fail(:type, path * ".panes", "expected a nonempty list")
     isempty(panes) && _fail(:value, path * ".panes", "at least one pane is required")
     normalized = Tuple(_pane(pane, path * ".panes[$i]") for (i, pane) in enumerate(panes))
-    count(p -> p.focus, normalized) <= 1 ||
+    _runtime_focus_count(normalized) <= 1 ||
         _fail(:value, path * ".panes", "only one pane may request focus")
-    WindowConfig(
+    _runtime_window_config(
         name,
         index,
         _optional_string(data, "start_directory", path),
@@ -314,7 +364,7 @@ function validate(
     isempty(windows) && _fail(:value, "\$.windows", "at least one window is required")
     normalized =
         Tuple(_window(window, "\$.windows[$i]") for (i, window) in enumerate(windows))
-    count(w -> w.focus, normalized) <= 1 ||
+    _runtime_focus_count(normalized) <= 1 ||
         _fail(:value, "\$.windows", "only one window may request focus")
     indices = [w.index for w in normalized if w.index !== nothing]
     length(unique(indices)) == length(indices) ||

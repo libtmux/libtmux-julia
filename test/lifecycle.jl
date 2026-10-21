@@ -13,7 +13,7 @@ end
 
 # Scripted executables answer the release probe before their scripted failure.
 scripted_release(
-    release="3.3a",
+    release=LibTmux.MINIMUM_TMUX_VERSION,
 ) = "#!/bin/sh\nif [ \"\$1\" = -V ]; then echo 'tmux $release'; exit 0; fi\n"
 
 @testset "owned server lifecycle" begin
@@ -258,4 +258,8 @@ if get(ENV, "LIBTMUX_TEST_LIFECYCLE_ESCALATION", "0") == "1"
     end
 end
 
-include("lifecycle_retirement.jl")
+if isdefined(Main, :include_test_file)
+    Main.include_test_file(@__MODULE__, joinpath(@__DIR__, "lifecycle_retirement.jl"))
+else
+    include("lifecycle_retirement.jl")
+end

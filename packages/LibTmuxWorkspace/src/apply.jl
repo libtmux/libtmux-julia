@@ -188,7 +188,7 @@ Custom launchers with
 input require explicit `readiness=:none`. A successful command step means input
 was delivered, not that its shell job finished or succeeded.
 
-`rollback=:created` attempts uncancelled cleanup within 900 ms: remove the new
+`rollback=:created` attempts uncancelled cleanup within five seconds: remove the new
 session, or only created window links in a borrowed session. It does not restore
 borrowed options/environment, global settings or shell effects. Failed/uncertain
 creations are never guessed at or deleted. Inspect `WorkspaceApplyError.result`.

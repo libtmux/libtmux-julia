@@ -4,7 +4,7 @@ const DOC_EXAMPLE_ROOT = dirname(@__DIR__)
 const DOC_EXAMPLE_LANGUAGES =
     Set(("julia", "jl", "jldoctest", "@example", "@repl", "@eval", "@setup"))
 
-function document_fences(text, path)
+function document_fences(text, path; languages=DOC_EXAMPLE_LANGUAGES)
     entries = NamedTuple[]
     lines = split(replace(text, "\r\n"=>"\n"), '\n'; keepempty=true)
     delimiter = nothing
@@ -24,7 +24,7 @@ function document_fences(text, path)
             line,
         )
             language = isempty(info) ? "" : first(split(info))
-            if language in DOC_EXAMPLE_LANGUAGES
+            if language in languages
                 code = join(lines[(start+1):(number-1)], '\n') * "\n"
                 push!(
                     entries,
@@ -43,7 +43,7 @@ function document_fences(text, path)
         end
     end
     delimiter === nothing || error("Unclosed fence at $path:$start")
-    entries
+    return entries
 end
 
 const DOC_SNIPPETS = Dict(
@@ -138,6 +138,13 @@ const DOC_SNIPPETS = Dict(
         source="",
         note="Owned snapshot passed to pane_columns with Tables 1.14",
     ),
+    ("docs/src/api-queries.md", 1) => (
+        kind=:executable,
+        gate=:doctest,
+        fingerprint="0b4638e747fa7615519dc0ce58fe752843ce25229d3379f4941e099b076533f3",
+        source="",
+        note="Pure native criterion composition and wire round trip",
+    ),
     ("docs/src/index.md", 1) => (
         kind=:derived,
         gate=:external,
@@ -150,6 +157,13 @@ const DOC_SNIPPETS = Dict(
         gate=:external,
         fingerprint="22027eab236347ca0ca20a9176c1848749fe344ef5191cfff38443480a5f4bc8",
         source="examples/output_stream.jl",
+        note="",
+    ),
+    ("docs/src/observations.md", 2) => (
+        kind=:derived,
+        gate=:external,
+        fingerprint="22efb45d99213798e2557d52f77160c2502adff1365e90acb57ec8d7e11b1985",
+        source="examples/command_completion.jl",
         note="",
     ),
     ("docs/src/ownership.md", 1) => (
@@ -264,6 +278,7 @@ const DOC_PROGRAMS = Dict(
     "examples/shared_windows.jl"=>"owned tmux: shared links and captured predicates",
     "examples/control_cancel.jl"=>"owned tmux: cancellation and control cleanup",
     "examples/output_stream.jl"=>"owned tmux: output observation and baseline",
+    "examples/command_completion.jl"=>"owned tmux: authored completion marker and child exit status",
     "packages/LibTmuxWorkspace/examples/plan.jl"=>"pure planning of the shipped configuration",
     "packages/LibTmuxWorkspace/examples/owned_load.jl"=>"owned tmux: apply, freeze and cleanup",
 )
@@ -301,7 +316,7 @@ function shipped_documents(root)
             )
         end
     end
-    sort!(unique!(files))
+    return sort!(unique!(files))
 end
 
 function shipped_programs(root)
@@ -320,7 +335,7 @@ function shipped_programs(root)
             endswith(name, ".jl") && push!(files, relpath(joinpath(directory, name), root))
         end
     end
-    sort!(files)
+    return sort!(files)
 end
 
 function derived_source(entry, root)
@@ -331,11 +346,13 @@ function derived_source(entry, root)
     parts = [part.captures[1] for part in eachmatch(r"\"([^\"]+)\"", arguments)]
     !isempty(parts) && occursin(r"^[\s,]*$", replace(arguments, r"\"[^\"]+\""=>"")) ||
         error("Derived example path must contain literal components")
-    relpath(normpath(joinpath(root, dirname(entry.path), parts...)), root)
+    return relpath(normpath(joinpath(root, dirname(entry.path), parts...)), root)
 end
 
-syntax_error(value) =
-    value isa Expr && (value.head in (:error, :incomplete) || any(syntax_error, value.args))
+function syntax_error(value)
+    return value isa Expr &&
+           (value.head in (:error, :incomplete) || any(syntax_error, value.args))
+end
 
 function validate_snippets(entries, specifications, root)
     observed = Set((entry.path, entry.ordinal) for entry in entries)
@@ -364,7 +381,7 @@ function validate_snippets(entries, specifications, root)
             error("Unknown snippet classification")
         end
     end
-    entries
+    return entries
 end
 
 function linked_programs(documents, root)
@@ -377,7 +394,7 @@ function linked_programs(documents, root)
             push!(linked, relpath(normpath(joinpath(dirname(path), target)), root))
         end
     end
-    linked
+    return linked
 end
 
 function doc_example_check(; root=DOC_EXAMPLE_ROOT)
@@ -393,7 +410,7 @@ function doc_example_check(; root=DOC_EXAMPLE_ROOT)
     links = linked_programs(documents, root)
     all(program -> program in links, programs) ||
         error("Every shipped Julia program needs a documentation link")
-    entries
+    return entries
 end
 
 function inventory_text(entries)
@@ -417,17 +434,21 @@ function inventory_text(entries)
         spec = DOC_SNIPPETS[(entry.path, entry.ordinal)]
         location = "[$(entry.path)](../$(entry.path)) ($(entry.ordinal))"
         detail = isempty(spec.source) ? spec.note : "[$(spec.source)](../$(spec.source))"
-        gate =
-            spec.gate === :doctest ? "snippet doctests" :
-            spec.gate === :context ? "owned-context runner" :
-            spec.kind === :derived ? "external example runner" :
+        gate = if spec.gate === :doctest
+            "snippet doctests"
+        elseif spec.gate === :context
+            "owned-context runner"
+        elseif spec.kind === :derived
+            "external example runner"
+        else
             "exact snippet not executed"
+        end
         println(output, "| $location | $(spec.kind) | $gate | $detail |")
     end
     println(output, "\n## Executable programs\n")
     println(
         output,
-        "The external consumer checker discovers and executes all six programs from",
+        "The external consumer checker discovers and executes all programs from",
     )
     println(
         output,
@@ -447,10 +468,7 @@ function inventory_text(entries)
     )
     println(output, "Use the prepared quality project containing Documenter, JSON and both")
     println(output, "consumer packages; dependency resolution stays outside the check.\n")
-    println(
-        output,
-        "The five derived fences read their executable programs directly during the",
-    )
+    println(output, "Derived fences read their executable programs directly during the")
     println(
         output,
         "manual build. `dev/check-consumers.jl examples STAGE` supplies their separate",
@@ -482,10 +500,13 @@ function inventory_text(entries)
     )
     println(
         output,
-        "docstring fences are included here. A normal manual build and an unfamiliar",
+        "docstring fences are included here. The manual build runs in CI; an unfamiliar",
     )
-    println(output, "Julia developer's task walkthrough remain separate required checks.")
-    String(take!(output))
+    println(
+        output,
+        "Julia developer's task walkthrough can supplement the automated checks.",
+    )
+    return String(take!(output))
 end
 
 function run_snippet_doctests(entries)
@@ -515,7 +536,7 @@ function run_snippet_doctests(entries)
             )
         end
         Base.invokelatest(directory) do root
-            Documenter.makedocs(;
+            return Documenter.makedocs(;
                 root,
                 source="src",
                 build="build",
@@ -525,7 +546,11 @@ function run_snippet_doctests(entries)
                 sitename="Shipped Julia snippets",
             )
         end
-        println("PASS ", length(selected), " exact shipped doctest fences; no tmux started")
+        return println(
+            "PASS ",
+            length(selected),
+            " exact shipped doctest fences; no tmux started",
+        )
     end
 end
 
@@ -543,13 +568,13 @@ function documented_output(entry; root=DOC_EXAMPLE_ROOT)
         push!(body, lines[index])
         index += 1
     end
-    join(body, '\n') * "\n"
+    return join(body, '\n') * "\n"
 end
 
 function output_difference(entry, expected, observed)
     expected === nothing && return nothing
     strip(expected) == strip(observed) && return nothing
-    "$(entry.path):$(entry.line) printed $(repr(strip(observed))), not the documented $(repr(strip(expected)))"
+    return "$(entry.path):$(entry.line) printed $(repr(strip(observed))), not the documented $(repr(strip(expected)))"
 end
 
 function run_contextual_snippets(entries)
@@ -567,10 +592,10 @@ function run_contextual_snippets(entries)
         value = Ref{Any}(nothing)
         printed[key] = mktemp() do path, file
             redirect_stdout(file) do
-                value[] = Base.include_string(workspace, entry.code, entry.path)
+                return value[] = Base.include_string(workspace, entry.code, entry.path)
             end
             flush(file)
-            read(path, String)
+            return read(path, String)
         end
         value[]
     end
@@ -624,17 +649,15 @@ function run_contextual_snippets(entries)
             @assert formats[1].value == pane.width && formats[2].value === true
             @assert !isempty(formats[3].value)
             mktempdir(; prefix="libtmux-julia-doc-context-") do directory
-                write(
-                    joinpath(directory, "workspace.yaml"),
-                    """
-session_name: \${PROJECT}
-options:
-  default-shell: /bin/sh
-windows:
-  - window_name: docs
-    panes: [null, null]
-""",
-                )
+                path = "packages/LibTmuxWorkspace/README.md"
+                configuration = only(
+                    document_fences(
+                        read(joinpath(DOC_EXAMPLE_ROOT, path), String),
+                        path;
+                        languages=("yaml",),
+                    ),
+                ).code
+                write(joinpath(directory, "workspace.yaml"), configuration)
                 cd(directory) do
                     execute(("packages/LibTmuxWorkspace/README.md", 3))
                     result = Base.invokelatest(getproperty, workspace, :result)
@@ -652,7 +675,7 @@ windows:
                     @assert document.data["session_name"] == "example"
                     @assert [
                         window["window_name"] for window in document.data["windows"]
-                    ] == ["docs"]
+                    ] == ["editor"]
                     bind(:bin_directory, joinpath(directory, "bin"))
                     launcher = execute(("packages/LibTmuxWorkspace/README.md", 6))
                     @assert isfile(launcher) && !islink(launcher)
@@ -668,7 +691,7 @@ windows:
             output_difference(selected[key], documented_output(selected[key]), printed[key])
         problem === nothing || error(problem)
     end
-    println("PASS ", length(executed), " exact contextual fences and owned cleanup")
+    return println("PASS ", length(executed), " exact contextual fences and owned cleanup")
 end
 
 function doc_example_self_test()
@@ -723,7 +746,7 @@ function doc_example_self_test()
         differs = output_difference(shown, expected, "1\n3\n")
         @assert differs !== nothing && occursin("not the documented", differs)
     end
-    println("PASS documented output is found, compared and reported when it differs")
+    return println("PASS documented output is found, compared and reported when it differs")
 end
 
 function doc_examples_main(arguments)

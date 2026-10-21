@@ -24,6 +24,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Prepare Python quality tools
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: '0.12.0'
+          enable-cache: false
+      - name: Acquire Python quality dependencies
+        run: |
+          uvx ruff@0.16.1 --version
+          uvx mypy@2.4.0 --version
+      - name: Check Python helpers offline
+        run: |
+          uvx --offline ruff@0.16.1 check
+          uvx --offline ruff@0.16.1 format --check
+          uvx --offline mypy@2.4.0
+          python3 dev/check-release-tag.py self-test
+          python3 benchmark/startup.py --self-test
+          python3 benchmark/mcp_client.py --self-test
       - name: Verify release tag metadata
         if: >-
           github.event_name == 'push' &&
@@ -62,13 +79,14 @@ jobs:
     timeout-minutes: 15
     env:
       TMPDIR: /tmp
+      JULIA_TEST_VERBOSE: 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
         with:
-          version: '1.10.0'
+          version: '1.13.1'
           arch: x64
       - name: Prepare Linux build dependencies
         run: |
@@ -77,11 +95,11 @@ jobs:
       - name: Prepare pinned tmux release
         run: python3 dev/check-matrix.py build-tmux "$RUNNER_TEMP/libtmux-julia-reject" '${{ matrix.tmux }}'
       - name: Prepare the current client
-        run: python3 dev/check-matrix.py build-tmux "$RUNNER_TEMP/libtmux-julia-reject" 3.3a
+        run: python3 dev/check-matrix.py build-tmux "$RUNNER_TEMP/libtmux-julia-reject" 3.7c
       - name: Assert the release is refused without effect
         env:
           LIBTMUX_TEST_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/${{ matrix.tmux }}/bin/tmux
-          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.3a/bin/tmux
+          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.7c/bin/tmux
           LIBTMUX_TEST_OLD_TMUX_BUILDS: ${{ matrix.real_old == 'true' && format('{0}/libtmux-julia-reject/tmux', runner.temp) || '' }}
           LIBTMUX_TEST_OLD_TMUX_RELEASES: ${{ matrix.real_old == 'true' && matrix.tmux || '' }}
         run: julia --startup-file=no --project=. --threads=1 test/runtests.jl ${{ matrix.suite }}
@@ -97,13 +115,13 @@ jobs:
       - name: Assert the workspace CLI refuses the release
         env:
           LIBTMUX_TEST_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/${{ matrix.tmux }}/bin/tmux
-          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.3a/bin/tmux
+          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.7c/bin/tmux
           LIBTMUX_TEST_REQUIRE_OLD_DAEMON: '1'
         run: julia --startup-file=no --project="$RUNNER_TEMP/libtmux-julia-reject/packages" --threads=1 packages/LibTmuxWorkspace/test/runtests.jl old-daemon
       - name: Assert the MCP server refuses a replaced daemon
         if: matrix.real_old == 'true'
         env:
-          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.3a/bin/tmux
+          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.7c/bin/tmux
           LIBTMUX_TEST_OLD_TMUX_BUILDS: ${{ runner.temp }}/libtmux-julia-reject/tmux
           LIBTMUX_TEST_OLD_TMUX_RELEASES: ${{ matrix.tmux }}
           LIBTMUX_TEST_REQUIRE_OLD_DAEMON: '1'
@@ -116,17 +134,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.matrix.outputs.cells) }}
-    timeout-minutes: 35
+    timeout-minutes: 20
     env:
       TMPDIR: /tmp
+      JULIA_TEST_VERBOSE: 'true'
+      JULIA_CPU_TARGET: generic
     steps:
       - name: Choose owned preparation stage
-        run: echo "MATRIX_STAGE=$RUNNER_TEMP/libtmux-julia-matrix" >> "$GITHUB_ENV"
+        run: |
+          echo "MATRIX_STAGE=$RUNNER_TEMP/libtmux-julia-matrix" >> "$GITHUB_ENV"
+          echo "MATRIX_JOB_DEADLINE=$(( $(date +%s) + 1200 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
         with:
           version: ${{ matrix.julia }}
           arch: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x64' }}
+          show-versioninfo: true
       - name: Check setup argument conversion offline
         run: python3 dev/check-matrix.py self-test --julia julia
       - name: Prepare Linux build dependencies
@@ -138,15 +161,18 @@ jobs:
       - name: Cache isolated Julia tool depot
         uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
         with:
-          cache-name: libtmux-julia-matrix-depot-v1
+          cache-name: libtmux-julia-matrix-depot-${{ env.JULIA_CPU_TARGET }}-v2
           depot: ${{ runner.temp }}/libtmux-julia-matrix/depot
           delete-old-caches: "false"
         env:
           JULIA_DEPOT_PATH: ${{ runner.temp }}/libtmux-julia-matrix/depot
       - name: Prepare Julia tools and external consumers
-        run: >-
-          python3 dev/check-matrix.py prepare "$MATRIX_STAGE"
-          --threads '${{ matrix.threads }}'
+        run: |
+          set -o pipefail
+          mkdir -p "$MATRIX_STAGE/logs"
+          python3 dev/check-matrix.py prepare "$MATRIX_STAGE" \
+            --threads '${{ matrix.threads }}' \
+            2>&1 | tee "$MATRIX_STAGE/logs/preparation.log"
       - name: Check prepared cell offline
         run: >-
           python3 dev/check-matrix.py run "$MATRIX_STAGE"
@@ -157,39 +183,27 @@ jobs:
           --expected-tmux '${{ matrix.tmux }}'
           --expected-os '${{ matrix.os }}'
           --expected-arch '${{ matrix.arch }}'
-      - name: Verify native documentation export
-        if: matrix.os == 'Linux' && matrix.julia == '1.13.0' && (matrix.suite == 'all' || matrix.suite == 'delivery')
-        env:
-          JULIA_DEPOT_PATH: ${{ runner.temp }}/libtmux-julia-matrix/depot
-          JULIA_LOAD_PATH: '@:@stdlib'
-          JULIA_PKG_OFFLINE: 'true'
-          JULIA_PKG_PRECOMPILE_AUTO: '0'
-        run: |
-          julia --startup-file=no --threads='${{ matrix.threads }}' \
-            --project="$MATRIX_STAGE/environment" docs/export-api.jl
-          julia --startup-file=no --threads='${{ matrix.threads }}' \
-            --project="$MATRIX_STAGE/environment" docs/test-export-api.jl
       - name: Preserve native documentation artifact
-        if: matrix.os == 'Linux' && matrix.julia == '1.13.0' && (matrix.suite == 'all' || matrix.suite == 'delivery')
+        if: matrix.os == 'Linux' && matrix.tmux == '3.7c' && matrix.threads == 1 && (matrix.suite == 'all' || matrix.suite == 'delivery')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: julia-docs-api
           path: docs/build/api.json
           if-no-files-found: error
           retention-days: 7
+      - name: Finalize sanitized evidence
+        if: always()
+        timeout-minutes: 1
+        run: python3 dev/check-matrix.py artifacts "$MATRIX_STAGE"
       - name: Preserve cell evidence
         if: always()
+        timeout-minutes: 1
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.job_label }}
           if-no-files-found: warn
-          path: |
-            ${{ env.MATRIX_STAGE }}/results-*.json
-            ${{ env.MATRIX_STAGE }}/prepared.json
-            ${{ env.MATRIX_STAGE }}/environment/Project.toml
-            ${{ env.MATRIX_STAGE }}/environment/LocalPreferences.toml
-            ${{ env.MATRIX_STAGE }}/environment/Manifest.toml
-            ${{ env.MATRIX_STAGE }}/logs/*.log
+          path: ${{ env.MATRIX_STAGE }}/artifacts/
+          retention-days: 7
 
   tag-install:
     name: Verify public tag install
@@ -215,7 +229,7 @@ jobs:
           persist-credentials: false
       - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
         with:
-          version: '1.10.0'
+          version: '1.13.1'
           arch: x64
       - name: Choose fresh tag-install stage
         run: echo "RELEASE_STAGE=$RUNNER_TEMP/libtmux-julia-release" >> "$GITHUB_ENV"

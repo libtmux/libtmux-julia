@@ -3,37 +3,69 @@ status = "unregistered prerelease"
 
 [support]
 julia_development = "1.13.1"
-julia_proposed_floor = "1.10"
-tmux_proposed_floor = "3.3a"
-platforms_proposed = ["Linux x86_64", "macOS arm64", "macOS x86_64"]
-# These complete-suite results apply only to the exact cells below. They do not
-# establish broader platform or version support. A cell joins the list after
-# its CI run passes; the Linux cells below passed in Julia workflow run
-# 39157326487 on libtmux/libtmux-julia.
+julia_minimum = "1.13.1"
+tmux_minimum = "3.7c"
+tmux_json_layout_minimum = "3.8"
+platforms = ["Linux x86_64"]
+ci_excluded = ["macOS", "psmux"]
+
+# Retained hosted evidence applies only to this revision and these Linux cells.
+verified_product_pr_head = "67da6f3117aa3a5bef880e2ada331dc068684d6d"
+verified_product_revision = "f0a564f57d1214f7ec3c5e982ef756dfbf6a4697"
+verified_product_source_digest = "ddeb46f985f72a7eaad6d4fcd64925fc26750052c29fdfa5ef14a7b4f82147cd"
+verified_product_ci_run = 39333764109
+verified_product_ci_url = "https://github.com/libtmux/libtmux-julia/actions/runs/39333764109"
+verified_product_result = "PASS: all 26 phases per cell; no skipped or unrun phases"
 verified_product_cells = [
+  "Linux x86_64 / Julia 1.13.1 / tmux 3.7c / 1 thread",
+  "Linux x86_64 / Julia 1.13.1 / tmux 3.7c / 4 threads",
+  "Linux x86_64 / Julia 1.13.1 / tmux 3.8 / 1 thread",
+]
+verified_rejection_releases = ["3.0a", "3.1c", "3.3a", "3.6b"]
+
+# Historical baselines preserve earlier results, not the selected support scope.
+baseline_revision = "9e3776d07798174a3590a728d28029efcbb52780"
+baseline_correctness_cells = [
+  "Linux x86_64 / Julia 1.10.0 / tmux 3.2a / 1 thread",
+  "Linux x86_64 / Julia 1.13.0 / tmux 3.7c / 4 threads",
+  "macOS arm64 / Julia 1.13.0 / tmux 3.7c / 1 thread",
+  "macOS x86_64 / Julia 1.13.0 / tmux 3.7c / 1 thread",
+]
+
+# Dependency-branch correctness is separate from the retained product checks.
+dependency_baseline_revision = "0026771494909372fc3d5f2ea3471e156d340d9a"
+dependency_baseline_ci_run = 39157326487
+dependency_baseline_correctness_cells = [
   "Linux x86_64 / Julia 1.10.0 / tmux 3.3a / 1 thread",
   "Linux x86_64 / Julia 1.13.1 / tmux 3.7c / 4 threads",
   "Linux x86_64 / Julia 1.13.1 / tmux 3.8 / 1 thread",
 ]
 
+[acceptance]
+scope = "Linux correctness, package checks, shipped examples, installed core/MCP/workspace flows and documentation"
+final_revision = "A later revision needs its own affected checks; retained evidence above does not validate the final candidate"
+public_github_install = "Run the documented GitHub installation in fresh consumer projects; immutable-export checks alone do not establish it"
+shared_documentation = "Verify the shared website build and rendered output; the native Documenter build and API export are separate checks"
+separate_followup = ["benchmarks", "exhaustive profiling"]
+
+# Advertised behavior within the selected scope; verification is recorded above.
 [required]
-packages = "partial: core, MCP and workspace external imports, extensions and installed applications pass in recorded cells; v0.1.0-alpha.2 is a Git tag, not a registry package"
-server_selection = "implemented: explicit selectors and opt-in ambient discovery"
-entities_links_identity = "partial: physical entities and links verified; strict identity admission pending"
-snapshots_coverage = "partial: captured graph and explicit coverage verified; topology/restart adversaries pending"
-formats = "partial: typed observations, explicit raw expressions and unverified hints tested current/floor"
-options_environment_hooks = "partial: subprocess and control options/hooks, sparse inheritance and literal values pass in recorded cells; control environment reads explicitly unsupported; broader platform/version coverage pending"
-topology_lifecycle = "partial: typed topology and owned daemon success/failure cleanup pass in recorded cells; broader platform/version coverage pending"
-capture_keys_paste_buffers = "partial: exact bytes, explicit keys, paste and owned buffers pass over subprocess and control in recorded cells; broader platform/version coverage pending"
-native_criteria = "partial: generated local criteria and real captured relations pass in recorded cells; independent DX walkthrough pending"
-wire_adapters = "partial: Julia/JSON plus pinned sibling scalar differentials pass in recorded cells; broader external-consumer coverage pending"
-subprocess = "partial: bytes, bounds, cancellation and process retirement pass in recorded cells"
-control_batches = "partial: owned lanes, batches/groups, strict capture, graph acquisition, topology, clients, buffers, exact option/hook configuration and environment writes pass in recorded cells; broader platform/version coverage pending"
-observation_cursors = "partial: bounded streams and replay pass in recorded cells; reset baseline available; broader platform/version coverage pending"
-mcp = "partial: modern/legacy installed clients, observation tools and cancellation pass in recorded cells; dynamic schemas and effect diagnostics corrected; broader package/version coverage pending"
-workspace = "partial: config/apply/freeze, owned rollback, installed CLI and stopped output-reader retirement pass in recorded cells; broader platform/version coverage pending"
-docs_examples = "partial: Documenter/doctest, contextual and external examples pass in recorded cells; independent human DX gate pending"
-benchmarks = "partial: separate environment and six-mode workload added; baseline measurements and performance limits pending"
+packages = "unregistered core, MCP and workspace packages; optional JSON/Tables extensions; normal precompilation and installed launchers"
+server_selection = "explicit selectors and opt-in ambient discovery"
+entities_links_identity = "captured indexed lookup, physical entities and contextual session/window links"
+snapshots_coverage = "full and scoped graphs, relation coverage and daemon-restart rejection"
+formats = "typed observations and explicit raw expressions; discovery hints do not prove capability support"
+options_environment_hooks = "bounded inventories, sparse inheritance, literal framing and encoded custom hooks; control environment reads are unsupported"
+topology_lifecycle = "pane maintenance, topology operations and owned-resource cleanup"
+capture_keys_paste_buffers = "exact bytes, explicit keys, paste and owned buffers over subprocess and control"
+native_criteria = "schema-typed captured accessors, indexed relationships and native Julia collections"
+wire_adapters = "versioned Julia/JSON criteria and pinned sibling scalar interoperability"
+subprocess = "bounded bytes, cancellation and process retirement"
+control_batches = "owned request/cleanup clients, batches/groups, strict capture, graph acquisition, topology, clients, buffers, named options/hooks and environment writes"
+observation_cursors = "bounded streams and retained-history replay with an explicit reset baseline"
+mcp = "whole-call effects, scoped native discovery, filtering/projection, changed-observation pagination and cancellation/restart workflows"
+workspace = "configuration, planning, apply/freeze, owned rollback, installed CLI and stopped output-reader retirement"
+docs_examples = "native manual/API export, doctests, contextual snippets, external examples and installed-launcher checks"
 
 [deferred]
 pushdown = "Q3 admission and differentials required before shipping"
@@ -43,7 +75,10 @@ execution_dag = "no demonstrated caller requirement"
 mcp_http = "separate deployment and authentication scope"
 
 [excluded]
+macos = "excluded from CI and current support; historical results remain above"
+psmux = "excluded from CI and current support"
 python_workspace_plugins = "initial compatibility profile"
 ssh_transport = "local POSIX transport only"
 native_windows_tmux = "WSL is tested as Linux"
 private_imsg = "supported tmux CLI and control interfaces only"
+mcp_oversized_graph = "CLI startup and wait setup when a full-graph reply exceeds 8 MiB; scoped discovery does not bypass these stages"

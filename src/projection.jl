@@ -43,7 +43,16 @@ remains `nothing`. No Tables or DataFrames dependency is required.
 After `using Tables`, the optional extension exposes this same projection as
 a Tables.jl row source with its declared schema, including when it is empty.
 """
-function project_rows(selection::Selection{T}; columns) where {T}
+project_rows(selection::Selection; columns) = _project_rows(selection, columns, nothing)
+function _project_rows(selection::Selection, columns, checkpoint::Function)
+    _project_rows(
+        selection,
+        columns,
+        _CriterionTraversal{Function}(checkpoint, 0, nothing, nothing),
+    )
+end
+function _project_rows(selection::Selection{T}, columns, control) where {T}
+    _criterion_checkpoint!(control; force=true)
     names = Tuple(columns)
     isempty(names) && throw(ArgumentError("select at least one scalar column"))
     all(name -> name isa Symbol, names) ||
@@ -59,11 +68,13 @@ function project_rows(selection::Selection{T}; columns) where {T}
     end
     for item in selection
         for (name, spec) in zip(names, specs)
+            _criterion_checkpoint!(control)
             _literal_valid(spec, getproperty(item, name)) ||
                 throw(ArgumentError("captured $name has an invalid scalar type"))
         end
     end
     types = map(_projection_type, specs)
     Row = NamedTuple{names,Tuple{types...}}
+    _criterion_checkpoint!(control; force=true)
     RowProjection{Row,typeof(selection)}(selection)
 end

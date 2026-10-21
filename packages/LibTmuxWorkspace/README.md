@@ -34,13 +34,13 @@ share the same operations.
 
 ## Quick start
 
-`v0.1.0-alpha.2` is an unregistered source release. From a consumer project
-directory, add the core and workspace package from the same public Git tag:
+The packages are unregistered. From a consumer project
+directory, add the core and workspace package from the same rebuild branch:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; tag="v0.1.0-alpha.2"; Pkg.add([Pkg.PackageSpec(url=repo, rev=tag), Pkg.PackageSpec(url=repo, rev=tag, subdir="packages/LibTmuxWorkspace")])'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="adoption-2026-10-18"; Pkg.add([Pkg.PackageSpec(url=repo, rev=revision), Pkg.PackageSpec(url=repo, rev=revision, subdir="packages/LibTmuxWorkspace")])'
 ```
 
 Install a launcher bound to that environment with
@@ -58,7 +58,7 @@ $ bin/libtmux-workspace --help
 ```
 
 The commands `validate`, `plan`, `load` and `freeze` run [`validate`][validate],
-[`plan`][plan], [`apply`][apply] and [`freeze`][freeze]. Have tmux 3.3a or
+[`plan`][plan], [`apply`][apply] and [`freeze`][freeze]. Have tmux 3.7c or
 newer on your `PATH`.
 
 Save this workspace as `workspace.yaml`. `${PROJECT}` expands from a value you
@@ -293,7 +293,7 @@ println(document.data["session_name"], ": ",
 ```
 
 ```text
-example: docs
+example: editor
 ```
 
 Write `document.data` with your JSON or YAML encoder. Commands, options,
@@ -473,17 +473,15 @@ lists the defaults and what `validate` copies.
 
 ## Support and status
 
-- **Alpha.** `v0.1.0-alpha.2` is an unregistered source release, and its APIs
-  may change.
+- **Alpha.** The packages are unregistered and their APIs may change.
 - **Dependencies.** The package depends on the public
   [`LibTmux`][libtmux] package, JSON 1.9, YAML 0.4.17 and PrecompileTools. The
   core does not depend on this package.
 - **Precompilation.** It covers inert configuration and CLI reporting. It never
   starts a process or contacts tmux.
-- **Julia 1.10 or newer and tmux 3.3a or newer.**
-- **Linux, including WSL, and macOS.** CI runs the complete suite on Ubuntu
-  24.04. macOS is supported on a best-effort basis, and CI coverage for it is
-  highly limited.
+- **Julia 1.13.1 or newer and tmux 3.7c or newer.**
+- **Linux, including WSL.** CI runs Linux only. macOS and psmux are excluded
+  from CI.
 - **Attach.** The automated consumer tests have not exercised `--attach`.
 
 ## Documentation
