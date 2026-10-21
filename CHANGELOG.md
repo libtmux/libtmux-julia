@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0 - 2026-10-20
+
 #### CI no longer runs macOS
 
 The Julia workflow runs its Linux configurations only. macOS and psmux are
