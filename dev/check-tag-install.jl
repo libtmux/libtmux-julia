@@ -271,6 +271,7 @@ end
 
 function isolated_environment(layout::StageLayout)
     return (
+        "PATH" => get(ENV, "PATH", "/usr/bin:/bin"),
         "HOME" => layout.home,
         "JULIA_DEPOT_PATH" => layout.depot,
         "JULIA_LOAD_PATH" => "@:@stdlib",
@@ -295,15 +296,15 @@ function verify_imports_and_launchers(record::ReleaseRecord, layout::StageLayout
     workspace = LibTmuxWorkspace.install_cli($(repr(layout.bin)); project=Base.active_project())
     write($(repr(launchers)), mcp * "\\n" * workspace * "\\n")
     """
-    command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compiled-modules=no --compile=min -O0 --project=$(layout.project) -e $program`
-    run(addenv(Cmd(command; dir=layout.root), isolated_environment(layout)...))
+    command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --project=$(layout.project) -e $program`
+    run(setenv(Cmd(command; dir=layout.root), Dict(isolated_environment(layout))))
     paths = split(chomp(read(launchers, String)), '\n')
     require(length(paths) == 2 && all(isfile, paths), "installed launcher is unavailable")
     for launcher in paths
         run(
-            addenv(
+            setenv(
                 Cmd(`$launcher --help`; dir=layout.root),
-                isolated_environment(layout)...,
+                Dict(isolated_environment(layout)),
             ),
         )
     end
@@ -452,6 +453,36 @@ function self_test()
             TOML.print(io, manifest)
         end
         expect_error(() -> verify_manifest(record, project), "subdirectory")
+        marker = "release-install-synthetic-credential"
+        program = """
+        include($(repr(@__FILE__)))
+        stage = only(ARGS)
+        layout = StageLayout(stage, joinpath(stage, "project"),
+            joinpath(stage, "depot"), joinpath(stage, "home"),
+            joinpath(stage, "bin"), joinpath(stage, "proof.toml"))
+        try
+            verify_imports_and_launchers(release_record(fixture_record()), layout)
+        catch failure
+            if failure isa ProcessFailedException
+                child = only(failure.procs)
+                println("exit=", child.exitcode, " signal=", child.termsignal)
+            end
+            println("retained failure: ", sprint(showerror, failure))
+        end
+        """
+        command = `$(Base.julia_cmd()) --startup-file=no --history-file=no -e $program $directory`
+        env = Dict(
+            "PATH" => get(ENV, "PATH", "/usr/bin:/bin"),
+            "JULIA_DEPOT_PATH" => join(DEPOT_PATH, Sys.iswindows() ? ";" : ":"),
+            "JULIA_LOAD_PATH" => "@:@stdlib",
+            "RELEASE_TEST_SECRET" => marker,
+        )
+        output, errors = IOBuffer(), IOBuffer()
+        run(pipeline(setenv(command, env); stdout=output, stderr=errors))
+        diagnostic = String(take!(output)) * String(take!(errors))
+        @assert occursin("LibTmux", diagnostic)
+        @assert !occursin(marker, diagnostic)
+        @assert occursin("exit=1 signal=0", diagnostic)
     end
     wrong_tag = fixture_record()
     wrong_tag["tag"] = "v0.1.0-alpha.2"
