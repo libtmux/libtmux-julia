@@ -40,6 +40,12 @@ class Package:
     subdir: str | None
 
 
+@dataclass(frozen=True)
+class TagReference:
+    object_sha: str
+    commit_sha: str
+
+
 PACKAGES = (
     Package("LibTmux", "1a5dcb9e-7968-44df-ad70-bf0a17628f09", "Project.toml", None),
     Package(
@@ -155,7 +161,13 @@ def release_packages(checkout: Path, commit: str, tag: str) -> list[dict[str, st
 
 
 def validate_event(
-    event: dict[str, Any], *, tag: str, commit: str, ref: str, repository: str
+    event: dict[str, Any],
+    *,
+    tag: str,
+    commit: str,
+    ref: str,
+    repository: str,
+    public_tag: TagReference,
 ) -> None:
     tag = tag_name(tag)
     commit = sha(commit, "workflow commit")
@@ -178,11 +190,13 @@ def validate_event(
         or payload_repository.get("full_name") != EXPECTED_REPOSITORY
     ):
         fail("push event repository is not canonical")
-    if sha(str(event.get("after", "")), "push event commit") != commit:
-        fail("push event commit does not match the workflow commit")
+    if public_tag.commit_sha != commit:
+        fail("public tag commit does not match the workflow commit")
+    if sha(str(event.get("after", "")), "push event object") != public_tag.object_sha:
+        fail("push event object does not match the public tag")
 
 
-def remote_tag_commit(checkout: Path, repository_url: str, tag: str) -> str:
+def remote_tag(checkout: Path, repository_url: str, tag: str) -> TagReference:
     tag = tag_name(tag)
     direct = f"refs/tags/{tag}"
     output = run_git(
@@ -198,7 +212,9 @@ def remote_tag_commit(checkout: Path, repository_url: str, tag: str) -> str:
             references[name] = sha(value, "public tag object")
     if direct not in references:
         fail("public remote does not contain the release tag")
-    return references.get(direct + "^{}", references[direct])
+    return TagReference(
+        references[direct], references.get(direct + "^{}", references[direct])
+    )
 
 
 def require_clean_checkout(checkout: Path, commit: str) -> None:
@@ -274,10 +290,15 @@ def preflight(
         fail(f"push event is not JSON: {error.msg}")
     if not isinstance(event, dict):
         fail("push event is not an object")
-    validate_event(event, tag=tag, commit=commit, ref=ref, repository=repository)
+    validate_event(
+        event,
+        tag=tag,
+        commit=commit,
+        ref=ref,
+        repository=repository,
+        public_tag=remote_tag(checkout, repository_url, tag),
+    )
     require_clean_checkout(checkout, commit)
-    if remote_tag_commit(checkout, repository_url, tag) != commit:
-        fail("public tag does not resolve to the workflow commit")
     require_trunk_ancestry(checkout, repository_url, commit)
     packages = release_packages(checkout, commit, tag)
     write_release_record(output, tag=tag, commit=commit, packages=packages)
@@ -341,10 +362,14 @@ def self_test() -> None:
         remote_url = remote.as_uri()
         git(["-C", str(source), "remote", "add", "origin", remote_url], cwd=root)
         git(["-C", str(source), "push", "-q", "origin", "master", "--tags"], cwd=root)
+        public_tag = remote_tag(source, remote_url, "v0.1.0-alpha.1")
         event = {
             "ref": "refs/tags/v0.1.0-alpha.1",
             "before": ZERO_SHA,
-            "after": commit,
+            "after": git(
+                ["-C", str(source), "rev-parse", "refs/tags/v0.1.0-alpha.1"],
+                cwd=root,
+            ),
             "created": True,
             "deleted": False,
             "forced": False,
@@ -370,7 +395,35 @@ def self_test() -> None:
             "packages/LibTmuxMCP",
             "packages/LibTmuxWorkspace",
         ]
-        assert remote_tag_commit(source, remote_url, "v0.1.0-alpha.1") == commit
+        assert public_tag.commit_sha == commit
+        assert public_tag.object_sha != commit
+        expect_error(
+            lambda: validate_event(
+                dict(event, after=commit),
+                tag="v0.1.0-alpha.1",
+                commit=commit,
+                ref="refs/tags/v0.1.0-alpha.1",
+                repository=EXPECTED_REPOSITORY,
+                public_tag=public_tag,
+            ),
+            "event object",
+        )
+        lightweight_tag = "v0.1.0-alpha.1+lightweight"
+        git(["-C", str(source), "tag", lightweight_tag, commit], cwd=root)
+        git(
+            ["-C", str(source), "push", "-q", "origin", f"refs/tags/{lightweight_tag}"],
+            cwd=root,
+        )
+        lightweight = remote_tag(source, remote_url, lightweight_tag)
+        assert lightweight == TagReference(commit, commit)
+        validate_event(
+            dict(event, ref=f"refs/tags/{lightweight_tag}", after=commit),
+            tag=lightweight_tag,
+            commit=commit,
+            ref=f"refs/tags/{lightweight_tag}",
+            repository=EXPECTED_REPOSITORY,
+            public_tag=lightweight,
+        )
         shallow = root / "shallow"
         git(
             [
@@ -403,6 +456,7 @@ def self_test() -> None:
                 commit=commit,
                 ref="refs/tags/not-the-tag",
                 repository=EXPECTED_REPOSITORY,
+                public_tag=public_tag,
             ),
             "workflow ref",
         )
@@ -414,6 +468,7 @@ def self_test() -> None:
                 commit=commit,
                 ref="refs/tags/v0.1.0-alpha.1",
                 repository=EXPECTED_REPOSITORY,
+                public_tag=public_tag,
             ),
             "newly created",
         )
@@ -425,6 +480,7 @@ def self_test() -> None:
                 commit=commit,
                 ref="refs/tags/v0.1.0-alpha.1",
                 repository=EXPECTED_REPOSITORY,
+                public_tag=public_tag,
             ),
             "event repository",
         )
@@ -435,6 +491,7 @@ def self_test() -> None:
                 commit="f" * 40,
                 ref="refs/tags/v0.1.0-alpha.1",
                 repository=EXPECTED_REPOSITORY,
+                public_tag=public_tag,
             ),
             "does not match",
         )
