@@ -441,6 +441,10 @@ The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
 
 ## Attribution
 
+Developed out of curiosity and a desire to learn and master Julia by the
+maintainer of Python libtmux, with AI assistance for code, tests, and
+documentation. Python libtmux is the behavioural reference.
+
 Please use the following BibTeX template to cite libtmux-julia in scientific discourse:
 
 ```bibtex
