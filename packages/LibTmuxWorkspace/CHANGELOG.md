@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+#### Plan workspaces with fewer allocations
+
+Repeated workspace inspection and planning allocate less while preserving
+plan contents and ordering. Direct record construction requires the exported
+configuration, expanded-workspace and plan-step records. (#39)
+
 ## 0.1.0 - 2026-10-20
 
 #### Require Julia 1.13.1 and tmux 3.7c

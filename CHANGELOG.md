@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+#### Plan workspaces with fewer allocations
+
+Repeated workspace inspection and planning allocate less while preserving
+plan contents and ordering. Direct record construction requires the exported
+configuration, expanded-workspace and plan-step records. (#39)
+
 #### Release installation checks use normal Julia compilation
 
 Verify installed packages with Julia's normal compiler and cache behavior.
