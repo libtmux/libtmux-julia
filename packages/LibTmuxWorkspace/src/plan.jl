@@ -1,5 +1,5 @@
 struct ExpandedPane
-    commands::Tuple
+    commands::Tuple{Vararg{CommandConfig}}
     start_directory::String
     environment::Tuple
     shell::Union{Nothing,String}
@@ -14,7 +14,7 @@ struct ExpandedWindow
     options_after::Tuple
     layout::Union{Nothing,String}
     focus::Bool
-    panes::Tuple
+    panes::Tuple{Vararg{ExpandedPane}}
 end
 @noinline Base.@nospecializeinfer function _runtime_expanded_window(
     name,
@@ -47,7 +47,7 @@ struct ExpandedWorkspace
     environment::Tuple
     options::Tuple
     global_options::Tuple
-    windows::Tuple
+    windows::Tuple{Vararg{ExpandedWindow}}
 end
 
 function _expanded_text(text, context, path; home=true)
@@ -255,7 +255,7 @@ struct PlanStep
 end
 struct WorkspacePlan
     workspace::ExpandedWorkspace
-    steps::Tuple
+    steps::Tuple{Vararg{PlanStep}}
 end
 
 """

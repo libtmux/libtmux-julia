@@ -133,7 +133,7 @@ function test_config_schema_validation_and_owned_values()
         push!(panes, "echo later")
         @test length(cfg.windows[1].panes) == 5
         @test all(isempty(p.commands) for p in cfg.windows[1].panes[1:3])
-        @test only(cfg.windows[1].panes[4].commands).text == ""
+        @test (@inferred (c -> only(c.windows[1].panes[4].commands).text)(cfg)) == ""
         @test cfg.windows[1].panes[5].commands[2].enter === false
         @test cfg.windows isa Tuple
         cyclic = Any[]
@@ -200,7 +200,8 @@ function test_config_explicit_expansion_and_inheritance()
         @test Dict(p1.environment) ==
               Dict("COMMON" => "window", "SESSION" => "yes-string", "WINDOW" => "inherited")
         @test Dict(p2.environment) == Dict("COMMON" => "pane", "SESSION" => "yes-string")
-        @test p2.commands[end].text == raw"echo ${UNKNOWN}"
+        @test (@inferred (e -> e.windows[1].panes[2].commands[end].text)(expanded)) ==
+              raw"echo ${UNKNOWN}"
         config_error(() -> expand(cfg; env=Dict(), base_directory="relative"), :path)
         config_error(
             () -> expand(cfg; env=Dict(), base_directory="/work", unknown_variables=:error),
@@ -261,6 +262,7 @@ function test_config_plans_contain_ordered_inert_effects()
             )
             result = plan(expand(validate(document); base_directory=directory))
             kinds = [step.action for step in result.steps]
+            @test (@inferred (p -> p.steps[1].action)(result)) === :create_session
             @test kinds[1:2] == [:create_session, :before_script]
             @test count(==(:create_window), kinds) == 1
             @test count(==(:split_pane), kinds) == 1

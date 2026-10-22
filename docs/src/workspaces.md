@@ -97,6 +97,11 @@ windows creates independent windows. Snapshot acquisition is not atomic.
 
 ## Library reference
 
+`validate`, `expand` and `plan` construct the workspace records. If you build
+records directly, command tuples must contain `CommandConfig` values, window
+and pane tuples must contain the corresponding configuration or expanded
+record types, and plan steps must be `PlanStep` values.
+
 ```@autodocs
 Modules = [LibTmuxWorkspace]
 Private = false
