@@ -1,7 +1,7 @@
 # Package registration
 
 The suite contains three independent Julia packages in one repository. All
-use MIT and declare the unregistered version `0.1.0`. Their
+use MIT and declare the unregistered version `0.1.1-alpha.1`. Their
 package identities are fixed:
 
 | Package | Package directory | UUID |

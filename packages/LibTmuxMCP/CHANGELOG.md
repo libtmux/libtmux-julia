@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.1-alpha.1 - 2026-10-24
+
 #### Require tmux 3.3a
 
 The MCP application requires tmux 3.3a again. Its waiting tools poll the

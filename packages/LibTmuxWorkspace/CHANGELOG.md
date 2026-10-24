@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.1-alpha.1 - 2026-10-24
+
 #### Plan workspaces with fewer allocations
 
 Repeated workspace inspection and planning allocate less while preserving

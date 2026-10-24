@@ -94,5 +94,6 @@ $ bin/libtmux-workspace --help
 [Load a workspace](workspaces.md) describes validation, planning, loading and
 freezing.
 
-Version `0.1.0` is prepared for registration. The packages are not in the
-General registry yet; registration requires a separate maintainer action.
+Version `0.1.1-alpha.1` is an unregistered source release. The packages are
+not in the General registry; registration needs a plain version and a separate
+maintainer action.

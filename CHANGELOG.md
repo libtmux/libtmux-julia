@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.1-alpha.1 - 2026-10-24
+
 #### Capabilities live in one registry and manifest
 
 Every optional tmux check reads its release from one table: control mode,
