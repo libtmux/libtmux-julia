@@ -220,14 +220,16 @@ end
 
 # Integration: a wait on a pane that is gone or a server that is gone fails
 # with the text it saw, while a live pane whose stream dropped stays
-# ObservationLost.
+# ObservationLost. A stopped second client can keep a killed server running,
+# which then answers "server exited unexpectedly" instead of "no server
+# running"; either way the wait must see the server end.
 @testset "core output waits tell an ended pane or server from a dropped stream" begin
     environment = Dict(
         "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
         "TERM"=>"xterm-256color",
         "SHELL"=>"/bin/sh",
     )
-    for ending in (:pane, :server, :dropped)
+    for ending in (:pane, :server, :stopped, :dropped)
         with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do server
             # The anchor keeps the server alive when the target session ends.
             new_session(server; name="anchor", command=["/bin/cat"])
@@ -238,6 +240,22 @@ end
                 command=["/bin/sh", "-c", "printf 'before-end\\n'; sleep 30"],
             )
             pane = only(filter(p -> p.ref != anchor, panes(snapshot(server)))).ref
+            holder = nothing
+            holder_pid = nothing
+            if ending === :stopped
+                pidfile = server.socket_path * ".client"
+                holder = run(
+                    pipeline(
+                        `python3 -I $(joinpath(@__DIR__, "..", "packages", "LibTmuxMCP", "test", "stopped_client.py")) $(server.tmux) $(server.socket_path) anchor $pidfile control`;
+                        stdout=devnull,
+                        stderr=devnull,
+                    );
+                    wait=false,
+                )
+                @test timedwait(() -> isfile(pidfile), 20.0) === :ok
+                holder_pid = parse(Int, read(pidfile, String))
+                run(`kill -STOP $holder_pid`)
+            end
             outcome = try
                 open_control(server, created) do connection
                     observe_output(connection, pane) do stream
@@ -250,8 +268,17 @@ end
                         sleep(1.0)
                         if ending === :pane
                             kill_pane(server, pane)
-                        elseif ending === :server
+                        elseif ending === :server || ending === :stopped
                             run_command(server, "kill-server")
+                            ending === :stopped && @test occursin(
+                                r"server exited unexpectedly|no server running",
+                                try
+                                    run_command(server, "list-sessions")
+                                    ""
+                                catch error
+                                    sprint(showerror, error)
+                                end,
+                            )
                         else
                             listed = run_command(
                                 server,
@@ -281,6 +308,11 @@ end
                 end
             catch error
                 error
+            finally
+                if holder_pid !== nothing
+                    run(ignorestatus(`kill -KILL $holder_pid`))
+                    kill(holder)
+                end
             end
             if ending === :dropped
                 @test outcome isa ObservationLost

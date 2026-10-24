@@ -870,11 +870,11 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                             kill_pane(server, caller)
                         else
                             run_command(server, "kill-server")
-                            # The stopped client keeps the daemon alive on some
-                            # releases, which then answer "server exited
-                            # unexpectedly"; the others report no server.
+                            # A stopped client keeps the killed daemon alive, and
+                            # every release then answers "server exited
+                            # unexpectedly".
                             stopped && @test occursin(
-                                r"server exited unexpectedly|no server running",
+                                r"server exited unexpectedly",
                                 try
                                     run_command(server, "list-sessions")
                                     ""
