@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+#### Restore the tmux 3.3a minimum
+
+The minimum tmux release is 3.3a again; 0.1.0 required 3.7c. Control
+connections still need tmux 3.7 and named-buffer deletion needs 3.4. On older
+releases those operations raise `UnsupportedCapability` before any effect, and
+everything else keeps working, including pasting, which deletes its own
+staging buffer before 3.4. (#41)
+
+#### Raw tmux command lines meet the release requirements
+
+`run_command`, `run_batch` and `run_group` refuse a command before sending it
+when the release mishandles it: `delete-buffer -b` and `set-buffer -n`
+below tmux 3.4, `refresh-client -l` below tmux 3.6a (it stops a 3.3a server at
+once, and a 3.4 to 3.6 server when the attached client leaves before its
+terminal answers), a `select-layout` string that 3.3a would stop on, and a
+`break-pane` without `-n` on tmux 3.7. Commands are resolved the way tmux
+resolves them, including aliases, prefixes and `;` lists. Command strings that
+tmux parses itself, such as `if-shell` bodies, are not inspected. (#41)
+
+#### `break_pane` works on every supported release
+
+`break_pane` reads the window back from the pane where tmux up to 3.5 prints
+nothing for a window's last pane, instead of failing after the move. On
+exactly tmux 3.7, which stops on a nameless `break-pane` and ignores `-n`, it
+requires a name and renames the window afterwards. (#41)
+
+#### MCP waits poll the screen below tmux 3.7
+
+`wait_for_text` and `send_keys_and_wait` poll the screen, joining wrapped rows,
+on servers without control support and report such a match with
+`source: "screen"`. A wait whose pane exits or whose server stops fails with
+code `pane_died` and an `output` field holding the text seen so far, on both
+paths, also while a second client keeps the stopped server alive. (#41)
+
+#### Waits report an ended pane or server
+
+`wait_for`, `wait_for_text` and `wait_for_quiet` raise the new
+`OutputWaitEnded` when the pane has exited or the tmux server has stopped,
+with the `reason` (`:pane_exited` or `:server_exited`) and the `text` the wait
+had seen. Before, both came back as `ObservationLost` with advice to acquire a
+new baseline, which cannot help when nothing is left to observe. A live pane
+whose stream dropped still raises `ObservationLost`; code that caught
+`ObservationLost` to detect a dead pane should catch `OutputWaitEnded`. (#41)
+
 #### Plan workspaces with fewer allocations
 
 Repeated workspace inspection and planning allocate less while preserving

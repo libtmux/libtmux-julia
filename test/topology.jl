@@ -211,8 +211,13 @@ function test_topology_pane_maintenance_preserves_process_and_explicit_link_iden
         with_tmux() do fixture
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
             anchor = new_session(server; name="maintenance-anchor", command=["/bin/cat"])
-            open_control(server, anchor) do connection
-                for (transport, mode) in ((server, "subprocess"), (connection, "control"))
+            # Control acquisition needs tmux 3.7; the subprocess transport runs
+            # everywhere.
+            with_control_if_supported(server, anchor) do connection
+                transports =
+                    connection === nothing ? ((server, "subprocess"),) :
+                    ((server, "subprocess"), (connection, "control"))
+                for (transport, mode) in transports
                     alpha = new_session(
                         transport;
                         name="maintenance-$mode",

@@ -3,7 +3,8 @@ One accepted output observation. `text` is a bounded UTF-8 tail;
 `dropped_bytes` counts complete decoded bytes omitted from this result and
 `pending_bytes` counts an incomplete UTF-8 suffix retained by the decoder.
 `received_bytes` counts raw bytes consumed by this wait. Tail truncation is
-local retention policy; an actual stream gap instead raises `ObservationLost`.
+local retention policy; an actual stream gap instead raises `ObservationLost`,
+and a pane or server that ended raises `OutputWaitEnded` with the text so far.
 The cursor covers the whole last consumed event, including omitted bytes;
 it cannot resume within a matched event.
 
@@ -141,7 +142,8 @@ a synchronous predicate cannot be forcibly interrupted. Cancellation and an
 expired deadline are checked again before accepting its result.
 
 By default only output consumed by this call is considered. `baseline=true`
-first tests an independently captured screen, bounded by `max_bytes`; an
+first tests an independently captured screen, bounded by `max_bytes`, with
+soft-wrapped rows joined so text wider than the pane still matches; an
 oversized capture raises `OutputLimitExceeded`. A rejected baseline is never
 concatenated with subsequent raw bytes. Already queued output remains eligible;
 register a new stream before sending input when fresh-output evidence matters.
@@ -165,6 +167,43 @@ function wait_for(predicate, stream::ObservationStream; kwargs...)
     _wait_for_output(predicate, stream, :predicate; kwargs...)
 end
 
+# Why a stream ended: `:server_exited` when the probe says the server is gone,
+# `:pane_exited` when the server answers and the pane is dead or missing, and
+# `nothing` when the pane lives or a probe cannot run. A probe that fails for
+# any other reason says nothing about the pane, so the caller keeps its error.
+function _wait_end_reason(server::Server, pane::PaneRef; cancel=nothing)
+    environment = _client_environment(ENV)
+    release = try
+        _daemon_version(server, environment; cancel)
+    catch error
+        return _server_gone(error) ? :server_exited : nothing
+    end
+    release === nothing && return :server_exited
+    rows = try
+        run_command(server, "list-panes", "-a", "-F", "#{pane_id} #{pane_dead}"; cancel)
+    catch error
+        return _server_gone(error) ? :server_exited : nothing
+    end
+    state = nothing
+    for line in split(decode_text(rows.stdout; invalid=:replace), '\n')
+        fields = split(line, ' ')
+        length(fields) == 2 && fields[1] == string(pane.id) && (state = fields[2])
+    end
+    state == "0" ? nothing : :pane_exited
+end
+
+# Rethrow the error a wait caught, as `OutputWaitEnded` when the pane or the
+# server is gone.
+function _rethrow_ended(error, stream, text, cancel)
+    ended =
+        if error isa Union{ObservationLost,EOFError,ControlConnectionError} &&
+           stream.pane !== nothing
+            reason = _wait_end_reason(stream.connection.server, stream.pane; cancel)
+            reason === nothing ? nothing : OutputWaitEnded(reason, text, stream.cursor)
+        end
+    ended === nothing ? rethrow() : throw(ended)
+end
+
 function _wait_for_output(
     predicate,
     stream,
@@ -178,8 +217,14 @@ function _wait_for_output(
     literal=nothing,
 )
     started = time_ns()
-    budget, max_bytes = _output_wait_policy(stream, timeout, max_bytes, mode, cancel)
+    # A stream that already ended raises here, before the wait begins.
+    budget, max_bytes = try
+        _output_wait_policy(stream, timeout, max_bytes, mode, cancel)
+    catch error
+        _rethrow_ended(error, stream, "", cancel)
+    end
     decoder = _output_wait_decoder(stream, invalid)
+    seen = ""
     try
         function accepted(result)
             answer = predicate(result)
@@ -192,6 +237,7 @@ function _wait_for_output(
             captured = capture_baseline(
                 stream;
                 max_bytes,
+                join_wrapped=true,
                 timeout=_output_wait_remaining(started, budget, cancel),
                 cancel,
             )
@@ -205,6 +251,7 @@ function _wait_for_output(
                 evidence,
                 :reset,
             )
+            seen = result.text
             accepted(result) && return result
         end
         text = ""
@@ -227,8 +274,11 @@ function _wait_for_output(
             text, removed = _output_wait_tail(text, max_bytes)
             dropped += removed + omitted
             result = _output_wait_result(text, stream, decoder, received, dropped, evidence)
+            seen = result.text
             accepted(result) && return result
         end
+    catch error
+        _rethrow_ended(error, stream, seen, cancel)
     finally
         _output_wait_release(stream)
     end
@@ -291,13 +341,17 @@ function wait_for_quiet(
     mode::Symbol=:raw,
 )
     started = time_ns()
-    budget, max_bytes = _output_wait_policy(stream, timeout, max_bytes, mode, cancel)
+    budget, max_bytes = try
+        _output_wait_policy(stream, timeout, max_bytes, mode, cancel)
+    catch error
+        _rethrow_ended(error, stream, "", cancel)
+    end
     interval = Float64(quiet)
     isfinite(interval) && interval > 0 ||
         throw(ArgumentError("quiet interval must be positive and finite"))
     decoder = _output_wait_decoder(stream, invalid)
+    text = ""
     try
-        text = ""
         received = dropped = 0
         last_output = time_ns()
         while true
@@ -328,6 +382,8 @@ function wait_for_quiet(
                 _output_wait_tail(text * decode!(decoder, event.bytes), max_bytes)
             dropped += removed
         end
+    catch error
+        _rethrow_ended(error, stream, text, cancel)
     finally
         _output_wait_release(stream)
     end

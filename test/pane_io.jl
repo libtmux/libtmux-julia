@@ -1,3 +1,12 @@
+# Loading and deleting a named buffer needs tmux 3.4; features.jl tests the
+# refusal below it. Capture, keys and paste run on every supported release.
+buffer_staging_supported = LibTmux._version_at_least(
+    last(split(readchomp(`$(get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) -V`))),
+    LibTmux.BUFFER_DELETE_MINIMUM_TMUX,
+)
+buffer_staging_supported ||
+    @warn "named-buffer load, save and delete tests skipped: the test tmux is below $(LibTmux.BUFFER_DELETE_MINIMUM_TMUX)"
+
 @testset "pane capture, keys and owned buffers" begin
     @test isdefined(LibTmux, :capture_bytes)
     @test isdefined(LibTmux, :paste_bytes)
@@ -20,7 +29,18 @@
                 observed = only(filter(x -> string(x.ref.id) == unusual, encoded))
                 @test observed.size == 7
                 @test LibTmux.save_buffer(server, observed.ref) == codeunits("literal")
-                LibTmux.delete_buffer(server, observed.ref)
+                if buffer_staging_supported
+                    LibTmux.delete_buffer(server, observed.ref)
+                else
+                    @test_throws UnsupportedCapability LibTmux.delete_buffer(
+                        server,
+                        observed.ref,
+                    )
+                    # The buffer exists, so deleting it by name is safe here.
+                    @test success(
+                        OwnedTmux.tmuxcmd(fixture, "delete-buffer", "-b", unusual),
+                    )
+                end
             end
             buffer_names() = split(
                 chomp(
@@ -30,20 +50,30 @@
                 ),
                 '\n',
             )
+            # Before 3.4 an aborted stage leaves its own named buffer rather than
+            # risk deleting another; the borrowed buffer must survive either way.
+            function only_borrowed_remains()
+                names = buffer_names()
+                buffer_staging_supported && return names == ["borrowed"]
+                "borrowed" in names &&
+                    all(n -> n == "borrowed" || startswith(n, "libtmux-julia-"), names)
+            end
 
-            payload = repeat(UInt8[0x00, 0xff, 0x0a, 0x0d, 0x20], 4096)
-            buffer = LibTmux.load_buffer(server, payload)
-            @test buffer isa LibTmux.BufferRef
-            @test LibTmux.save_buffer(server, buffer) == payload
-            @test_throws OutputLimitExceeded LibTmux.save_buffer(
-                server,
-                buffer;
-                max_bytes=32,
-            )
-            LibTmux.delete_buffer(server, buffer)
-            @test buffer_names() == ["borrowed"]
-            @test_throws CommandError LibTmux.save_buffer(server, buffer)
-            @test_throws ArgumentError LibTmux.load_buffer(server, UInt8[])
+            if buffer_staging_supported
+                payload = repeat(UInt8[0x00, 0xff, 0x0a, 0x0d, 0x20], 4096)
+                buffer = LibTmux.load_buffer(server, payload)
+                @test buffer isa LibTmux.BufferRef
+                @test LibTmux.save_buffer(server, buffer) == payload
+                @test_throws OutputLimitExceeded LibTmux.save_buffer(
+                    server,
+                    buffer;
+                    max_bytes=32,
+                )
+                LibTmux.delete_buffer(server, buffer)
+                @test buffer_names() == ["borrowed"]
+                @test_throws CommandError LibTmux.save_buffer(server, buffer)
+                @test_throws ArgumentError LibTmux.load_buffer(server, UInt8[])
+            end
 
             quote_shell(s) = "'" * replace(s, "'" => "'\\''") * "'"
             echo_file = joinpath(fixture.directory, "echo-#{pane_id}-%Y")
@@ -153,7 +183,7 @@
             )
             missing = PaneRef(pane.server, "%999999")
             @test_throws CommandError LibTmux.paste_bytes(server, missing, UInt8[0x41])
-            @test buffer_names() == ["borrowed"]
+            @test only_borrowed_remains()
             token = CancellationToken()
             cancel!(token)
             @test_throws RequestCancelled LibTmux.paste_bytes(
@@ -162,7 +192,7 @@
                 UInt8[0x41];
                 cancel=token,
             )
-            @test buffer_names() == ["borrowed"]
+            @test only_borrowed_remains()
 
             run_command(
                 server,
@@ -185,7 +215,7 @@
                 outcome = fetch(task)
             end
             @test outcome isa RequestCancelled
-            @test buffer_names() == ["borrowed"]
+            @test only_borrowed_remains()
             @test run_command(server, "save-buffer", "-b", "borrowed", "-").stdout ==
                   codeunits("keep")
             run_command(server, "set-hook", "-gu", "after-load-buffer")

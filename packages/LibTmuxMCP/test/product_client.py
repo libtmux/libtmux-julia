@@ -9,11 +9,25 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import selectors
 import subprocess
 import sys
 import time
 from typing import Any
+
+
+def control_supported(tmux: str) -> bool:
+    """Whether tmux allows control acquisition: 3.7 or newer, not a 3.7 prerelease."""
+    report = subprocess.check_output([tmux, "-V"], text=True).split()[-1]
+    parsed = re.fullmatch(
+        r"(?:next-(\d+)\.(\d+)|(\d+)\.(\d+)(?:[a-z]|-rc\d*)?)", report
+    )
+    if parsed is None:
+        return False
+    release = (int(parsed[1] or parsed[3]), int(parsed[2] or parsed[4]))
+    prerelease = report.startswith("next-") or "-rc" in report
+    return release > (3, 7) or (release == (3, 7) and not prerelease)
 
 
 def main() -> None:
@@ -142,7 +156,12 @@ def main() -> None:
             assert set(item) == set(item_schema["properties"]), item
             assert isinstance(item["tool"], str) and isinstance(item["result"], dict)
         error_schema = fields["error"]
-        assert set(payload["error"]) == set(error_schema["properties"]), payload
+        # A failed wait adds its optional `output`; every other error omits it.
+        assert (
+            set(error_schema["required"])
+            <= set(payload["error"])
+            <= set(error_schema["properties"])
+        ), payload
         assert isinstance(payload["error"]["code"], str)
         assert isinstance(payload["error"]["message"], str)
         assert (
@@ -214,7 +233,10 @@ def main() -> None:
             {"keys": ["observed-marker"], "literal": True, "text": "observed-marker"},
         )
         assert not sent_and_observed.get("isError", False), sent_and_observed
-        assert sent_and_observed["structuredContent"]["source"] == "output"
+        # The waiting tools observe through a control client on tmux 3.7 and
+        # newer, and poll the screen below it.
+        expected_source = "output" if control_supported(tmux) else "screen"
+        assert sent_and_observed["structuredContent"]["source"] == expected_source
         send(
             "waiting",
             "tools/call",

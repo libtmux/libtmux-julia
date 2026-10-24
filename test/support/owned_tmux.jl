@@ -3,7 +3,7 @@ module OwnedTmux
 using FileWatching
 import LibTmux
 
-export Fixture, tmuxcmd, with_tmux
+export Fixture, tmuxcmd, with_tmux, with_control_if_supported
 
 struct Fixture
     tmux::String
@@ -11,6 +11,22 @@ struct Fixture
     socket::String
     env::Dict{String,String}
     process::Base.Process
+end
+
+"""
+    with_control_if_supported(f, server, session)
+
+Call `f(connection)` with an open control connection where tmux allows control
+acquisition (3.7 and newer), and `f(nothing)` below it, so one body can cover the
+subprocess transport everywhere and the control transport where it exists.
+"""
+function with_control_if_supported(f, server, session)
+    release = LibTmux._daemon_version(server, LibTmux._client_environment(ENV))
+    if LibTmux._version_at_least(release, LibTmux.CONTROL_MINIMUM_TMUX)
+        LibTmux.open_control(f, server, session)
+    else
+        f(nothing)
+    end
 end
 
 "Build a command that cannot start or contact any other tmux server."

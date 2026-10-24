@@ -274,6 +274,7 @@ for (operation, command, Ref) in (
         isempty(name) && throw(ArgumentError("name cannot be empty"))
         literal = _literal_format(name)
         context = _target_context(server, target; kwargs...)
+        _check_name(context, name, $(QuoteNode(operation)))
         _operation_command(context, $command, "-t", string(target.id), "--", literal)
     end
     @eval @doc $("""
@@ -503,7 +504,11 @@ end
 Move the pane into an explicit destination window slot without respawning it.
 The checked source link establishes session context for a shared window. Removing
 a pane changes every link to its physical window; moving its final pane moves
-the source window link instead. Return the resulting `WindowRef`.
+the source window link instead. Return the resulting `WindowRef`; tmux 3.5 and
+earlier print nothing for a final pane, so the window is read back from the pane.
+Exactly tmux 3.7 stops on a nameless `break-pane`, so there `name` is required
+and raises `UnsupportedCapability` before any effect when omitted. tmux 3.7 also
+ignores `-n`, so the window is renamed afterwards.
 Checks are best effort against concurrent topology changes. Invalid replies
 raise `CreationResponseError` with uncertain effects; no retry or rollback occurs.
 """
@@ -529,6 +534,11 @@ function break_pane(
     else
         _control_singleline(name, :break_pane)
     end
+    release = _check_break_pane_name(
+        transport isa Server ? _operation_context(transport; kwargs...) :
+        _control_operation_context(transport; kwargs...),
+        name,
+    )
     context = _maintenance_context(transport, pane; kwargs...)
     if hasproperty(context, :connection)
         _control_check_link(context, source)
@@ -550,7 +560,26 @@ function break_pane(
     ]
     select || push!(args, "-d")
     literal === nothing || append!(args, ["-n", literal])
-    hasproperty(context, :connection) && return _control_create(context, WindowRef, args)
-    result = _operation_command(context, args...)
-    _creation_reference(WindowRef, result; expected=pane.server)
+    window = if hasproperty(context, :connection)
+        _control_create(context, WindowRef, args)
+    else
+        result = _operation_command(context, args...)
+        # Before tmux 3.6 a pane that is its window's last one moves the window and
+        # `-P` prints nothing, so read the window back from the pane.
+        if isempty(result.stdout)
+            result = _target_format_command(
+                context,
+                pane,
+                _format_template(["pid", "start_time", "socket_path", "window_id"]),
+            )
+        end
+        _creation_reference(WindowRef, result; expected=pane.server)
+    end
+    # Exactly tmux 3.7 names the window it breaks out with the default name
+    # whatever `-n` says, so give it the requested one.
+    name !== nothing &&
+        release !== nothing &&
+        _unnamed_break_stops(release) &&
+        rename_window(transport, window, name; kwargs...)
+    window
 end

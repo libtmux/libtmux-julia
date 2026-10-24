@@ -51,6 +51,14 @@ An oversized baseline raises `OutputLimitExceeded`; a streamed tail instead
 omits older decoded bytes and reports `dropped_bytes`. An actual output gap,
 overflow or topology change raises `ObservationLost` and requires a new stream.
 
+A wait whose pane exited, or whose tmux server stopped, raises
+[`OutputWaitEnded`](@ref) instead. Its `reason` is `:pane_exited` or
+`:server_exited` and its `text` is the output the wait had seen, so the caller
+can report a failed wait with that output; nothing is left to observe and a new
+baseline cannot help. A live pane whose stream dropped still raises
+`ObservationLost`. The wait asks tmux only when its stream ends, and a probe
+that fails for any other reason leaves the original error in place.
+
 Literal matching searches each decoded event before retaining text. A marker
 in the middle of a large event remains eligible; returned text ends at that
 match. Later bytes in the event are received but omitted from the result.

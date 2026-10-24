@@ -254,6 +254,13 @@ if isempty(ARGS) || any(arg -> arg in ("effects", "integration", "all"), ARGS)
     end
 end
 
+# The waiting tools observe through control clients (tmux 3.7) and poll the
+# screen below it, so the evidence they report differs by release.
+mcp_control_supported = LibTmux._version_at_least(
+    last(split(readchomp(`$(get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) -V`))),
+    LibTmux.CONTROL_MINIMUM_TMUX,
+)
+
 if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
     @testset "MCP tools use exact authorized real-tmux targets" begin
         environment = Dict(
@@ -683,12 +690,14 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                     Dict("keys"=>["λ-ready", "Enter"], "text"=>"reply:λ-ready"),
                 )
                 @test !sent.is_error
-                @test sent.structured_content["source"] == "output" &&
+                @test sent.structured_content["source"] ==
+                      (mcp_control_supported ? "output" : "screen") &&
                       sent.structured_content["keysSent"]
                 @test sent.structured_content["evidence"] == "literal_text"
                 baseline = tool_result(app, "wait_for_text", Dict("text"=>"reply:λ-ready"))
                 @test !baseline.is_error &&
-                      baseline.structured_content["source"] == "baseline"
+                      baseline.structured_content["source"] ==
+                      (mcp_control_supported ? "baseline" : "screen")
                 @test baseline.structured_content["continuity"] == "reset"
                 callback_failure = tool_result(
                     app,
@@ -750,6 +759,166 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                 @test isempty(clients(snapshot(server)))
             finally
                 close(app)
+            end
+        end
+    end
+    @testset "MCP waits match text wrapped across screen rows" begin
+        environment = Dict(
+            "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
+            "TERM"=>"xterm-256color",
+            "SHELL"=>"/bin/sh",
+        )
+        LibTmux.with_server(;
+            tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
+            env=environment,
+        ) do server
+            # Wider than the 80-column pane, so tmux soft-wraps it.
+            printed = repeat("0123456789", 12) * "end"
+            command = ["/bin/sh", "-c", "printf '%s\\n' $printed; exec cat"]
+            new_session(server; name="wrapped", command)
+            caller = only(panes(snapshot(server))).ref
+            app = Application(
+                server;
+                caller,
+                allowed_panes=[caller],
+                allowed_tools=("wait_for_text", "send_keys_and_wait"),
+            )
+            try
+                # The match crosses the wrap point at column 80.
+                spanning = printed[60:end]
+                @test occursin('\n', capture_pane(server, caller)) &&
+                      !occursin(spanning, capture_pane(server, caller))
+                baseline = tool_result(app, "wait_for_text", Dict("text"=>spanning))
+                @test !baseline.is_error && baseline.structured_content["matched"]
+                typed = repeat("abcdefghij", 12) * "typed"
+                sent = tool_result(
+                    app,
+                    "send_keys_and_wait",
+                    Dict("keys"=>[typed, "Enter"], "text"=>typed[60:end]),
+                )
+                @test !sent.is_error && sent.structured_content["matched"]
+            finally
+                close(app)
+            end
+        end
+    end
+
+    @testset "MCP waits fail with the output so far when the pane or server ends" begin
+        # A killed server lingers while another client is attached; the stopped
+        # client keeps it alive so the wait must still see the server end.
+        environment = Dict(
+            "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
+            "TERM"=>"xterm-256color",
+            "SHELL"=>"/bin/sh",
+        )
+        for (ending, stopped) in ((:pane, false), (:server, false), (:server, true))
+            LibTmux.with_server(;
+                tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
+                env=environment,
+            ) do server
+                new_session(server; name="anchor", command=["/bin/cat"])
+                anchor = only(panes(snapshot(server))).ref
+                holder = nothing
+                holder_pid = nothing
+                if stopped
+                    release =
+                        LibTmux._daemon_version(server, LibTmux._client_environment(ENV))
+                    mode =
+                        LibTmux._version_at_least(release, LibTmux.CONTROL_MINIMUM_TMUX) ?
+                        "control" : "pty"
+                    pidfile = server.socket_path * ".client"
+                    holder = run(
+                        pipeline(
+                            `python3 -I $(joinpath(@__DIR__, "stopped_client.py")) $(server.tmux) $(server.socket_path) anchor $pidfile $mode`;
+                            stdout=devnull,
+                            stderr=devnull,
+                        );
+                        wait=false,
+                    )
+                    @test timedwait(() -> isfile(pidfile), 20.0) === :ok
+                    holder_pid = parse(Int, read(pidfile, String))
+                    run(`kill -STOP $holder_pid`)
+                end
+                command = ["/bin/sh", "-c", "printf 'before-end\\n'; sleep 30"]
+                fresh_pane(name) = begin
+                    new_session(server; name, command)
+                    only(filter(pane -> pane.ref != anchor, panes(snapshot(server)))).ref
+                end
+                caller = fresh_pane("ending")
+                app = Application(
+                    server;
+                    caller,
+                    allowed_panes=[caller],
+                    allowed_tools=("wait_for_text", "send_keys_and_wait"),
+                )
+                try
+                    for tool in ("wait_for_text", "send_keys_and_wait")
+                        waiting = Channel{Any}(1)
+                        arguments = Dict{String,Any}("text"=>"never-printed")
+                        tool == "send_keys_and_wait" && (arguments["keys"] = ["x"])
+                        task = Threads.@spawn tool_result(
+                            app,
+                            tool,
+                            arguments;
+                            progress=phase ->
+                                phase == "waiting" && put!(waiting, :waiting),
+                        )
+                        @test take!(waiting) === :waiting
+                        # Let the wait capture the pane once before it ends.
+                        sleep(1.0)
+                        if ending === :pane
+                            kill_pane(server, caller)
+                        else
+                            run_command(server, "kill-server")
+                            # A stopped client can keep the killed daemon alive,
+                            # which then answers "server exited unexpectedly";
+                            # a daemon that already left answers "no server
+                            # running".
+                            stopped && @test occursin(
+                                r"server exited unexpectedly|no server running",
+                                try
+                                    run_command(server, "list-sessions")
+                                    ""
+                                catch error
+                                    sprint(showerror, error)
+                                end,
+                            )
+                        end
+                        @test timedwait(() -> istaskdone(task), 20.0) === :ok
+                        result = fetch(task)
+                        error = result.structured_content["error"]
+                        error["code"] == "pane_died" || println(
+                            "unexpected wait failure: ",
+                            ending,
+                            " ",
+                            tool,
+                            " ",
+                            error,
+                        )
+                        @test result.is_error && error["code"] == "pane_died"
+                        @test error["effects"] == "possible"
+                        @test ending === :server ? occursin("server", error["message"]) :
+                              occursin("pane", error["message"])
+                        tool == "wait_for_text" &&
+                            @test occursin("before-end", error["output"])
+                        ending === :server && break
+                        # The next tool needs a fresh pane to wait on.
+                        caller = fresh_pane("again")
+                        close(app)
+                        app = Application(
+                            server;
+                            caller,
+                            allowed_panes=[caller],
+                            allowed_tools=("wait_for_text", "send_keys_and_wait"),
+                        )
+                    end
+                finally
+                    close(app)
+                    if holder_pid !== nothing
+                        run(ignorestatus(`kill -KILL $holder_pid`))
+                        kill(holder)
+                    end
+                end
             end
         end
     end

@@ -90,21 +90,27 @@ $ /usr/bin/time -p julia \
     test/runtests.jl integration
 ```
 
-Assert that a release below the 3.7c floor is refused without effect by
+Assert that a release below the 3.3a floor is refused without effect by
 pointing the tmux selector at that release. `LIBTMUX_TEST_CLIENT_TMUX`
 optionally adds a newer client that must not qualify the older daemon:
 
 ```console
-$ LIBTMUX_TEST_TMUX=/path/to/tmux-3.6b julia \
+$ LIBTMUX_TEST_TMUX=/path/to/tmux-3.2a julia \
     --startup-file=no \
     --project=. \
     --threads=1 \
     test/runtests.jl rejection
 ```
 
-The global tmux floor is 3.7c. Rejection tests verify that older daemons cannot
+The global tmux floor is 3.3a. Rejection tests verify that older daemons cannot
 receive effectful operations, including after replacing a previously checked
-daemon. A skipped check is not a passing check.
+daemon.
+
+Below tmux 3.7 the control suites are skipped, and below 3.4 the named-buffer
+load, save and delete cases are skipped; `test/features.jl` asserts those
+refusals instead. Skips are warned in the log, and the matrix runner collects
+them into its result file and the job summary. A skipped check is not a
+passing one.
 
 Run both suites before handoff, and repeat with `--threads=4` when changing
 process ownership, cancellation, or concurrent I/O:
@@ -497,15 +503,17 @@ Both must pass at the same source revision to complete a split cell. Use
 `--suite runtime` or `--suite delivery` to run one partition locally; omitting
 the option runs both.
 
-Pull requests run Linux checks on Julia 1.13.1 with tmux 3.7c at one and four
-threads and tmux 3.8 at one thread. Each configuration runs required runtime and
-delivery jobs, with independent preparation and unchanged hard limits. Both
-partitions must pass; their union runs every verification phase once. This repeats
-dependency setup to keep cold preparation from exhausting the final checks'
-allowance.
+Pull requests run Linux checks on Julia 1.13.1 with tmux 3.3a, 3.4, 3.5a, 3.6b,
+3.7, 3.7a, 3.7b and 3.7c at one thread, tmux 3.7c at four threads and tmux 3.8
+at one thread. The floor, 3.7c and 3.8 configurations run required runtime and
+delivery jobs; the others run the runtime job. Each job has independent
+preparation and unchanged hard limits. Both partitions must pass for a
+configuration that runs both; their union runs every verification phase once.
+This repeats dependency setup to keep cold preparation from exhausting the final
+checks' allowance.
 
-macOS and psmux are excluded from CI. Rejection jobs use tmux 3.0a, 3.1c, 3.3a
-and 3.6b with a current client; these versions
+macOS and psmux are excluded from CI. Rejection jobs use tmux 3.0a, 3.1c, 3.2a
+and 3.3 with a 3.3a client; these versions
 must be refused without effect. The oldest two also exercise protocol-mismatch
 replies from real old daemons in the core and MCP packages.
 

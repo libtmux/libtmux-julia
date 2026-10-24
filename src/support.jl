@@ -6,8 +6,8 @@
 using UUIDs: uuid4
 
 # The oldest tmux release that ordinary operations support. Releases compare
-# with their patch letters, so 3.7b is below 3.7c.
-const MINIMUM_TMUX_VERSION = "3.7c"
+# with their patch letters, so 3.3 is below 3.3a.
+const MINIMUM_TMUX_VERSION = "3.3a"
 
 """
     UnsupportedTmuxVersion(observed, minimum, detail)
@@ -147,6 +147,15 @@ function _endpoint_absent(stderr::AbstractString)
             occursin("Connection refused", stderr)
         )
 end
+
+# A server that was told to exit lingers until its last client leaves, and
+# answers every command with this diagnostic until then.
+_server_gone(stderr::AbstractString) =
+    _endpoint_absent(stderr) || occursin("server exited unexpectedly", stderr)
+
+_server_gone(error) =
+    error isa CommandError &&
+    _server_gone(decode_text(error.result.stderr; invalid=:replace))
 
 """
 Report the selected daemon's release, or `nothing` for an absent endpoint.

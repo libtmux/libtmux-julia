@@ -95,11 +95,11 @@ jobs:
       - name: Prepare pinned tmux release
         run: python3 dev/check-matrix.py build-tmux "$RUNNER_TEMP/libtmux-julia-reject" '${{ matrix.tmux }}'
       - name: Prepare the current client
-        run: python3 dev/check-matrix.py build-tmux "$RUNNER_TEMP/libtmux-julia-reject" 3.7c
+        run: python3 dev/check-matrix.py build-tmux "$RUNNER_TEMP/libtmux-julia-reject" 3.3a
       - name: Assert the release is refused without effect
         env:
           LIBTMUX_TEST_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/${{ matrix.tmux }}/bin/tmux
-          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.7c/bin/tmux
+          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.3a/bin/tmux
           LIBTMUX_TEST_OLD_TMUX_BUILDS: ${{ matrix.real_old == 'true' && format('{0}/libtmux-julia-reject/tmux', runner.temp) || '' }}
           LIBTMUX_TEST_OLD_TMUX_RELEASES: ${{ matrix.real_old == 'true' && matrix.tmux || '' }}
         run: julia --startup-file=no --project=. --threads=1 test/runtests.jl ${{ matrix.suite }}
@@ -115,13 +115,13 @@ jobs:
       - name: Assert the workspace CLI refuses the release
         env:
           LIBTMUX_TEST_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/${{ matrix.tmux }}/bin/tmux
-          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.7c/bin/tmux
+          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.3a/bin/tmux
           LIBTMUX_TEST_REQUIRE_OLD_DAEMON: '1'
         run: julia --startup-file=no --project="$RUNNER_TEMP/libtmux-julia-reject/packages" --threads=1 packages/LibTmuxWorkspace/test/runtests.jl old-daemon
       - name: Assert the MCP server refuses a replaced daemon
         if: matrix.real_old == 'true'
         env:
-          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.7c/bin/tmux
+          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.3a/bin/tmux
           LIBTMUX_TEST_OLD_TMUX_BUILDS: ${{ runner.temp }}/libtmux-julia-reject/tmux
           LIBTMUX_TEST_OLD_TMUX_RELEASES: ${{ matrix.tmux }}
           LIBTMUX_TEST_REQUIRE_OLD_DAEMON: '1'

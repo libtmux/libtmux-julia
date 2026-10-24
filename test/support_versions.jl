@@ -1,3 +1,4 @@
+using TOML
 @testset "tmux release ordering" begin
     atleast(version) = LibTmux._version_at_least(version, "3.3a")
     # Vectors from every version string tmux has reported.
@@ -60,7 +61,7 @@
         @test !occursin("is unsupported", message(version))
     end
     @test startswith(message(""), "tmux version is unsupported;")
-    @test LibTmux.MINIMUM_TMUX_VERSION == "3.7c"
+    @test LibTmux.MINIMUM_TMUX_VERSION == "3.3a"
     for chain in (
         ("next-3.7", "3.7-rc", "3.7-rc3", "3.7", "3.7a"),
         ("next-3.4", "3.4-rc", "3.4"),
@@ -136,4 +137,20 @@ end
     @test_throws LibTmux.UnsupportedCapability LibTmux._check_layout_version("x", "3.5-rc")
     @test LibTmux._check_layout_version("x", "3.8-rc") === nothing
     @test LibTmux._check_layout_version("x", "next-3.9") === nothing
+end
+
+# The hand-kept support facts in docs/capabilities.toml must say what the code
+# enforces; nothing else reads them.
+@testset "capabilities.toml agrees with the release gates" begin
+    root = dirname(@__DIR__)
+    support = TOML.parsefile(joinpath(root, "docs", "capabilities.toml"))["support"]
+    @test support["tmux_minimum"] == LibTmux.MINIMUM_TMUX_VERSION
+    @test support["tmux_control_minimum"] == LibTmux.CONTROL_MINIMUM_TMUX
+    @test support["tmux_named_buffer_minimum"] == LibTmux.BUFFER_DELETE_MINIMUM_TMUX
+    @test support["tmux_json_layout_minimum"] == LibTmux.JSON_LAYOUT_MINIMUM_TMUX
+    matrix = read(joinpath(root, "dev", "check-matrix.py"), String)
+    lanes = match(r"^REJECTED_TMUX = \(([^)]*)\)"m, matrix)
+    @test lanes !== nothing
+    rejected = [m.captures[1] for m in eachmatch(r"\"([^\"]+)\"", lanes[1])]
+    @test support["verified_rejection_releases"] == rejected
 end

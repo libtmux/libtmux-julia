@@ -123,7 +123,9 @@ _batch_result(error::ControlCommandError) = error.result
 _batch_sent(error) = true
 _batch_sent(error::Union{RequestCancelled,DeadlineExceeded,ControlConnectionError}) =
     error.sent
-_batch_sent(error::Union{TmuxNotFound,ProcessSpawnError,ArgumentError}) = false
+_batch_sent(
+    error::Union{TmuxNotFound,ProcessSpawnError,ArgumentError,UnsupportedCapability},
+) = false
 _batch_sent(error::Union{UnsupportedTmuxVersion,CommandError}) = !_not_dispatched(error)
 
 function _batch_error(index, command, error)

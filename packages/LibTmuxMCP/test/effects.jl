@@ -1,5 +1,12 @@
 using Test, LibTmux, LibTmuxMCP
 
+# Waits observe through a control client where tmux has them (3.7) and poll the
+# screen below it.
+control_supported = LibTmux._version_at_least(
+    last(split(readchomp(`$(get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) -V`))),
+    LibTmux.CONTROL_MINIMUM_TMUX,
+)
+
 # Outer: real hooks, attachment and creation cleanup require an owned daemon.
 @testset "MCP whole-call effects include configured hooks" begin
     directory = Ref("")
@@ -121,8 +128,13 @@ using Test, LibTmux, LibTmuxMCP
                 @test waited.is_error &&
                       waited.structured_content["error"]["code"] == "cancelled"
                 @test waited.structured_content["error"]["effects"] == "possible"
-                @test get_environment(server, :global, "LTJ_ATTACH_HOOK").value ==
-                      "observed"
+                attached = get_environment(server, :global, "LTJ_ATTACH_HOOK")
+                if control_supported
+                    @test attached.value == "observed"
+                else
+                    # Polling attaches no client, so the hook never fires.
+                    @test attached === nothing
+                end
                 @test isempty(clients(snapshot(server)))
             end
         finally

@@ -62,6 +62,10 @@ then runs them in order.
 - Both tools share the application's deadline and byte bounds, emit bounded
   progress when requested, and release their control clients on cancellation.
 - Unrelated requests remain serviceable during a wait.
+- Below tmux 3.7, which has no control support for this, they poll the screen
+  with wrapped rows joined and report `source: "screen"`.
+- A pane or server that ends during a wait fails the call as `pane_died` with
+  the output seen so far, on both paths.
 
 ## Library use
 

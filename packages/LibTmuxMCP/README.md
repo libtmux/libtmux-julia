@@ -199,6 +199,17 @@ pastes longer text through an owned buffer.
 sends keys, so a match on text already on screen cannot satisfy it. Neither
 reports process exit.
 
+On tmux 3.7 and newer both observe pane output through a control client. On
+older releases they poll the screen, joining wrapped rows, and report
+`source: "screen"`.
+
+A polled screen cannot tell new output from old, so
+[`send_keys_and_wait`][tool_send_keys_and_wait] there needs more occurrences of
+the text than the screen held before the keys.
+
+When the pane exits or the server stops during a wait, the call fails with code
+`pane_died` and an `output` field holding the text seen so far, on both paths.
+
 Set `timeoutSeconds` to shorten a wait's total budget. Setup, capture and
 waiting share that deadline. A wait inside a batch also shares the batch's
 remaining budget.
@@ -321,7 +332,7 @@ ownership.
 - **Experimental.** The packages are unregistered. Registry publication is pending.
 - **Protocol.** Modern discovery uses `2026-07-28`. The legacy initialize
   profile is `2025-11-25`.
-- **Julia 1.13.1 or newer and tmux 3.7c or newer.**
+- **Julia 1.13.1 or newer and tmux 3.3a or newer.**
 - **Older tmux is refused.** The initial check reports `unsupported_tmux` and
   `effects: none`. A later refusal preserves earlier possible effects. Upgrade
   tmux and restart the server, or pin a compatible libtmux release.

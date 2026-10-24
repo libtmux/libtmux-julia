@@ -69,6 +69,9 @@ TMUX_SHA256 = {
     "3.4": "551ab8dea0bf505c0ad6b7bb35ef567cdde0ccb84357df142c254f35a23e19aa",
     "3.5a": "16216bd0877170dfcc64157085ba9013610b12b082548c7c9542cc0103198951",
     "3.6b": "390759d25fdba016887ec982b808927e637070fd7d03a8021f8ef3102b9ae3c7",
+    "3.7": "2344f191501b8a73eb71dd6c5fd5dcf8c765f5066f34ab46f04b3013dc7bc1a5",
+    "3.7a": "8ee44ce951182845fd57ad12dd6f27fb677b1afb900e2e84df4798112ed0dbf0",
+    "3.7b": "87f2e99e3b685973f2ca002ffd6ed7e51a5744f7009daae5a15670b6d532db96",
     "3.7c": "7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf",
     "3.8": "e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e",
 }
@@ -76,12 +79,15 @@ TMUX_SHA256 = {
 
 # Releases below the supported floor. Their cells assert refusal without effect
 # and stay outside the supported matrix.
-REJECTED_TMUX = ("3.0a", "3.1c", "3.3a", "3.6b")
+REJECTED_TMUX = ("3.0a", "3.1c", "3.2a", "3.3")
 # Releases whose daemon answers a current client with a protocol mismatch or a
 # usage error; their cells run the real-build refusal test in place of the
 # owned-daemon rejection suite.
 PRE_PROBE_TMUX = ("3.0a", "3.1c")
-MINIMUM_TMUX = "3.7c"
+MINIMUM_TMUX = "3.3a"
+# Supported releases between the floor and tmux 3.7c; 3.7 exactly refuses names
+# with ':' or '.', and 3.7a restores them.
+INTERMEDIATE_TMUX = ("3.4", "3.5a", "3.6b", "3.7", "3.7a", "3.7b")
 MINIMUM_JULIA = "1.13.1"
 HARD_WORK_SECONDS = 15 * 60
 
@@ -229,6 +235,12 @@ def qa_cells() -> list[QaCell]:
         )
 
     add("Linux", "ubuntu-24.04", "x86_64", MINIMUM_JULIA, MINIMUM_TMUX)
+    # Releases between the floor and the current one differ in what they accept
+    # and in how they fail, so each runs the runtime suite; the delivery suite
+    # does not depend on the release and runs at the floor and the newest.
+    for tmux in INTERMEDIATE_TMUX:
+        add("Linux", "ubuntu-24.04", "x86_64", MINIMUM_JULIA, tmux, 1, ("runtime",))
+    add("Linux", "ubuntu-24.04", "x86_64", MINIMUM_JULIA, "3.7c")
     add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.7c", 4)
     add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.8", 1)
     return cells
@@ -1359,17 +1371,30 @@ println("PASS admitted version arguments construct real Pkg specifications")
             (cell["os"], cell["arch"], cell["julia"], cell["tmux"], cell["threads"])
             for cell in cells
         ] == [
+            ("Linux", "x86_64", "1.13.1", "3.3a", 1),
+            ("Linux", "x86_64", "1.13.1", "3.4", 1),
+            ("Linux", "x86_64", "1.13.1", "3.5a", 1),
+            ("Linux", "x86_64", "1.13.1", "3.6b", 1),
+            ("Linux", "x86_64", "1.13.1", "3.7", 1),
+            ("Linux", "x86_64", "1.13.1", "3.7a", 1),
+            ("Linux", "x86_64", "1.13.1", "3.7b", 1),
             ("Linux", "x86_64", "1.13.1", "3.7c", 1),
             ("Linux", "x86_64", "1.13.1", "3.7c", 4),
             ("Linux", "x86_64", "1.13.1", "3.8", 1),
         ]
-        assert all(cell["suites"] == SUITES for cell in cells)
+        floor_and_newest = ("3.3a", "3.7c", "3.8")
+        assert all(
+            cell["suites"]
+            == (SUITES if cell["tmux"] in floor_and_newest else ("runtime",))
+            for cell in cells
+        )
         jobs = [(cell["label"], suite) for cell in cells for suite in cell["suites"]]
-        assert len(jobs) == len(set(jobs)) == 6
+        assert len(jobs) == len(set(jobs))
+        assert {cell["tmux"] for cell in cells} <= set(TMUX_SHA256)
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
         rejected = rejection_cells()
-        assert [cell["tmux"] for cell in rejected] == ["3.0a", "3.1c", "3.3a", "3.6b"]
+        assert [cell["tmux"] for cell in rejected] == ["3.0a", "3.1c", "3.2a", "3.3"]
         assert [cell["tmux"] for cell in rejected if cell["real_old"] == "true"] == [
             "3.0a",
             "3.1c",

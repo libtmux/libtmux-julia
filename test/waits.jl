@@ -204,15 +204,124 @@ using Test, LibTmux
                 victim = split_window(connection, pane; command=["/bin/cat"])
                 observe_output(connection, victim) do stream
                     kill_pane(connection, victim)
-                    @test_throws ObservationLost wait_for_text(
-                        stream,
-                        "absent";
-                        timeout=0.9,
-                    )
+                    ended = try
+                        wait_for_text(stream, "absent"; timeout=0.9)
+                    catch error
+                        error
+                    end
+                    @test ended isa OutputWaitEnded && ended.reason === :pane_exited
                 end
             end
             @test isempty(clients(snapshot(server)))
         end
         @test !ispath(directory[])
+    end
+end
+
+# Integration: a wait on a pane that is gone or a server that is gone fails
+# with the text it saw, while a live pane whose stream dropped stays
+# ObservationLost. A stopped second client can keep a killed server running,
+# which then answers "server exited unexpectedly" instead of "no server
+# running"; either way the wait must see the server end.
+@testset "core output waits tell an ended pane or server from a dropped stream" begin
+    environment = Dict(
+        "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
+        "TERM"=>"xterm-256color",
+        "SHELL"=>"/bin/sh",
+    )
+    for ending in (:pane, :server, :stopped, :dropped)
+        with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do server
+            # The anchor keeps the server alive when the target session ends.
+            new_session(server; name="anchor", command=["/bin/cat"])
+            anchor = only(panes(snapshot(server))).ref
+            created = new_session(
+                server;
+                name="ending",
+                command=["/bin/sh", "-c", "printf 'before-end\\n'; sleep 30"],
+            )
+            pane = only(filter(p -> p.ref != anchor, panes(snapshot(server)))).ref
+            holder = nothing
+            holder_pid = nothing
+            if ending === :stopped
+                pidfile = server.socket_path * ".client"
+                holder = run(
+                    pipeline(
+                        `python3 -I $(joinpath(@__DIR__, "..", "packages", "LibTmuxMCP", "test", "stopped_client.py")) $(server.tmux) $(server.socket_path) anchor $pidfile control`;
+                        stdout=devnull,
+                        stderr=devnull,
+                    );
+                    wait=false,
+                )
+                @test timedwait(() -> isfile(pidfile), 20.0) === :ok
+                holder_pid = parse(Int, read(pidfile, String))
+                run(`kill -STOP $holder_pid`)
+            end
+            outcome = try
+                open_control(server, created) do connection
+                    observe_output(connection, pane) do stream
+                        task = Threads.@spawn try
+                            wait_for_text(stream, "never-printed"; baseline=true, timeout=20)
+                        catch error
+                            error
+                        end
+                        # Let the baseline capture finish before the end.
+                        sleep(1.0)
+                        if ending === :pane
+                            kill_pane(server, pane)
+                        elseif ending === :server || ending === :stopped
+                            run_command(server, "kill-server")
+                            ending === :stopped && @test occursin(
+                                r"server exited unexpectedly|no server running",
+                                try
+                                    run_command(server, "list-sessions")
+                                    ""
+                                catch error
+                                    sprint(showerror, error)
+                                end,
+                            )
+                        else
+                            listed = run_command(
+                                server,
+                                "list-clients",
+                                "-F",
+                                "#{client_name} #{client_control_mode}",
+                            )
+                            for line in split(decode_text(listed.stdout), '\n')
+                                fields = split(line, ' ')
+                                # Detaching one can take its sibling with it.
+                                length(fields) == 2 &&
+                                    fields[2] == "1" &&
+                                    try
+                                        run_command(server, "detach-client", "-t", fields[1])
+                                    catch error
+                                        error isa CommandError || rethrow()
+                                    end
+                            end
+                        end
+                        @test timedwait(() -> istaskdone(task), 20.0) === :ok
+                        result = fetch(task)
+                        # The ended stream gives the same answer to the next wait.
+                        again = ending === :dropped ? ObservationLost : OutputWaitEnded
+                        @test_throws again wait_for_quiet(stream; timeout=5)
+                        result
+                    end
+                end
+            catch error
+                error
+            finally
+                if holder_pid !== nothing
+                    run(ignorestatus(`kill -KILL $holder_pid`))
+                    kill(holder)
+                end
+            end
+            if ending === :dropped
+                @test outcome isa ObservationLost
+            else
+                @test outcome isa OutputWaitEnded
+                outcome isa OutputWaitEnded && @test outcome.reason ===
+                      (ending === :pane ? :pane_exited : :server_exited)
+                outcome isa OutputWaitEnded && @test occursin("before-end", outcome.text)
+            end
+        end
     end
 end

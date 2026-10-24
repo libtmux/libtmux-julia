@@ -3,10 +3,12 @@
 LibTmuxMCP serves a local tmux endpoint over stdio. Prepare a consumer project
 with both packages from the same revision using [Install](installation.md#mcp-application).
 
-The server needs tmux 3.7c or newer. A tool called against an older or
+The server needs tmux 3.3a or newer. A tool called against an older or
 unreadable tmux fails with code `unsupported_tmux` and `effects: none`, and
 `libtmux-mcp` exits at startup with the same remedy when its server is below
-the floor.
+the floor. The waiting tools observe output through a control client on tmux
+3.7 and newer and poll the screen below it; a match reports `source` `output`
+or `baseline` on the first and `screen` on the second.
 
 Create the launcher after dependency preparation:
 

@@ -20,6 +20,23 @@ end
 Base.showerror(io::IO, error::ObservationLost) =
     print(io, "tmux observation lost: ", error.reason, "; acquire a new baseline")
 
+"""
+A wait that ended because the pane or the tmux server is gone. `reason` is
+`:pane_exited` or `:server_exited`; `text` is the output the wait had seen and
+`cursor` the last accepted position. Unlike [`ObservationLost`](@ref), nothing
+is left to observe, so a new baseline cannot help.
+"""
+struct OutputWaitEnded <: LibTmuxError
+    reason::Symbol
+    text::String
+    cursor::ObservationCursor
+end
+Base.showerror(io::IO, error::OutputWaitEnded) = print(
+    io,
+    error.reason === :server_exited ? "the tmux server exited during the wait" :
+    "the pane exited during the wait",
+)
+
 "A notification, raw pane-output chunk or sampled format value with an observation cursor."
 abstract type ObservationEvent end
 """

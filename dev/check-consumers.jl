@@ -286,6 +286,17 @@ function check(stage; imports=true)
     return println("PASS unchanged exported sources and core dependency boundary")
 end
 
+# Control acquisition needs tmux 3.7; next-X.Y and X.Y-rc rank below X.Y.
+function control_supported(tmux)
+    report = last(split(readchomp(`$tmux -V`)))
+    parsed = match(r"\A(?:next-(\d+)\.(\d+)|(\d+)\.(\d+)(?:[a-z]|-rc\d*)?)\z", report)
+    parsed === nothing && return false
+    release =
+        parse.(Int, (something(parsed[1], parsed[3]), something(parsed[2], parsed[4])))
+    prerelease = startswith(report, "next-") || occursin("-rc", report)
+    Tuple(release) > (3, 7) || (Tuple(release) == (3, 7) && !prerelease)
+end
+
 function check_examples(stage)
     check(stage; imports=false)
     programs = Tuple{String,String}[]
@@ -312,7 +323,21 @@ function check_examples(stage)
         "example cleanup negative control",
         addenv(Cmd(audit; dir=stage), isolated_environment(stage)...),
     )
+    control_examples = ("control_cancel.jl", "command_completion.jl", "output_stream.jl")
+    control = control_supported(tmux)
+    skipped = String[]
     for (name, program) in programs
+        if !control && basename(program) in control_examples
+            push!(skipped, relpath(program, joinpath(stage, "source", name)))
+            println(
+                "SKIPPED ",
+                name,
+                "/",
+                last(skipped),
+                ": control acquisition needs tmux 3.7",
+            )
+            continue
+        end
         project = joinpath(stage, "environments", name)
         example = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$project $program`
         pure = name == "LibTmuxWorkspace" && basename(program) == "plan.jl"
@@ -334,8 +359,11 @@ function check_examples(stage)
     end
     return println(
         "PASS ",
+        length(programs) - length(skipped),
+        " of ",
         length(programs),
         " discovered examples from immutable external packages",
+        isempty(skipped) ? "" : " (control examples skipped)",
     )
 end
 

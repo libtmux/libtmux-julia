@@ -146,7 +146,7 @@ exit 99
             text, stdout = String(take!(err)), String(take!(out))
             @test code == 3
             @test occursin("\"3.2a\" is unsupported", text)
-            @test occursin("requires tmux 3.7c or newer", text)
+            @test occursin("requires tmux 3.3a or newer", text)
             @test occursin("Upgrade tmux", text)
             # No step is announced before the refusal: nothing ran.
             @test !occursin(r"workspace application|retained|partial|step \d", text)

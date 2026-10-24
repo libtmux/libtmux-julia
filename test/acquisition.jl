@@ -1,6 +1,6 @@
 using Test, LibTmux
 isdefined(@__MODULE__, :OwnedTmux) || include("support/owned_tmux.jl")
-using .OwnedTmux: with_tmux
+using .OwnedTmux: with_tmux, with_control_if_supported
 
 function test_acquisition_captured_tmux_graph()
     isdefined(@__MODULE__, :TEST_CACHE_ENTRIES) && (TEST_CACHE_ENTRIES[] += 1)
@@ -80,8 +80,8 @@ function test_acquisition_captured_tmux_graph()
                 ops = onlymatch(SessionWhere(name="ops"), sessions(snap)).ref
                 api = onlymatch(WindowWhere(name="api"), windows(snap)).ref
                 dev = onlymatch(SessionWhere(name="dev"), sessions(snap)).ref
-                open_control(server, dev) do connection
-                    for transport in (server, connection)
+                with_control_if_supported(server, dev) do connection
+                    for transport in (connection === nothing ? (server,) : (server, connection))
                         scoped_session = snapshot(transport, ops)
                         @test scoped_session isa SessionSnapshot &&
                               scoped_session.ref == ops
@@ -140,9 +140,9 @@ function test_acquisition_captured_tmux_graph()
                             ),
                             ops.id,
                         )
-                        submitted = connection.submitted
+                        submitted = connection === nothing ? 0 : connection.submitted
                         @test_throws CrossServerReference snapshot(transport, foreign)
-                        @test connection.submitted == submitted
+                        @test connection === nothing || connection.submitted == submitted
                         @test_throws InconsistentSnapshot snapshot(
                             transport,
                             SessionRef(ops.server, "\$999999"),
@@ -155,7 +155,8 @@ function test_acquisition_captured_tmux_graph()
                         cancel!(token)
                         @test_throws RequestCancelled snapshot(transport, api; cancel=token)
                     end
-                    @test process_running(fixture.process) && isopen(connection)
+                    @test process_running(fixture.process) &&
+                          (connection === nothing || isopen(connection))
                 end
                 run_command(server, "rename-window", "-t", "dev:api", "changed")
                 run_command(server, "resize-pane", "-Z", "-t", "dev:changed.0")
