@@ -5,6 +5,8 @@
         new_session(server; name="capture", command=["/bin/cat"])
         snap = snapshot(server)
         session = only(sessions(snap)).ref
+        # The pane prints text shaped like control framing, then holds still.
+        payload = "%begin 1 2 1\r\n%end 1 2 1\r\n%output %0 guard text\r\né 雪\r\n"
         result = run_command(
             server,
             "split-window",
@@ -14,18 +16,17 @@
             "#{pane_id}",
             "-t",
             string(only(panes(snap)).id),
-            "",
+            "/bin/sh",
+            "-c",
+            "printf '%s' \"\$1\"; exec /bin/cat",
+            "sh",
+            payload,
         )
         pane = PaneRef(session.server, chomp(decode_text(result.stdout)))
-        payload = "%begin 1 2 1\r\n%end 1 2 1\r\n%output %0 guard text\r\né 雪\r\n"
-        run_command(
-            server,
-            "display-message",
-            "-I",
-            "-t",
-            string(pane.id);
-            input=codeunits(payload),
-        )
+        deadline = time() + 10
+        while !occursin("雪", decode_text(capture_bytes(server, pane))) && time() < deadline
+            sleep(0.05)
+        end
         expected = capture_bytes(server, pane)
         @test occursin("%end 1 2 1", decode_text(expected))
         open_control(server, session) do connection
