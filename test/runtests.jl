@@ -20,6 +20,7 @@ const UNIT_FILES = (
     "options_catalog",
     "control_protocol",
     "support_versions",
+    "support_capabilities",
 )
 const INTEGRATION_FILES = (
     "fixture_contract",
