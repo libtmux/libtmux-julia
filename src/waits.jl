@@ -3,7 +3,8 @@ One accepted output observation. `text` is a bounded UTF-8 tail;
 `dropped_bytes` counts complete decoded bytes omitted from this result and
 `pending_bytes` counts an incomplete UTF-8 suffix retained by the decoder.
 `received_bytes` counts raw bytes consumed by this wait. Tail truncation is
-local retention policy; an actual stream gap instead raises `ObservationLost`.
+local retention policy; an actual stream gap instead raises `ObservationLost`,
+and a pane or server that ended raises `OutputWaitEnded` with the text so far.
 The cursor covers the whole last consumed event, including omitted bytes;
 it cannot resume within a matched event.
 
