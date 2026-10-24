@@ -341,7 +341,7 @@ function _layout_argument(layout::Union{Symbol,AbstractString})
 end
 
 function _check_layout_version(layout, version)
-    minimum = _json_layout(layout) ? "3.8" : "3.5"
+    minimum = _json_layout(layout) ? JSON_LAYOUT_MINIMUM_TMUX : "3.5"
     _version_at_least(version, minimum) && return
     throw(
         UnsupportedCapability(

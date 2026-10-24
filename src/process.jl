@@ -585,6 +585,7 @@ function run_command(
         # An absent endpoint has nothing to stop, so cleanup is complete.
         checked.version === nothing && return CommandResult(UInt8[], UInt8[], 0, 0)
         _version_guard === nothing || _version_guard(checked.version)
+        _guard_raw_command(arguments, checked.version)
         marker = _version_marker()
         argv = _fenced_argv(server, arguments, checked, marker)
         result = _run_process(setenv(Cmd(argv), environment); _started=started, kwargs...)
