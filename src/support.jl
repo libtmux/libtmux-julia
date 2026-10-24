@@ -6,8 +6,8 @@
 using UUIDs: uuid4
 
 # The oldest tmux release that ordinary operations support. Releases compare
-# with their patch letters, so 3.7b is below 3.7c.
-const MINIMUM_TMUX_VERSION = "3.7c"
+# with their patch letters, so 3.3 is below 3.3a.
+const MINIMUM_TMUX_VERSION = "3.3a"
 
 """
     UnsupportedTmuxVersion(observed, minimum, detail)

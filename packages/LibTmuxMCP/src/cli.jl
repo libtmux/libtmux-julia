@@ -15,7 +15,7 @@ borrowed. Only sessions created through enabled tools belong to this process.
   --help                print this help without contacting tmux
 
 Default tools: list_panes, capture_pane, send_keys.
-Needs tmux 3.7c or newer; an older server is refused with `unsupported_tmux`.
+Needs tmux 3.3a or newer; an older server is refused with `unsupported_tmux`.
 Pane IDs must be exact tmux IDs, such as %3. No ambient/current pane fallback.
 """
 
