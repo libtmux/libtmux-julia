@@ -120,25 +120,6 @@ MCP CLI startup and wait setup still acquire the full graph within an 8 MiB
 reply bound. Larger replies are unsupported at those stages. A discovery scope
 narrows a listing; it cannot bypass startup or wait setup.
 
-## Verification
-
-Whole-command times are diagnostic: aim for five seconds for focused checks,
-thirty seconds for unit/quality checks and five minutes for the complete outer
-checks. A slower correct result remains a pass. The runner stops test work at
-fifteen minutes, retires owned processes and preserves partial evidence.
-Dependency acquisition and precompilation are measured separately.
-
-Accept a final revision only after its affected correctness, package,
-example and documentation checks pass. Fresh consumer projects must install
-that source from the documented public GitHub commands and exercise the core,
-MCP and workspace flows. Immutable consumer exports do not prove that install.
-
-The shared website build and rendered output require their own verification;
-a passing native manual or API export does not establish them. Use the
-[CI result for the candidate commit](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
-and its public-install evidence. Benchmark completion and exhaustive profiling
-are separate work; excluded platforms are not acceptance gates.
-
 ```@raw html
 <p>See <a href="../source/CONTRIBUTING.md.html">the contributor guide</a> and
 <a href="../source/docs/capabilities.toml.html">the support facts</a>
