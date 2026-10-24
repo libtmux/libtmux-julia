@@ -7,15 +7,10 @@ keeps working on 3.3a.
 
 CI runs Linux only, using Julia 1.13.1. It checks tmux 3.3a, 3.4, 3.5a, 3.6b,
 3.7, 3.7a, 3.7b and 3.7c at one thread, 3.7c at four threads and 3.8 at one
-thread. macOS and psmux are excluded from CI and current support. Historical
-results remain available; they do not expand the selected scope.
+thread. macOS and psmux are excluded from CI and current support.
 
-[The retained Linux run](https://github.com/libtmux/libtmux-julia/actions/runs/39333764109)
-passed every phase in the tmux 3.7c and 3.8 cells for PR head `67da6f3`, tested
-as merge commit `f0a564f`, when 3.7c was the floor. No phases were skipped or
-unrun. The capability manifest records both revisions and the tested source
-digest, with earlier baselines separate. This evidence does not establish that
-a later commit passes.
+The [CI result for a commit](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
+is the evidence for that commit.
 
 ## Version refusal
 
@@ -114,6 +109,6 @@ are separate work; excluded platforms are not acceptance gates.
 
 ```@raw html
 <p>See <a href="../source/CONTRIBUTING.md.html">the contributor guide</a> and
-<a href="../source/docs/capabilities.toml.html">the capability manifest</a>
+<a href="../source/docs/capabilities.toml.html">the support facts</a>
 for scope and evidence.</p>
 ```

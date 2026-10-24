@@ -1,6 +1,6 @@
 # Install from source
 
-The packages are unregistered. Install `master`
+The packages are unregistered. Install the `v0.1.1-alpha.1` tag
 in the Julia project that will use them. `Manifest.toml` records the
 requested revision and package tree hashes. The MCP and workspace companions
 are experimental; their guides record supported behavior and limitations.
@@ -15,7 +15,7 @@ $ julia \
     -e 'using Pkg
         Pkg.activate(".")
         repo = "https://github.com/libtmux/libtmux-julia.git"
-        revision = "master"
+        revision = "v0.1.1-alpha.1"
         Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
@@ -34,7 +34,7 @@ $ julia \
     -e 'using Pkg
         Pkg.activate(".")
         repo = "https://github.com/libtmux/libtmux-julia.git"
-        revision = "master"
+        revision = "v0.1.1-alpha.1"
         Pkg.add([
             Pkg.PackageSpec(url=repo, rev=revision),
             Pkg.PackageSpec(
@@ -69,7 +69,7 @@ $ julia \
     -e 'using Pkg
         Pkg.activate(".")
         repo = "https://github.com/libtmux/libtmux-julia.git"
-        revision = "master"
+        revision = "v0.1.1-alpha.1"
         Pkg.add([
             Pkg.PackageSpec(url=repo, rev=revision),
             Pkg.PackageSpec(

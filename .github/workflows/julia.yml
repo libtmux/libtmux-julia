@@ -220,7 +220,6 @@ jobs:
       RELEASE_SHA: ${{ github.sha }}
       RELEASE_REF: ${{ github.ref }}
       RELEASE_REPOSITORY: ${{ github.repository }}
-      RELEASE_EVENT: ${{ github.event_path }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -234,6 +233,8 @@ jobs:
       - name: Choose fresh tag-install stage
         run: echo "RELEASE_STAGE=$RUNNER_TEMP/libtmux-julia-release" >> "$GITHUB_ENV"
       - name: Prepare release tag record
+        env:
+          RELEASE_EVENT: ${{ github.event_path }}
         run: |
           mkdir -p "$RELEASE_STAGE"
           python3 dev/check-release-tag.py verify \
@@ -252,6 +253,8 @@ jobs:
           --stage "$RELEASE_STAGE"
           --checkout "$GITHUB_WORKSPACE"
       - name: Recheck public tag after installation
+        env:
+          RELEASE_EVENT: ${{ github.event_path }}
         run: >-
           python3 dev/check-release-tag.py verify
           --checkout "$GITHUB_WORKSPACE"

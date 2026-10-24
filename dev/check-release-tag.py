@@ -73,6 +73,12 @@ def sha(value: str, label: str) -> str:
     return value.lower()
 
 
+def event_argument(value: str) -> Path:
+    if not value.strip():
+        fail("--event is empty; the workflow did not pass the push event path")
+    return Path(value)
+
+
 def tag_name(value: str) -> str:
     if not TAG.fullmatch(value):
         fail("tag must be a v-prefixed semantic version")
@@ -447,6 +453,8 @@ def self_test() -> None:
             git(["-C", str(shallow), "rev-parse", "--is-shallow-repository"], cwd=root)
             == "false"
         )
+        expect_error(lambda: event_argument(""), "--event is empty")
+        assert event_argument(str(event_path)) == event_path
         expect_error(lambda: tag_name("alpha.1"), "v-prefixed")
         expect_error(lambda: tag_name("v0.1.0/escape"), "v-prefixed")
         expect_error(
@@ -531,7 +539,7 @@ def main() -> int:
         "verify", help="validate a pushed tag and write a release record"
     )
     verify.add_argument("--checkout", type=Path, required=True)
-    verify.add_argument("--event", type=Path, required=True)
+    verify.add_argument("--event", required=True)
     verify.add_argument("--tag", required=True)
     verify.add_argument("--commit", required=True)
     verify.add_argument("--ref", required=True)
@@ -544,7 +552,7 @@ def main() -> int:
         else:
             preflight(
                 checkout=arguments.checkout.resolve(),
-                event_path=arguments.event.resolve(),
+                event_path=event_argument(arguments.event).resolve(),
                 tag=arguments.tag,
                 commit=arguments.commit,
                 ref=arguments.ref,

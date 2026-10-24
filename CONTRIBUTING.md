@@ -18,7 +18,7 @@ $ mise install
 
 Make the pinned version available as `julia` in your shell. The development
 pin and package compatibility declarations do not prove a supported version
-matrix. Track support separately in [the capability manifest](docs/capabilities.toml).
+matrix. Track support separately in [the capability manifest](capabilities.json).
 
 Core runtime and direct tests use Julia standard libraries. Optional JSON
 and Tables integrations have separate prepared test environments. Unit
