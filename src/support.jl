@@ -148,6 +148,15 @@ function _endpoint_absent(stderr::AbstractString)
         )
 end
 
+# A server that was told to exit lingers until its last client leaves, and
+# answers every command with this diagnostic until then.
+_server_gone(stderr::AbstractString) =
+    _endpoint_absent(stderr) || occursin("server exited unexpectedly", stderr)
+
+_server_gone(error) =
+    error isa CommandError &&
+    _server_gone(decode_text(error.result.stderr; invalid=:replace))
+
 """
 Report the selected daemon's release, or `nothing` for an absent endpoint.
 

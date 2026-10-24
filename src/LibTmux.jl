@@ -36,6 +36,7 @@ export ControlTargetError, ControlCleanupError, open_control, ControlSignal, con
 export ControlBufferCleanupError
 export TmuxCommand, OperationResult, BatchResult, GroupResult, run_batch, run_group
 export ObservationEvent, NotificationEvent, PaneOutput, FormatUpdate, ObservationLost
+export OutputWaitEnded
 export ObservationCursor, ObservationStream, notifications, observe_output, subscribe_format
 export observation_cursor, ObservationBaseline, capture_baseline
 export OutputWaitResult, wait_for, wait_for_text, wait_for_quiet
