@@ -56,7 +56,7 @@ $ julia \
     -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="master"; Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
-Use Julia 1.13.1 or newer and tmux 3.7c or newer. Have `tmux` on your `PATH`,
+Use Julia 1.13.1 or newer and tmux 3.3a or newer. Have `tmux` on your `PATH`,
 then open Julia in that project:
 
 ```console
@@ -417,10 +417,10 @@ The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
   records the requested revision and package tree in your `Manifest.toml`.
 - **Standard library only.** The core imports only Julia standard libraries.
   The JSON and Tables integrations are optional extensions.
-- **Julia 1.13.1 or newer and tmux 3.7c or newer.** Operations refuse an older
+- **Julia 1.13.1 or newer and tmux 3.3a or newer.** Operations refuse an older
   or unreadable tmux release before they have any effect.
-  [Compatibility][repo-docs-src-compatibility-md] lists the cells that passed
-  the complete suite.
+  [Compatibility][repo-docs-src-compatibility-md] lists features that need a
+  newer one.
 - **Linux, including WSL.** CI runs Linux only. macOS and psmux are excluded
   from CI; native Windows tmux is outside scope.
 - **Evidence.** The [capability manifest][repo-docs-capabilities-toml] and the

@@ -19,7 +19,7 @@ $ julia \
         Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
-Have `tmux` on `PATH`. Julia 1.13.1+ and tmux 3.7c+ are the compatibility
+Have `tmux` on `PATH`. Julia 1.13.1+ and tmux 3.3a+ are the compatibility
 targets. Operations refuse an older or unreadable tmux release before they
 have any effect; [Compatibility](compatibility.md) records the exact tested
 cells.

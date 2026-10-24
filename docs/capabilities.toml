@@ -4,12 +4,16 @@ status = "unregistered prerelease"
 [support]
 julia_development = "1.13.1"
 julia_minimum = "1.13.1"
-tmux_minimum = "3.7c"
+tmux_minimum = "3.3a"
+tmux_control_minimum = "3.7"
+tmux_named_buffer_minimum = "3.4"
 tmux_json_layout_minimum = "3.8"
 platforms = ["Linux x86_64"]
 ci_excluded = ["macOS", "psmux"]
 
 # Retained hosted evidence applies only to this revision and these Linux cells.
+# It was recorded when tmux 3.7c was the minimum; the restored 3.3a minimum has
+# its own cells in the Julia workflow.
 verified_product_pr_head = "67da6f3117aa3a5bef880e2ada331dc068684d6d"
 verified_product_revision = "f0a564f57d1214f7ec3c5e982ef756dfbf6a4697"
 verified_product_source_digest = "ddeb46f985f72a7eaad6d4fcd64925fc26750052c29fdfa5ef14a7b4f82147cd"
@@ -21,7 +25,7 @@ verified_product_cells = [
   "Linux x86_64 / Julia 1.13.1 / tmux 3.7c / 4 threads",
   "Linux x86_64 / Julia 1.13.1 / tmux 3.8 / 1 thread",
 ]
-verified_rejection_releases = ["3.0a", "3.1c", "3.3a", "3.6b"]
+verified_rejection_releases = ["3.0a", "3.1c", "3.2a", "3.3"]
 
 # Historical baselines preserve earlier results, not the selected support scope.
 baseline_revision = "9e3776d07798174a3590a728d28029efcbb52780"
