@@ -35,6 +35,14 @@ struct _ToolFailure <: Exception
 end
 Base.showerror(io::IO, error::_ToolFailure) = print(io, error.message)
 
+"A wait that ended because the pane or server exited, with the output seen so far."
+struct _ToolWaitFailure <: Exception
+    code::String
+    message::String
+    output::String
+end
+Base.showerror(io::IO, error::_ToolWaitFailure) = print(io, error.message)
+
 struct _ApplicationCall
     token::LibTmux.CancellationToken
     finished::Base.Event
@@ -463,7 +471,7 @@ function _tool_output_schema(app, name)
                 "target"=>_target_schema(),
                 "matched"=>boolean,
                 "text"=>text,
-                "source"=>Dict("enum"=>["baseline", "output"]),
+                "source"=>Dict("enum"=>["baseline", "output", "screen"]),
                 "evidence"=>Dict("const"=>"literal_text"),
                 "continuity"=>Dict("enum"=>["reset", "stream"]),
                 "keysSent"=>boolean,
@@ -524,6 +532,7 @@ function _tool_output_schema(app, name)
             "message"=>text,
             "effects"=>Dict("enum"=>["none", "possible"]),
             "retryable"=>boolean,
+            "output"=>text,
         );
         required=["code", "message", "effects", "retryable"],
     )
@@ -797,6 +806,84 @@ function _capture(app, ref, args, context)
     )
 end
 
+# A wait reports at most this much of the output it saw when the pane or the
+# server ends it.
+const _WAIT_OUTPUT_LIMIT = 8192
+
+_wait_output(text) =
+    ncodeunits(text) <= _WAIT_OUTPUT_LIMIT ? String(text) :
+    String(SubString(text, nextind(text, ncodeunits(text) - _WAIT_OUTPUT_LIMIT)))
+
+# Why a wait ended. The pane or the server being gone is a failed wait that
+# carries the output seen so far; anything else keeps its own error.
+function _wait_failure(reason::Symbol, output)
+    _ToolWaitFailure(
+        "pane_died",
+        reason === :server_exited ?
+        "the tmux server exited while waiting; the pane is gone" :
+        "the pane exited while waiting",
+        _wait_output(output),
+    )
+end
+
+function _wait_ended(app, ref, context, output)
+    reason = LibTmux._wait_end_reason(app.server, ref; cancel=context.cancel)
+    reason === nothing ? nothing : _wait_failure(reason, output)
+end
+
+# Polling counterpart of the control wait, used where control clients are
+# unavailable: capture the screen, joining wrapped rows, until the literal text
+# appears. A send_keys_and_wait match needs more occurrences than the screen
+# held before the keys; a polled screen cannot tell new output from old.
+function _poll_text(app, ref, plan, context, matched, mark_keys_sent)
+    needle = plan.args["text"]
+    seen = ""
+    function occurrences()
+        bytes = try
+            LibTmux.capture_bytes(
+                app.server,
+                ref;
+                join_wrapped=true,
+                max_bytes=app.max_capture_bytes,
+                _tool_kwargs(context)...,
+            )
+        catch error
+            error isa LibTmux.CommandError || rethrow()
+            ended = _wait_ended(app, ref, context, seen)
+            throw(ended === nothing ? error : ended)
+        end
+        seen = LibTmux.decode_text(bytes; invalid=:replace)
+        count(needle, seen)
+    end
+    found() = (context.progress("matched"); matched("screen", "reset"))
+    if plan.name == "wait_for_text"
+        context.progress("waiting")
+        occurrences() > 0 && return found()
+        baseline = 0
+    else
+        baseline = occurrences()
+        LibTmux.send_keys(
+            app.server,
+            ref,
+            plan.args["keys"]...;
+            literal=plan.args["literal"],
+            _tool_kwargs(context)...,
+        )
+        mark_keys_sent()
+        context.progress("waiting")
+    end
+    polls = 0
+    while true
+        sleep(0.1)
+        occurrences() > baseline && return found()
+        # A dead pane that stays on screen still captures, so check it too.
+        if (polls += 1) % 5 == 0
+            ended = _wait_ended(app, ref, context, seen)
+            ended === nothing || throw(ended)
+        end
+    end
+end
+
 function _wait_text(app, ref, plan, context)
     captured = LibTmux.snapshot(app.server; _tool_kwargs(context)...)
     captured.identity == ref.server || throw(LibTmux.StaleReference(string(ref.id)))
@@ -806,44 +893,63 @@ function _wait_text(app, ref, plan, context)
     isempty(links) && throw(LibTmux.StaleReference(string(ref.id)))
     session = first(links).session.ref
     keys_sent = false
-    LibTmux.open_control(app.server, session; _tool_kwargs(context)...) do connection
-        LibTmux.observe_output(
-            connection,
-            ref;
-            max_bytes=app.max_capture_bytes,
-            _tool_kwargs(context)...,
-        ) do stream
-            if plan.name == "send_keys_and_wait"
-                LibTmux.send_keys(
-                    app.server,
-                    ref,
-                    plan.args["keys"]...;
-                    literal=plan.args["literal"],
-                    _tool_kwargs(context)...,
-                )
-                keys_sent = true
-            end
-            context.progress("waiting")
-            result = LibTmux.wait_for_text(
-                stream,
-                plan.args["text"];
-                baseline=plan.name == "wait_for_text",
+    matched(source, continuity) = Dict(
+        "target"=>_target_wire(ref),
+        "matched"=>true,
+        "text"=>plan.args["text"],
+        "source"=>source,
+        "evidence"=>"literal_text",
+        "continuity"=>continuity,
+        "keysSent"=>keys_sent,
+        "terminalContent"=>"data",
+        "generationGuarantee"=>"best_effort",
+    )
+    # Control clients need tmux 3.7; below it, poll the screen instead.
+    release = LibTmux._daemon_version(
+        app.server,
+        LibTmux._client_environment(ENV);
+        cancel=context.cancel,
+    )
+    if release !== nothing &&
+       !LibTmux._version_at_least(release, LibTmux.CONTROL_MINIMUM_TMUX)
+        return _poll_text(app, ref, plan, context, matched, () -> keys_sent = true)
+    end
+    try
+        LibTmux.open_control(app.server, session; _tool_kwargs(context)...) do connection
+            LibTmux.observe_output(
+                connection,
+                ref;
                 max_bytes=app.max_capture_bytes,
                 _tool_kwargs(context)...,
-            )
-            context.progress("matched")
-            Dict(
-                "target"=>_target_wire(ref),
-                "matched"=>true,
-                "text"=>plan.args["text"],
-                "source"=>String(result.source),
-                "evidence"=>String(result.evidence),
-                "continuity"=>String(result.continuity),
-                "keysSent"=>keys_sent,
-                "terminalContent"=>"data",
-                "generationGuarantee"=>"best_effort",
-            )
+            ) do stream
+                if plan.name == "send_keys_and_wait"
+                    LibTmux.send_keys(
+                        app.server,
+                        ref,
+                        plan.args["keys"]...;
+                        literal=plan.args["literal"],
+                        _tool_kwargs(context)...,
+                    )
+                    keys_sent = true
+                end
+                context.progress("waiting")
+                result = LibTmux.wait_for_text(
+                    stream,
+                    plan.args["text"];
+                    baseline=plan.name == "wait_for_text",
+                    max_bytes=app.max_capture_bytes,
+                    _tool_kwargs(context)...,
+                )
+                context.progress("matched")
+                matched(String(result.source), String(result.continuity))
+            end
         end
+    catch error
+        error isa LibTmux.OutputWaitEnded && throw(_wait_failure(error.reason, error.text))
+        error isa Union{LibTmux.ObservationLost,EOFError,LibTmux.ControlConnectionError} ||
+            rethrow()
+        ended = _wait_ended(app, ref, context, "")
+        throw(ended === nothing ? error : ended)
     end
 end
 
@@ -1011,7 +1117,7 @@ end
 
 function _tool_error(error, effects::Bool=false)
     code =
-        error isa _ToolFailure ? error.code :
+        error isa Union{_ToolFailure,_ToolWaitFailure} ? error.code :
         error isa Union{ArgumentError,LibTmux.WireCriteriaError} ? "invalid_arguments" :
         error isa LibTmux.SnapshotCoverageError ? "incomplete_observation" :
         error isa LibTmux.InconsistentSnapshot ? "observation_inconsistent" :
@@ -1023,12 +1129,14 @@ function _tool_error(error, effects::Bool=false)
         error isa LibTmux.UnsupportedTmuxVersion ? "unsupported_tmux" :
         error isa LibTmux.UnsupportedCapability ? "unsupported_capability" :
         error isa LibTmux.ObservationLost ? "observation_lost" : "operation_failed"
-    Dict(
+    detail = Dict(
         "code"=>code,
         "message"=>_clip(sprint(showerror, error), 512),
         "effects"=>effects ? "possible" : "none",
         "retryable"=>false,
     )
+    error isa _ToolWaitFailure && (detail["output"] = error.output)
+    detail
 end
 
 function _result_limit_payload(name, payload, effects)

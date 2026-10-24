@@ -141,7 +141,8 @@ a synchronous predicate cannot be forcibly interrupted. Cancellation and an
 expired deadline are checked again before accepting its result.
 
 By default only output consumed by this call is considered. `baseline=true`
-first tests an independently captured screen, bounded by `max_bytes`; an
+first tests an independently captured screen, bounded by `max_bytes`, with
+soft-wrapped rows joined so text wider than the pane still matches; an
 oversized capture raises `OutputLimitExceeded`. A rejected baseline is never
 concatenated with subsequent raw bytes. Already queued output remains eligible;
 register a new stream before sending input when fresh-output evidence matters.
@@ -235,6 +236,7 @@ function _wait_for_output(
             captured = capture_baseline(
                 stream;
                 max_bytes,
+                join_wrapped=true,
                 timeout=_output_wait_remaining(started, budget, cancel),
                 cancel,
             )
