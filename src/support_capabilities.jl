@@ -92,7 +92,7 @@ const _CAPABILITIES = _Capability[
     _Capability(
         "clipboard-query",
         "Clipboard query",
-        "Ask an attached client's terminal for its clipboard with refresh-client -l. tmux 3.3a stops at once; 3.4 to 3.6 stop when the client leaves before its terminal answers.",
+        "Ask an attached client's terminal for its clipboard with refresh-client -l. tmux 3.3a stops when the client's terminal does not answer; 3.4 to 3.6 stop when the client leaves before its terminal answers.",
         "3.6a",
         String[],
         :refuse,

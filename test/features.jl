@@ -213,6 +213,10 @@ end
                 ["3.7", "next-3.7"],
                 ["3.7a", "3.6b"],
             ),
+            (["break-pane", "-d"], ["3.7"], ["3.7a"]),
+            # The body of if-shell is parsed by tmux, so the guard passes the
+            # same command unchanged; it stops exact 3.7 once tmux runs it.
+            (["if-shell", "-F", "1", "break-pane -d"], String[], ["3.7", "3.7a"]),
             (["breakp", "-dP", "-s", "%0"], ["3.7"], ["3.7a"]),
             (["break-p", "-s", "%0"], ["3.7"], ["3.7a"]),
             (["break-pane", "-s", "%0", "-n", "named"], String[], ["3.7"]),
