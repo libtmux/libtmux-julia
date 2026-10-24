@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+#### Require tmux 3.3a
+
+The MCP application requires tmux 3.3a again. Its waiting tools poll the
+screen below tmux 3.7, joining wrapped rows, and report `source: "screen"`; a
+wait whose pane exits or whose server stops fails with code `pane_died` and an
+`output` field holding the text seen so far, on both paths. (#41)
+
 ## 0.1.0 - 2026-10-20
 
 #### Require Julia 1.13.1 and tmux 3.7c
