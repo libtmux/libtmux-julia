@@ -48,12 +48,12 @@ for MCP or workspace configuration:
 ## Quick start
 
 The package is unregistered. From your Julia project's directory, add the
-core from `master`:
+core at the `v0.1.1-alpha.1` tag:
 
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision="master"; Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
+    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision = "v0.1.1-alpha.1"; Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
 Use Julia 1.13.1 or newer and tmux 3.3a or newer. Have `tmux` on your `PATH`,
