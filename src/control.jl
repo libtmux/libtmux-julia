@@ -630,6 +630,8 @@ function _open_control_lane(
     # check; the handshake below binds the connection to the captured daemon.
     release =
         _check_daemon(server, _client_environment(ENV); cancel, timeout=budget, started)
+    # Short-lived control attaches crash servers before 3.7, so decide first.
+    _require_release(release, CONTROL_MINIMUM_TMUX, :open_control, "control acquisition")
     selector =
         server.socket_path === nothing ? ["-L", something(server.socket_name)] :
         ["-S", server.socket_path]

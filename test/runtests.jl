@@ -67,6 +67,32 @@ elseif suite in (UNIT_FILES..., INTEGRATION_FILES...)
 else
     error("expected unit, integration, rejection, old-daemon, all, or a test file stem")
 end
+# Control acquisition needs tmux 3.7; below it the control suites are skipped
+# and features.jl tests the refusal itself.
+const CONTROL_FILES = (
+    "control",
+    "batches",
+    "observation",
+    "waits",
+    "observation_adversaries",
+    "restart",
+    "control_io",
+    "control_operations",
+    "control_topology",
+    "control_clients",
+    "control_formats",
+    "control_configuration",
+    "control_options",
+    "control_buffers",
+)
+control_supported = LibTmux._version_at_least(
+    last(split(readchomp(`$(get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) -V`))),
+    LibTmux.CONTROL_MINIMUM_TMUX,
+)
+if !control_supported && any(file -> file in CONTROL_FILES, files)
+    @warn "control suites skipped: the test tmux is below $(LibTmux.CONTROL_MINIMUM_TMUX)"
+    files = filter(file -> !(file in CONTROL_FILES), files)
+end
 if any(file -> file in INTEGRATION_FILES, files) && !("fixture_contract" in files)
     include("support/owned_tmux.jl")
     using .OwnedTmux

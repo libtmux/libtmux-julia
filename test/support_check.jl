@@ -331,7 +331,14 @@ end
     end
 end
 
-@testset "control attach reads identity without firing hooks" begin
+# Control acquisition needs tmux 3.7; below it features.jl tests the refusal.
+control_supported = LibTmux._version_at_least(
+    last(split(readchomp(`$(get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) -V`))),
+    LibTmux.CONTROL_MINIMUM_TMUX,
+)
+control_supported ||
+    @warn "control attach identity test skipped: the test tmux is below $(LibTmux.CONTROL_MINIMUM_TMUX)"
+control_supported && @testset "control attach reads identity without firing hooks" begin
     OwnedTmux.with_tmux() do fixture
         server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
         session = new_session(server; name="identity", command=["/bin/cat"])
