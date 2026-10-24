@@ -215,6 +215,11 @@ reads the cursor with [`observation_cursor`][observation_cursor].
 
 ## Reuse a control connection
 
+Control connections need tmux 3.7 or newer; older releases raise
+[`UnsupportedCapability`][UnsupportedCapability].
+[Compatibility][repo-docs-src-compatibility-md] lists every optional feature
+and its release.
+
 ### [`open_control`][open_control]: persistent clients for repeated commands
 
 A plain server starts a tmux client process for each command.
@@ -423,10 +428,10 @@ The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
   newer one.
 - **Linux, including WSL.** CI runs Linux only. macOS and psmux are excluded
   from CI; native Windows tmux is outside scope.
-- **Evidence.** The [capability manifest][repo-docs-capabilities-toml] and the
+- **Evidence.** The capability manifest is
+  [`capabilities.json`][repo-capabilities-json]; the
   [CI results](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
-  record what is verified. Benchmark baselines and an independent guide
-  walkthrough remain open.
+  record what is verified.
 
 ## Documentation
 
@@ -482,6 +487,7 @@ Core, MCP and workspace packages use the [MIT license][repo-license].
 [decode_text]: https://libtmux.org/en/julia/latest/reference/libtmux-decode_text/
 [capture_baseline]: https://libtmux.org/en/julia/latest/reference/libtmux-capture_baseline/
 [open_control]: https://libtmux.org/en/julia/latest/reference/libtmux-open_control/
+[UnsupportedCapability]: https://libtmux.org/en/julia/latest/reference/libtmux-unsupportedcapability/
 [filters]: https://libtmux.org/en/julia/latest/reference/libtmux-filters/
 [encode_where]: https://libtmux.org/en/julia/latest/reference/libtmux-encode_where/
 [write_where_json]: https://libtmux.org/en/julia/latest/reference/libtmux-write_where_json/
@@ -493,7 +499,7 @@ Core, MCP and workspace packages use the [MIT license][repo-license].
 [tool_list_panes]: https://libtmux.org/en/julia/latest/mcp/tools/list_panes/
 [tool_capture_pane]: https://libtmux.org/en/julia/latest/mcp/tools/capture_pane/
 [tool_send_keys]: https://libtmux.org/en/julia/latest/mcp/tools/send_keys/
-[repo-docs-capabilities-toml]: https://github.com/libtmux/libtmux-julia/blob/master/docs/capabilities.toml
+[repo-capabilities-json]: https://github.com/libtmux/libtmux-julia/blob/master/capabilities.json
 [repo-docs-criteria-wire-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/criteria-wire.md
 [repo-docs-generated-criteria-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/generated/criteria.md
 [repo-docs-projections-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/projections.md
