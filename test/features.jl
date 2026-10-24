@@ -309,6 +309,58 @@ end
     @test resolve("nonsense") === nothing
 end
 
+@testset "a nameless break-pane is refused on tmux 3.7 before any effect" begin
+    mktempdir(; prefix="ltj-feat-") do directory
+        OwnedTmux.with_tmux() do fixture
+            server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
+            session = new_session(server; name="breaking", command=["/bin/cat"])
+            captured = snapshot(server)
+            pane = only(panes(captured)).ref
+            link = WindowLinkRef(only(windowlinks(only(windows(captured)))))
+            for (release, refused) in
+                (("3.7", true), ("next-3.7", true), ("3.7a", false), ("3.6b", false))
+                script = release_client(directory, release; name="tmux-$release")
+                scripted = Server(socket_path=fixture.socket, tmux=script)
+                failure = try
+                    break_pane(scripted, pane, link, session; index=5)
+                catch error
+                    error
+                end
+                if refused
+                    @test failure isa UnsupportedCapability &&
+                          failure.operation === :break_pane
+                    @test isempty(dispatched(script))
+                else
+                    @test !(failure isa UnsupportedCapability)
+                end
+                named = try
+                    break_pane(scripted, pane, link, session; index=5, name="a.b")
+                catch error
+                    error
+                end
+                @test refused ==
+                      (named isa ArgumentError || named isa UnsupportedCapability)
+            end
+            release = release_of(server)
+            if LibTmux._unnamed_break_stops(release)
+                @test_throws UnsupportedCapability break_pane(
+                    server,
+                    pane,
+                    link,
+                    session;
+                    index=5,
+                )
+            else
+                moved = break_pane(server, pane, link, session; index=5, name="moved")
+                @test moved isa WindowRef
+            end
+            # The daemon is still serving after the refusal or the move.
+            @test run_command(server, "display-message", "-p", "alive").stdout ==
+                  codeunits("alive\n")
+        end
+    end
+end
+
 @testset "a raw layout string cannot stop tmux 3.3a" begin
     OwnedTmux.with_tmux() do fixture
         server = Server(socket_path=fixture.socket, tmux=fixture.tmux)

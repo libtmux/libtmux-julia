@@ -65,6 +65,27 @@ function _check_name(connection::ControlConnection, name, operation)
     version === nothing || _check_name_release(version, name, operation)
 end
 
+# `break-pane` on tmux 3.7 stops the server unless it names the new window, and
+# the name follows the same restriction as any other window name. Return the
+# release the check used, or `nothing` when it is unknown.
+function _check_break_pane_name(context, name)
+    version =
+        hasproperty(context, :connection) ? _control_release(context.connection) :
+        _checked_release(context)
+    version === nothing && return nothing
+    if name === nothing
+        _unnamed_break_stops(version) && throw(
+            UnsupportedCapability(
+                :break_pane,
+                "break-pane without a window name stops tmux 3.7; pass name or use another release",
+            ),
+        )
+    elseif occursin(r"[:.]", name)
+        _check_name_release(version, name, :break_pane)
+    end
+    version
+end
+
 # Raw command lines reach tmux unchanged, so the same requirements apply to
 # them as to the typed operations. A command is resolved the way tmux resolves
 # it: an exact alias, else an exact name, else a unique name prefix. Nested
