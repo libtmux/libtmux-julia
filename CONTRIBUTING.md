@@ -566,6 +566,19 @@ belong in the outer loop. Compiler caches do not replace correctness checks.
 Benchmark work is separate from merge readiness. Keep each run under ten
 minutes and a full sweep under one hour; reduce sizes when necessary.
 
+## Release acceptance
+
+Accept a final revision only after its affected correctness, package,
+example and documentation checks pass. Fresh consumer projects must install
+that source from the documented public GitHub commands and exercise the core,
+MCP and workspace flows. Immutable consumer exports do not prove that install.
+
+The shared website build and rendered output require their own verification;
+a passing native manual or API export does not establish them. Use the
+[CI result for the candidate commit](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
+and its public-install evidence. Benchmark completion and exhaustive profiling
+are separate work; excluded platforms are not acceptance gates.
+
 ## Review
 
 Keep each commit and pull request focused on one topic. Inspect the staged

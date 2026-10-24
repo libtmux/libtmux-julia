@@ -44,7 +44,7 @@ release. Ordinary subprocess operations stay available on 3.3a.
 | --- | --- | --- | --- |
 | Control acquisition: `open_control`, control batches, output streams, format subscriptions and the MCP waiting tools' control path | tmux 3.7 | Refused before any attach client starts; the MCP waiting tools poll the screen instead | Tested on every CI release |
 | Named-buffer deletion and renaming: `load_buffer`, `delete_buffer`, raw `delete-buffer -b` and `set-buffer -n` | tmux 3.4 | Refused before any buffer exists or changes | Tested on every CI release |
-| The clipboard query `refresh-client -l`, which stops a 3.3a server at once and stops a 3.4 to 3.6 server when the attached client leaves before its terminal answers | tmux 3.6a | Refused before dispatch | Reproduced on 3.3a to 3.6 |
+| The clipboard query `refresh-client -l`, which stops a 3.3a server with an attached client whose terminal does not answer, and a 3.4 to 3.6 server when that client leaves before its terminal answers | tmux 3.6a | Refused before dispatch | Reproduced on 3.3a to 3.6 |
 | `:` or `.` in session and window names | Not tmux 3.7 | Refused for that exact release before dispatch | Tested on 3.7 and its neighbours |
 | `break-pane` without a window name | Not tmux 3.7 | Refused for that exact release, which stops on it and ignores `-n`, so `break_pane` renames the window afterwards | Tested on 3.7 |
 | Mirrored layouts | tmux 3.5 | Refused before dispatch | Tested |
@@ -58,9 +58,41 @@ dispatch on every release, because 3.3a stops on an invalid one.
 The raw command paths meet the same requirements as the typed operations: a
 command line given to `run_command`, `run_batch` or `run_group` is resolved the
 way tmux resolves it, including aliases, unique prefixes and `;` lists, before
-it is sent. Command strings that tmux parses itself, such as the body of
-`if-shell`, `run-shell -C` and brace blocks, are not inspected, so do not nest
-a command that this library refuses.
+it is sent. Command strings that tmux parses itself are not inspected,
+so a refused command that is nested reaches tmux unchanged.
+
+### Nested commands
+
+The body of `if-shell`, `run-shell -C`, a `{ }` block and a key binding are
+parsed by tmux, not by this library. Only the first word of each command is
+read, after the line given to `run_command`, `run_batch` or `run_group` is
+split at `;`. These refused commands behave as follows when nested:
+
+| Command | Releases | Failure class |
+| --- | --- | --- |
+| `break-pane` without `-n` | exact tmux 3.7 | the server exits |
+| `select-layout` with an invalid string that has no checksum | 3.3 and 3.3a | the server exits |
+| `refresh-client -l` | below 3.6a | the server exits: on 3.3a with an attached client whose terminal does not answer, and on 3.4 to 3.6 when that client leaves before its terminal answers |
+| `delete-buffer -b NAME` for a missing name | below 3.4 | the newest buffer is deleted instead |
+| `set-buffer -n` | below 3.4 | the newest buffer is renamed when `-b` names no buffer |
+
+For example, on exact 3.7 `run_command(server, "if-shell", "-F", "1",
+"break-pane -d")` raises `CommandError` (`server exited unexpectedly`) and the daemon is gone afterwards, while a direct
+`break-pane -d` is refused with `UnsupportedCapability`. Tmux 3.7a fixed the
+crash ([CHANGES](https://github.com/tmux/tmux/blob/3.7a/CHANGES#L3)); 3.7 tests
+the name the wrong way round in
+[`cmd-break-pane.c`](https://github.com/tmux/tmux/blob/3.7/cmd-break-pane.c#L117-L124).
+The default `prefix !` binding also runs a nameless `break-pane`
+([`key-bindings.c`](https://github.com/tmux/tmux/blob/3.7/key-bindings.c#L358)),
+which ends the server on 3.7; rebind it with `-n` or use 3.7a. Do not rely on
+the library to refuse any of these inside a nested string or a key binding.
+On exact 3.7, name every nested or key-bound `break-pane` with `-n`, or
+upgrade to 3.7a.
+
+Tmux 3.6a fixed the clipboard-query crash by deleting the clipboard timer when
+the tty stops (the `event_del` line in
+[CHANGES](https://github.com/tmux/tmux/blob/3.6a/CHANGES#L21), `tty_stop_tty`
+in `tty.c`).
 
 `paste_bytes`, `paste_text` and workspace commands that paste work on 3.3a.
 Before 3.4 the paste itself deletes its staging buffer (`paste-buffer -d`),
@@ -87,25 +119,6 @@ Native Julia regex works in ordinary local predicates.
 MCP CLI startup and wait setup still acquire the full graph within an 8 MiB
 reply bound. Larger replies are unsupported at those stages. A discovery scope
 narrows a listing; it cannot bypass startup or wait setup.
-
-## Verification
-
-Whole-command times are diagnostic: aim for five seconds for focused checks,
-thirty seconds for unit/quality checks and five minutes for the complete outer
-checks. A slower correct result remains a pass. The runner stops test work at
-fifteen minutes, retires owned processes and preserves partial evidence.
-Dependency acquisition and precompilation are measured separately.
-
-Accept a final revision only after its affected correctness, package,
-example and documentation checks pass. Fresh consumer projects must install
-that source from the documented public GitHub commands and exercise the core,
-MCP and workspace flows. Immutable consumer exports do not prove that install.
-
-The shared website build and rendered output require their own verification;
-a passing native manual or API export does not establish them. Use the
-[CI result for the candidate commit](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
-and its public-install evidence. Benchmark completion and exhaustive profiling
-are separate work; excluded platforms are not acceptance gates.
 
 ```@raw html
 <p>See <a href="../source/CONTRIBUTING.md.html">the contributor guide</a> and

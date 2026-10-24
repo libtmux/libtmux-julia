@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+#### Nested command limit documented
+
+The compatibility page lists the refused commands that tmux does not read
+when they are nested in `if-shell`, `run-shell -C` or a key binding, with
+their releases and failure class. On exact tmux 3.7, name every nested or
+key-bound `break-pane` with `-n`, or upgrade to 3.7a. (#47)
+
 #### Install docs name the release tag
 
 The installation commands in the README, the installation guide and the MCP
