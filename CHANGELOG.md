@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+#### Install docs name the release tag
+
+The installation commands in the README, the installation guide and the MCP
+and workspace READMEs use the `v0.1.1-alpha.1` tag, and the README names
+`capabilities.json` as the capability manifest. (#44)
+
 ## 0.1.1-alpha.1 - 2026-10-24
 
 #### Capabilities live in one registry and manifest
