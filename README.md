@@ -468,6 +468,13 @@ The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
 | [Benchmarks](https://github.com/libtmux/libtmux-julia/blob/master/benchmark/README.md) | What each execution mode costs |
 | [Changelog](https://github.com/libtmux/libtmux-julia/blob/master/CHANGELOG.md) | What each release changed |
 
+## AI policy
+
+Use these packages with AI tools as you like. When contributing, check what you
+submit and wait for a maintainer's invitation before preparing a pull request.
+See the [AI policy](https://libtmux.org/en/meta/ai-policy/), also kept as
+[AI_POLICY.md](https://github.com/libtmux/.github/blob/HEAD/AI_POLICY.md).
+
 ## Attribution
 
 Developed out of curiosity and a desire to learn and master Julia by the
