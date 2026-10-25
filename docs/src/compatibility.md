@@ -44,7 +44,7 @@ release. Ordinary subprocess operations stay available on 3.3a.
 | --- | --- | --- | --- |
 | Control acquisition: `open_control`, control batches, output streams, format subscriptions and the MCP waiting tools' control path | tmux 3.7 | Refused before any attach client starts; the MCP waiting tools poll the screen instead | Tested on every CI release |
 | Named-buffer deletion and renaming: `load_buffer`, `delete_buffer`, raw `delete-buffer -b` and `set-buffer -n` | tmux 3.4 | Refused before any buffer exists or changes | Tested on every CI release |
-| The clipboard query `refresh-client -l`, which stops a 3.3a server with an attached client whose terminal does not answer, and a 3.4 to 3.6 server when that client leaves before its terminal answers | tmux 3.6a | Refused before dispatch | Reproduced on 3.3a to 3.6 |
+| The clipboard query `refresh-client -l`, which stops a 3.3a server at once with an attached client whose terminal has the `Ms` clipboard capability, such as `xterm-256color` or `tmux-256color`, and a 3.4 to 3.6 server when that client leaves before its terminal answers | tmux 3.6a | Refused before dispatch | Reproduced on 3.3a to 3.6 |
 | `:` or `.` in session and window names | Not tmux 3.7 | Refused for that exact release before dispatch | Tested on 3.7 and its neighbours |
 | `break-pane` without a window name | Not tmux 3.7 | Refused for that exact release, which stops on it and ignores `-n`, so `break_pane` renames the window afterwards | Tested on 3.7 |
 | Mirrored layouts | tmux 3.5 | Refused before dispatch | Tested |
@@ -72,7 +72,7 @@ split at `;`. These refused commands behave as follows when nested:
 | --- | --- | --- |
 | `break-pane` without `-n` | exact tmux 3.7 | the server exits |
 | `select-layout` with an invalid string that has no checksum | 3.3 and 3.3a | the server exits |
-| `refresh-client -l` | below 3.6a | the server exits: on 3.3a with an attached client whose terminal does not answer, and on 3.4 to 3.6 when that client leaves before its terminal answers |
+| `refresh-client -l` | below 3.6a | the server exits: at once on 3.3a with an attached client whose terminal has the `Ms` clipboard capability, such as `xterm-256color` or `tmux-256color`, and on 3.4 to 3.6 when that client leaves before its terminal answers |
 | `delete-buffer -b NAME` for a missing name | below 3.4 | the newest buffer is deleted instead |
 | `set-buffer -n` | below 3.4 | the newest buffer is renamed when `-b` names no buffer |
 
