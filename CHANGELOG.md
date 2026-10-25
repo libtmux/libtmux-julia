@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.1-alpha.2 - 2026-10-25
+
 #### Wait for pane text below tmux 3.7
 
 `wait_for_text(server, pane, text)` polls `capture-pane` on every supported tmux

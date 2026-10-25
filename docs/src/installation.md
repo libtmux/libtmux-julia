@@ -1,6 +1,6 @@
 # Install from source
 
-The packages are unregistered. Install the `v0.1.1-alpha.1` tag
+The packages are unregistered. Install the `v0.1.1-alpha.2` tag
 in the Julia project that will use them. `Manifest.toml` records the
 requested revision and package tree hashes. The MCP and workspace companions
 are experimental; their guides record supported behavior and limitations.
@@ -15,7 +15,7 @@ $ julia \
     -e 'using Pkg
         Pkg.activate(".")
         repo = "https://github.com/libtmux/libtmux-julia.git"
-        revision = "v0.1.1-alpha.1"
+        revision = "v0.1.1-alpha.2"
         Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
@@ -34,7 +34,7 @@ $ julia \
     -e 'using Pkg
         Pkg.activate(".")
         repo = "https://github.com/libtmux/libtmux-julia.git"
-        revision = "v0.1.1-alpha.1"
+        revision = "v0.1.1-alpha.2"
         Pkg.add([
             Pkg.PackageSpec(url=repo, rev=revision),
             Pkg.PackageSpec(
@@ -69,7 +69,7 @@ $ julia \
     -e 'using Pkg
         Pkg.activate(".")
         repo = "https://github.com/libtmux/libtmux-julia.git"
-        revision = "v0.1.1-alpha.1"
+        revision = "v0.1.1-alpha.2"
         Pkg.add([
             Pkg.PackageSpec(url=repo, rev=revision),
             Pkg.PackageSpec(
@@ -94,6 +94,6 @@ $ bin/libtmux-workspace --help
 [Load a workspace](workspaces.md) describes validation, planning, loading and
 freezing.
 
-Version `0.1.1-alpha.1` is an unregistered source release. The packages are
+Version `0.1.1-alpha.2` is an unregistered source release. The packages are
 not in the General registry; registration needs a plain version and a separate
 maintainer action.

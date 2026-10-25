@@ -1,6 +1,6 @@
 name = "LibTmuxMCP"
 uuid = "6ec2004f-18ba-4da6-9e55-6cdc607d109e"
-version = "0.1.1-alpha.1"
+version = "0.1.1-alpha.2"
 license = "MIT"
 
 [deps]
