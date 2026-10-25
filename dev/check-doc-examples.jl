@@ -264,6 +264,13 @@ const DOC_SNIPPETS = Dict(
         source="",
         note="Launcher entry point returns exit codes without tmux",
     ),
+    ("src/screen_wait.jl", 1) => (
+        kind=:illustrative,
+        gate=:none,
+        fingerprint="5ace613dc8942086cceab8005876d96bb5737f2f4f6bab279598a25be696a8b2",
+        source="",
+        note="Screen wait after keys sent inside a watch block",
+    ),
     ("src/formats.jl", 1) => (
         kind=:executable,
         gate=:context,

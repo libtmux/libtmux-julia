@@ -38,6 +38,7 @@ and program links. It does not establish runtime correctness.
 | [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (7) | executable | snippet doctests | Library entry point returns exit codes without a launcher |
 | [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (8) | executable | snippet doctests | Configuration error code and document path |
 | [src/formats.jl](../src/formats.jl) (1) | executable | owned-context runner | Owned server and exact pane reference |
+| [src/screen_wait.jl](../src/screen_wait.jl) (1) | illustrative | exact snippet not executed | Screen wait after keys sent inside a watch block |
 
 ## Executable programs
 

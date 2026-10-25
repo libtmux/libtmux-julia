@@ -292,6 +292,9 @@ baseline, bounded-tail and total-deadline policy. The pattern must fit the
 tail limit. Matching can include terminal echo or concurrent writers; it is
 literal-text evidence, not process success.
 
+To wait for text on the visible screen instead, on any supported tmux release
+and without a control stream, use `wait_for_text(server, pane, text)`.
+
 Every decoded byte is searched before tail retention. A match in the middle of
 a large chunk remains visible: returned text ends at that match, and later
 bytes in the same event count as received but omitted from the result.
