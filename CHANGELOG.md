@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+#### Wait for pane text below tmux 3.7
+
+`wait_for_text(server, pane, text)` polls `capture-pane` on every supported tmux
+release, joins wrapped rows, and raises `ScreenWaitEnded` carrying the screen
+text read so far when the pane or server ends first. `watch_screen` takes the
+entry read first and passes a `ScreenWatch` handle to its block, and the wait
+returns a `ScreenWaitResult`. A pane from another server or an earlier
+generation of the same one raises `CrossServerReference` or `StaleReference`.
+(#48)
+
 #### Nested command limit documented
 
 The compatibility page lists the refused commands that tmux does not read
