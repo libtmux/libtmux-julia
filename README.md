@@ -213,6 +213,30 @@ The terminal echoes every key, so the stream carries the text you typed.
 Runnable: [`examples/output_stream.jl`][repo-examples-output_stream-jl]. It also
 reads the cursor with [`observation_cursor`][observation_cursor].
 
+### [`wait_for_text`][wait_for_text]: wait for text on the screen
+
+[`wait_for_text`][wait_for_text] polls the visible screen on every supported
+tmux release, joins wrapped rows and needs no control connection.
+[`watch_screen`][watch_screen] takes the entry read first, so keys sent inside
+its block are not counted as already on the screen:
+
+```julia
+using LibTmux
+
+with_server() do server
+    new_session(server; name="shell")
+    pane = only(panes(snapshot(server))).ref
+    watch_screen(server, pane) do screen
+        send_keys(server, pane, "printf 'ready-%s\\n' now", "Enter")
+        wait_for_text(screen, "ready-now").text
+    end
+end
+```
+
+A pane or server that ends first raises [`ScreenWaitEnded`][ScreenWaitEnded]
+with the last screen read. Text that scrolled off is not seen, and typed echo
+counts, so match on what a command prints.
+
 ## Reuse a control connection
 
 Control connections need tmux 3.7 or newer; older releases raise
@@ -487,6 +511,9 @@ Core, MCP and workspace packages use the [MIT license][repo-license].
 [decode_text]: https://libtmux.org/en/julia/latest/reference/libtmux-decode_text/
 [capture_baseline]: https://libtmux.org/en/julia/latest/reference/libtmux-capture_baseline/
 [open_control]: https://libtmux.org/en/julia/latest/reference/libtmux-open_control/
+[wait_for_text]: https://libtmux.org/en/julia/latest/reference/libtmux-wait_for_text/
+[watch_screen]: https://libtmux.org/en/julia/latest/reference/libtmux-watch_screen/
+[ScreenWaitEnded]: https://libtmux.org/en/julia/latest/reference/libtmux-screenwaitended/
 [UnsupportedCapability]: https://libtmux.org/en/julia/latest/reference/libtmux-unsupportedcapability/
 [filters]: https://libtmux.org/en/julia/latest/reference/libtmux-filters/
 [encode_where]: https://libtmux.org/en/julia/latest/reference/libtmux-encode_where/
