@@ -40,6 +40,7 @@ export OutputWaitEnded
 export ObservationCursor, ObservationStream, notifications, observe_output, subscribe_format
 export observation_cursor, ObservationBaseline, capture_baseline
 export OutputWaitResult, wait_for, wait_for_text, wait_for_quiet
+export ScreenWaitResult, ScreenWaitEnded, ScreenWatch, watch_screen
 export format_value
 export Criterion,
     Filters, PaneWhere, WindowWhere, SessionWhere, ClientWhere, WindowLinkWhere
@@ -70,6 +71,7 @@ include("batches.jl")
 include("observation.jl")
 include("control_io.jl")
 include("waits.jl")
+include("screen_wait.jl")
 include("control_operations.jl")
 include("control_topology.jl")
 include("control_clients.jl")

@@ -1,8 +1,9 @@
 # Observations and waits
 
 Observe control events and pane output, then wait for text or a quiet period
-within a shared deadline. The [output observation guide](observations.md)
-explains stream ownership, cursors, decoding, and completion limits.
+within a shared deadline. A screen wait polls the visible screen instead. The
+[output observation guide](observations.md) explains stream ownership, cursors,
+decoding, and completion limits.
 
 ## Output streams and control events
 
@@ -17,7 +18,7 @@ Order = [:module, :type, :function]
 
 ```@autodocs
 Modules = [LibTmux]
-Pages = ["src/waits.jl"]
+Pages = ["src/waits.jl", "src/screen_wait.jl"]
 Private = false
 Order = [:module, :type, :function]
 ```

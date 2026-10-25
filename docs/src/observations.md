@@ -85,6 +85,60 @@ from terminal echo or another writer.
 Quiet acceptance checks the queue, stream health and last-consumed cursor
 together under the connection lock; this boundary is local to the client.
 
+## Wait for text on the screen
+
+[`wait_for_text`](@ref)`(server, pane, text)` polls `capture-pane` on every
+supported tmux release and opens no control client. It reads the visible screen
+only, joins wrapped rows, and returns a [`ScreenWaitResult`](@ref). Use it
+below tmux 3.7, or wherever a screen is the evidence you want; the stream
+method above reads raw output and needs a control connection. Every read starts
+its own tmux client process, so an open control connection never carries one.
+
+```julia
+using LibTmux
+
+with_server() do server
+    new_session(server; name="shell")
+    pane = only(panes(snapshot(server))).ref
+    watch_screen(server, pane) do screen
+        send_keys(server, pane, "printf 'ready-%s\\n' now", "Enter")
+        wait_for_text(screen, "ready-now")
+    end
+end
+```
+
+[`watch_screen`](@ref) takes the entry read when it opens, so keys sent inside
+the block cannot be counted as already on the screen. The server form is
+`watch_screen` plus one wait. Its `timeout` is one deadline from the entry read.
+
+By default only text that appears after the entry read counts. The entry read
+sets a bar equal to the number of occurrences on the screen, and a later read
+matches when its count exceeds the bar. The bar is never lowered, so text that
+scrolls off or is repainted cannot invent a match. `baseline=true` lets text
+already on the entry screen match at once, with `matched_at_entry` set and
+`source == :baseline`.
+
+Each read is one tmux invocation: `capture-pane -p -J` followed by a hook-free
+`run-shell -C` marker that reports the pane id, whether the pane is dead,
+whether the pane shows the alternate screen and which server generation
+answered. A pane from another server, or from an earlier generation of this
+one, raises `CrossServerReference` or `StaleReference` instead of reading
+another pane. The capture runs the owner's `after-capture-pane` hook, and a
+hook that prints adds its output to the captured text. A read on the alternate
+screen, where a full-screen program such as `less` or `vim` is up, is not
+compared. A pane that is dead, a pane tmux no longer knows and a server that is
+gone raise [`ScreenWaitEnded`](@ref) with the last screen read; cancellation
+raises `RequestCancelled` and an expired deadline raises `DeadlineExceeded`, as
+for every other operation. Every wait in a [`watch_screen`](@ref) block counts
+against the entry read taken when the block opened. When `max_bytes` cuts the
+screen, the match can lie in the dropped head of `text`.
+
+The limits follow from reading a screen. Text that scrolled off is not seen. A
+repaint shows only its final state, where the control stream shows every state.
+If an old occurrence scrolls off and a new one arrives between two reads, the
+count does not rise. Typed echo that contains the text counts as an occurrence,
+so match on what a command prints, not on the command.
+
 ## Observe an authored command's exit status
 
 This program registers output before submitting a command. Its authored shell
