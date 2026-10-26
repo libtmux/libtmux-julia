@@ -11,6 +11,8 @@
 
 # LibTmuxMCP
 
+[![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/julia/latest/mcp/)
+
 Serve one tmux server to MCP clients over stdio: list panes, capture a pane and
 send keys.
 

@@ -11,6 +11,8 @@
 
 # LibTmux.jl
 
+[![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/julia/)
+
 Create tmux sessions, split panes, send input and capture terminal output from
 Julia.
 
