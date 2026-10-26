@@ -237,7 +237,7 @@ calling workflow's tested commit; its provenance stays separate from the
 selected source revision.
 
 A `master` push publishes `/en/julia/latest/`. A `v*` release tag
-publishes its version plus `next` for prereleases or `stable` for releases.
+publishes its version, which is the default, plus `next` for a prerelease.
 Same-repository pull requests publish `/en/julia/pr-N/` from the tested
 merge commit. Before publishing, the workflow checks that the PR is still
 open in this repository and its current head and merge match the tested
