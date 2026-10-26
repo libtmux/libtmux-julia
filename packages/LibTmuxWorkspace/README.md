@@ -11,6 +11,8 @@
 
 # LibTmuxWorkspace
 
+[![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/julia/latest/workspace/)
+
 Load tmuxp-style YAML or JSON workspaces into tmux, and freeze a running
 session back into a file.
 
