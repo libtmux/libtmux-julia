@@ -4,6 +4,9 @@ Run these programs from an environment containing LibTmux and a local tmux
 binary. Each creates a private server and verifies cleanup. They never use
 the default server. `LIBTMUX_TEST_TMUX` can select a specific tmux executable.
 
+The control cancellation, output stream and command completion programs need
+tmux 3.7 or newer. The other programs use the core's tmux 3.3a floor.
+
 | Program | Demonstrates |
 | --- | --- |
 | [owned_capture.jl](owned_capture.jl) | Owned setup, borrowed named targeting and ambiguity refusal |
