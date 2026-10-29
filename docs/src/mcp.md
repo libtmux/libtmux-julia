@@ -29,7 +29,7 @@ In your MCP client, select this launcher and provide `--socket PATH` or
 `--socket-name NAME` for an existing server. Paths must resolve from the
 client's working directory. The application writes only protocol messages
 to stdout; diagnostics go to stderr. It owns its streams and any sessions
-it creates. It leaves the borrowed daemon and existing sessions running.
+it creates. Shutdown tears down only application-owned sessions.
 
 Call [`list_panes`][list_panes], then pass a returned `target` object to [`capture_pane`][capture_pane] or
 [`send_keys`][send_keys]. Targets carry both a pane ID and observed server generation.
@@ -57,8 +57,10 @@ are reused. Calls never replay mutations automatically.
 
 The default catalog contains those three tools. Repeat `--tool` to choose
 an explicit catalog. [`wait_for_text`][wait_for_text] waits for bounded literal text;
-[`send_keys_and_wait`][send_keys_and_wait] subscribes before sending input and accepts only future
-output. Matching text does not establish process completion or exit status.
+[`send_keys_and_wait`][send_keys_and_wait] subscribes before sending input on the
+control path. Below tmux 3.7 it compares screen occurrence counts before and
+after sending; that path cannot distinguish new output from old. Matching text
+does not establish process completion or exit status.
 Both tools accept a positive `timeoutSeconds` no greater than the application
 timeout. That total budget includes discovery, control attachment and capture;
 batch items also respect the whole batch's remaining deadline. Core and MCP

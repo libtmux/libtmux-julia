@@ -93,9 +93,9 @@ Enable `wait_for_text` or `send_keys_and_wait` explicitly. Set `timeoutSeconds`
 to shorten the total call budget, including setup and capture. The value must
 not exceed the application's configured ceiling. A matched literal is text
 evidence; it does not establish process success. `send_keys_and_wait` registers
-output before sending and requires fresh output; where tmux has no control
-support for that, it requires more occurrences than the screen held before
-the keys.
+output before sending on the control path. Below tmux 3.7 it requires more
+occurrences than the screen held before the keys; that path cannot distinguish
+new output from old.
 
 Request progress, wait for the `waiting` notification, and use
 `notifications/cancelled` with the active request ID to cancel. Other tool and
