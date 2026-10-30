@@ -19,8 +19,8 @@ send keys.
 </div>
 
 The package uses public [LibTmux][libtmux] APIs and a bounded adapter around
-ModelContextProtocol.jl. The server runs on a tmux server that you name, and
-leaves it running.
+ModelContextProtocol.jl. It borrows the tmux server you name. Shutdown tears
+down only application-owned sessions.
 
 **Contents** — [Quick start](#quick-start) ·
 [Point a client at a server](#point-a-client-at-a-server) ·
@@ -117,8 +117,8 @@ tool name below links to its page with the full input and output contract.
 | [`list_panes`][tool_list_panes] | Fresh bounded graph listing with context and pagination |
 | [`capture_pane`][tool_capture_pane] | Bounded UTF-8 screen text with truncation metadata |
 | [`send_keys`][tool_send_keys] | Explicit key tokens or literal text; no implicit Enter |
-| [`wait_for_text`][tool_wait_for_text] | Match a bounded literal in a separate baseline or future output |
-| [`send_keys_and_wait`][tool_send_keys_and_wait] | Register output before sending keys, then match future text |
+| [`wait_for_text`][tool_wait_for_text] | Match a bounded literal in a baseline, output stream or polled screen |
+| [`send_keys_and_wait`][tool_send_keys_and_wait] | Send keys and wait with the path-specific freshness rules below |
 | [`paste_text`][tool_paste_text] | Paste through an owned temporary buffer |
 | [`resize_pane`][tool_resize_pane] | Request dimensions subject to tmux layout constraints |
 | [`kill_pane`][tool_kill_pane] | Destroy a pane and possibly its empty window/session |
@@ -197,9 +197,9 @@ pastes longer text through an owned buffer.
 ### [`wait_for_text`][tool_wait_for_text]: wait for output
 
 [`wait_for_text`][tool_wait_for_text] waits for a literal string.
-[`send_keys_and_wait`][tool_send_keys_and_wait] registers for output before it
-sends keys, so a match on text already on screen cannot satisfy it. Neither
-reports process exit.
+On the control path, [`send_keys_and_wait`][tool_send_keys_and_wait] registers
+for output before sending keys and matches only subsequent output. Neither
+tool reports process exit.
 
 On tmux 3.7 and newer both observe pane output through a control client. On
 older releases they poll the screen, joining wrapped rows, and report
@@ -312,8 +312,7 @@ julia> main(["--bogus"]; output=IOBuffer(), err=IOBuffer())
 
 ## What it leaves out
 
-- **Your tmux server.** The application neither owns nor destroys the daemon
-  or the sessions it found. EOF removes only the sessions that
+- **Your tmux server.** Shutdown teardown targets only the sessions that
   [`create_session`][tool_create_session] made.
 - **Trust in pane text.** Terminal content is returned as data, and text in a
   pane never grants permission to invoke a tool.

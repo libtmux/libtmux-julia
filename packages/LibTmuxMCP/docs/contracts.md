@@ -45,9 +45,8 @@ then runs them in order.
 
 - Terminal content is returned as data. Text in a pane does not grant permission
   to invoke another tool.
-- The application neither owns nor destroys the borrowed daemon or pre-existing
-  sessions.
-- EOF cancels and joins request work, then removes application-owned sessions.
+- The application borrows its configured tmux server.
+- EOF cancels and joins request work, then removes only application-owned sessions.
 - Cancellation does not undo shell effects or previously delivered keys.
 
 ## Waiting
@@ -55,8 +54,8 @@ then runs them in order.
 - Wait tools are opt-in.
 - They return literal-text evidence. They do not report process exit or shell
   success.
-- A prior screen match cannot satisfy
-  [`send_keys_and_wait`][tool_send_keys_and_wait].
+- On the control path, [`send_keys_and_wait`][tool_send_keys_and_wait] registers
+  output before sending keys and matches only subsequent output.
 - An independent baseline is never concatenated with output across its reset
   boundary.
 - Both tools share the application's deadline and byte bounds, emit bounded
@@ -64,6 +63,8 @@ then runs them in order.
 - Unrelated requests remain serviceable during a wait.
 - Below tmux 3.7, which has no control support for this, they poll the screen
   with wrapped rows joined and report `source: "screen"`.
+- The polled send-and-wait path requires more occurrences than the entry
+  screen held; it cannot distinguish new output from old.
 - A pane or server that ends during a wait fails the call as `pane_died` with
   the output seen so far, on both paths.
 

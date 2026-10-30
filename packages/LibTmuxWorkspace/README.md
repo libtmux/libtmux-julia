@@ -91,7 +91,9 @@ $ bin/libtmux-workspace validate workspace.yaml
 valid
 ```
 
-`load` and `freeze` need a server you name. Start one on its own socket:
+`load` and `freeze` need a server you name. For this demonstration, choose an
+unused socket name. The commands use `work`; use another name throughout if
+a daemon already has that name. Start the example's server:
 
 ```console
 $ tmux -L work new-session -d -s scratch
@@ -128,7 +130,7 @@ Freeze the session back into a workspace file:
 $ bin/libtmux-workspace freeze demo --socket-name work > frozen.yaml
 ```
 
-Stop the server you started:
+Stop only the server created for this demonstration:
 
 ```console
 $ tmux -L work kill-server
