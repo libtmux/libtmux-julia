@@ -6,24 +6,93 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: >-
+          edges runs the oldest and newest tmux, full runs the whole table and
+          the refusal lanes, custom runs the refs in tmux-ref. A v* tag runs
+          the full scope.
+        type: choice
+        options: [edges, full, custom]
+        default: edges
+      tmux-ref:
+        description: >-
+          With scope custom, comma-separated tmux versions, tags, branches or
+          40-hex commit SHAs from github.com/tmux/tmux, such as 3.6c,master.
+        type: string
+        default: ''
+      julia:
+        description: >-
+          The Julia version for every cell, such as 1.12.4 or lts. Empty uses
+          1.13.1.
+        type: string
+        default: ''
+      threads:
+        description: With scope custom, 1 or 4 threads. Empty uses 1.
+        type: string
+        default: ''
+      suite:
+        description: With scope custom, runtime, delivery or both. Empty uses runtime.
+        type: string
+        default: ''
+      tmate:
+        description: >-
+          Open a tmate SSH session for the person who started the run, before
+          the checks or only after a failure. It needs scope custom with one
+          tmux-ref and the default suite, so that exactly one job gets it.
+        type: choice
+        # Quoted, because YAML 1.1 reads a bare off as false, which GitHub then
+        # offers as the only allowed value and passes to the plan as 'false'.
+        options: ['off', before-tests, on-failure]
+        default: 'off'
 
 permissions:
   contents: read
 
 concurrency:
-  group: julia-${{ github.workflow }}-${{ github.ref }}
+  # A dispatch is a request for that run, so another dispatch on the same ref
+  # does not cancel it and it does not cancel the ref's push run.
+  group: julia-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:
+  # What a run covers is decided here, from the table in dev/plan_matrix.py and
+  # the event, so no job below lists a tmux version. A push and a pull request
+  # test the oldest and newest release; a v* tag, and a dispatch that asks, test
+  # the whole table. A bad input fails here, before any runner builds anything.
   matrix:
     runs-on: ubuntu-24.04
     outputs:
-      cells: ${{ steps.cells.outputs.cells }}
-      rejected: ${{ steps.rejected.outputs.cells }}
+      cells: ${{ steps.plan.outputs.cells }}
+      rejected: ${{ steps.plan.outputs.rejected }}
+      run_rejected: ${{ steps.plan.outputs.run_rejected }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - id: plan
+        name: Plan the run
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          SCOPE: ${{ inputs.scope }}
+          TMUX_REF: ${{ inputs.tmux-ref }}
+          JULIA_VERSION: ${{ inputs.julia }}
+          THREADS: ${{ inputs.threads }}
+          SUITE: ${{ inputs.suite }}
+          TMATE: ${{ inputs.tmate }}
+        run: >-
+          python3 dev/plan_matrix.py plan
+          --event "$EVENT"
+          --ref "$REF"
+          --scope "$SCOPE"
+          --tmux-ref "$TMUX_REF"
+          --julia "$JULIA_VERSION"
+          --threads "$THREADS"
+          --suite "$SUITE"
+          --tmate "$TMATE"
+          --github-output "$GITHUB_OUTPUT"
+          --summary "$GITHUB_STEP_SUMMARY"
       - name: Prepare Python quality tools
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
@@ -62,15 +131,14 @@ jobs:
           --ref "$RELEASE_REF"
           --repository "$RELEASE_REPOSITORY"
           --output "$RUNNER_TEMP/libtmux-julia-release-preflight.toml"
-      - id: cells
-        run: echo "cells=$(python3 dev/check-matrix.py matrix --split)" >> "$GITHUB_OUTPUT"
-      - id: rejected
-        run: echo "cells=$(python3 dev/check-matrix.py matrix --rejection)" >> "$GITHUB_OUTPUT"
       - name: Check matrix ownership and result states
         run: python3 dev/check-matrix.py self-test
+      - name: Check the matrix plan and its deliberate breaks
+        run: python3 dev/plan_matrix.py self-test
 
   reject:
     needs: matrix
+    if: needs.matrix.outputs.run_rejected == 'true'
     name: ${{ matrix.job_label }}
     runs-on: ubuntu-24.04
     strategy:
@@ -134,7 +202,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.matrix.outputs.cells) }}
-    timeout-minutes: 20
+    # The job that holds a debugging session gets the time to use it.
+    timeout-minutes: ${{ matrix.tmate == 'off' && 20 || 50 }}
     env:
       TMPDIR: /tmp
       JULIA_TEST_VERBOSE: 'true'
@@ -157,7 +226,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libevent-dev libncurses-dev bison
       - name: Prepare pinned tmux release
-        run: python3 dev/check-matrix.py build-tmux "$MATRIX_STAGE" '${{ matrix.tmux }}'
+        if: matrix.kind == 'release'
+        env:
+          TMUX_VERSION: ${{ matrix.tmux }}
+        run: |
+          python3 dev/check-matrix.py build-tmux "$MATRIX_STAGE" "$TMUX_VERSION"
+          echo "TMUX_BINARY=$MATRIX_STAGE/tmux/$TMUX_VERSION/bin/tmux" >> "$GITHUB_ENV"
+      # A tag, branch or commit outside the table is built from source at the
+      # commit it names. The commit is resolved first, and the build is kept
+      # under it, never under the name.
+      - name: Resolve the tmux ref
+        id: resolve
+        if: matrix.kind == 'ref'
+        env:
+          TMUX_REF: ${{ matrix.tmux }}
+        run: python3 dev/check-matrix.py resolve-tmux "$TMUX_REF" | tee -a "$GITHUB_OUTPUT"
+      - name: Prepare tmux from the ref
+        if: matrix.kind == 'ref'
+        env:
+          TMUX_COMMIT: ${{ steps.resolve.outputs.commit }}
+        run: |
+          python3 dev/check-matrix.py build-tmux-ref "$MATRIX_STAGE" "$TMUX_COMMIT"
+          echo "TMUX_BINARY=$MATRIX_STAGE/tmux/ref-$TMUX_COMMIT/bin/tmux" >> "$GITHUB_ENV"
       - name: Cache isolated Julia tool depot
         uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
         with:
@@ -173,18 +263,39 @@ jobs:
           python3 dev/check-matrix.py prepare "$MATRIX_STAGE" \
             --threads '${{ matrix.threads }}' \
             2>&1 | tee "$MATRIX_STAGE/logs/preparation.log"
+      # A debugging session is for a dispatch, and the plan gives it to exactly
+      # one job. It is limited to the person who started the run, who needs an
+      # SSH key on their GitHub profile, and it is closed after the step's
+      # limit. The work clock restarts after it, so the checks keep their time.
+      - name: Debug session before the checks
+        if: github.event_name == 'workflow_dispatch' && matrix.tmate == 'before-tests'
+        uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3.24
+        timeout-minutes: 30
+        continue-on-error: true
+        with:
+          limit-access-to-actor: true
+      - name: Restart the work clock after the session
+        if: matrix.tmate == 'before-tests'
+        run: echo "MATRIX_JOB_DEADLINE=$(( $(date +%s) + 1200 ))" >> "$GITHUB_ENV"
       - name: Check prepared cell offline
+        env:
+          THREADS: ${{ matrix.threads }}
+          SUITE: ${{ matrix.suite }}
+          EXPECTED_JULIA: ${{ matrix.expected_julia }}
+          EXPECTED_TMUX: ${{ matrix.expected_tmux }}
+          EXPECTED_OS: ${{ matrix.os }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
         run: >-
           python3 dev/check-matrix.py run "$MATRIX_STAGE"
-          --tmux "$MATRIX_STAGE/tmux/${{ matrix.tmux }}/bin/tmux"
-          --threads '${{ matrix.threads }}'
-          --suite '${{ matrix.suite }}'
-          --expected-julia '${{ matrix.julia }}'
-          --expected-tmux '${{ matrix.tmux }}'
-          --expected-os '${{ matrix.os }}'
-          --expected-arch '${{ matrix.arch }}'
+          --tmux "$TMUX_BINARY"
+          --threads "$THREADS"
+          --suite "$SUITE"
+          --expected-julia "$EXPECTED_JULIA"
+          --expected-tmux "$EXPECTED_TMUX"
+          --expected-os "$EXPECTED_OS"
+          --expected-arch "$EXPECTED_ARCH"
       - name: Preserve native documentation artifact
-        if: matrix.os == 'Linux' && matrix.tmux == '3.7c' && matrix.threads == 1 && (matrix.suite == 'all' || matrix.suite == 'delivery')
+        if: matrix.docs_artifact == 'true' && matrix.suite == 'delivery'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: julia-docs-api
@@ -204,6 +315,31 @@ jobs:
           if-no-files-found: warn
           path: ${{ env.MATRIX_STAGE }}/artifacts/
           retention-days: 7
+      - name: Debug session after a failure
+        if: failure() && github.event_name == 'workflow_dispatch' && matrix.tmate == 'on-failure'
+        uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3.24
+        timeout-minutes: 30
+        with:
+          limit-access-to-actor: true
+
+  # A lane the plan left out of scope must be skipped and a lane it planned
+  # must succeed. Accepting a skip for a planned lane would let a failure that
+  # skips its dependents pass.
+  required:
+    name: required
+    needs: [matrix, reject, check]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: dev
+      - name: Require every planned job
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 dev/plan_matrix.py gate
 
   tag-install:
     name: Verify public tag install

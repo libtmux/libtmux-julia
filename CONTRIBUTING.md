@@ -503,14 +503,69 @@ Both must pass at the same source revision to complete a split cell. Use
 `--suite runtime` or `--suite delivery` to run one partition locally; omitting
 the option runs both.
 
-Pull requests run Linux checks on Julia 1.13.1 with tmux 3.3a, 3.4, 3.5a, 3.6b,
-3.7, 3.7a, 3.7b and 3.7c at one thread, tmux 3.7c at four threads and tmux 3.8
-at one thread. The floor, 3.7c and 3.8 configurations run required runtime and
-delivery jobs; the others run the runtime job. Each job has independent
+Pull requests run Linux checks on Julia 1.13.1 with the oldest and the newest
+tmux release in `dev/plan_matrix.py`, 3.3a and 3.8, at one thread, and 3.8 at
+four threads. A `v*` tag and a manual run with `scope=full` check tmux 3.3a,
+3.4, 3.5a, 3.6b, 3.7, 3.7a, 3.7b and 3.7c at one thread, 3.7c at four threads
+and 3.8 at one thread. The floor, 3.7c and 3.8 configurations run required
+runtime and delivery jobs; the others run the runtime job, because the
+delivery suite does not depend on the release. Each job has independent
 preparation and unchanged hard limits. Both partitions must pass for a
 configuration that runs both; their union runs every verification phase once.
 This repeats dependency setup to keep cold preparation from exhausting the final
-checks' allowance.
+checks' allowance. The `required` job passes only when the planning job and
+every planned check passed.
+
+### Running CI against any tmux
+
+`dev/plan_matrix.py` decides from the event and the dispatch inputs which jobs
+run, so `julia.yml` lists no tmux version. Print the plan for an event locally:
+
+```console
+$ python3 dev/plan_matrix.py plan --event push
+```
+
+A dispatch runs any branch against a tmux outside the table. The workflow file
+has to be on the default branch before `gh workflow run` finds it. This builds
+tmux 3.6c and tmux master from source and runs the runtime suite on each at one
+thread:
+
+```console
+$ gh workflow run julia.yml \
+    --ref my-branch \
+    -f scope=custom \
+    -f tmux-ref=3.6c,master
+```
+
+`tmux-ref` takes versions, tags, branches and full 40-character commits from
+[github.com/tmux/tmux](https://github.com/tmux/tmux), separated by commas, and
+needs `scope=custom`. A release in the table is built from its official
+tarball and checked against its pinned digest, and the check asserts the
+release it names. Any other ref is resolved to a commit and built from source,
+and its version is reported, not asserted. Reproduce a ref build locally with
+`python3 dev/check-matrix.py build-tmux-ref "$matrix_stage" 3.6c`. `julia`
+takes a version such as `1.12.4`, or a channel such as `lts`, and applies to
+every scope. With `scope=custom`, `threads` takes `1` or `4` and `suite` takes
+`runtime`, `delivery` or `both`.
+
+To look at the runner, add `tmate`. The session opens for the person who
+started the run, who needs an SSH key on their GitHub profile, and it needs
+exactly one job, so give `tmux-ref` one ref and leave `suite` at its default.
+`before-tests` opens it before the checks and `on-failure` opens it only after
+a failure. The connection command is in the step log, and the step ends after
+30 minutes.
+
+```console
+$ gh workflow run julia.yml \
+    --ref my-branch \
+    -f scope=custom \
+    -f tmux-ref=3.7c \
+    -f tmate=on-failure
+```
+
+The plan refuses a run that cannot happen, such as `tmux-ref` without
+`scope=custom` or a session that would land on several jobs, before any
+runner builds anything.
 
 macOS and psmux are excluded from CI. Rejection jobs use tmux 3.0a, 3.1c, 3.2a
 and 3.3 with a 3.3a client; these versions
