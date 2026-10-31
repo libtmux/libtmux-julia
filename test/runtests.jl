@@ -6,6 +6,7 @@ finish_test_imports()
 
 const UNIT_FILES = (
     "server",
+    "sandbox",
     "process",
     "cancellation",
     "text",
