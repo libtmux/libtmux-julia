@@ -30,7 +30,16 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
-from plan_matrix import check_ref
+from plan_matrix import (
+    MINIMUM_TMUX,
+    REJECTED_TMUX,
+    SUITES,
+    SUPPORTED_TMUX,
+    check_ref,
+    qa_cells,
+    rejection_cells,
+    split_cells,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 PINNED_TOOLS = {
@@ -61,7 +70,6 @@ DELIVERY_PHASES = frozenset(
         "api-export-check",
     )
 )
-SUITES = ("runtime", "delivery")
 TMUX_SHA256 = {
     "3.0a": "4ad1df28b4afa969e59c08061b45082fdc49ff512f30fc8e43217d7b0e5f8db9",
     "3.1c": "918f7220447bef33a1902d4faff05317afd9db4ae1c9971bef5c787ac6c88386",
@@ -79,33 +87,7 @@ TMUX_SHA256 = {
 }
 
 
-# Releases below the supported floor. Their cells assert refusal without effect
-# and stay outside the supported matrix.
-REJECTED_TMUX = ("3.0a", "3.1c", "3.2a", "3.3")
-# Releases whose daemon answers a current client with a protocol mismatch or a
-# usage error; their cells run the real-build refusal test in place of the
-# owned-daemon rejection suite.
-PRE_PROBE_TMUX = ("3.0a", "3.1c")
-MINIMUM_TMUX = "3.3a"
-# Supported releases between the floor and tmux 3.7c; 3.7 exactly refuses names
-# with ':' or '.', and 3.7a restores them.
-INTERMEDIATE_TMUX = ("3.4", "3.5a", "3.6b", "3.7", "3.7a", "3.7b")
-MINIMUM_JULIA = "1.13.1"
 HARD_WORK_SECONDS = 15 * 60
-
-
-class QaCell(TypedDict):
-    label: str
-    os: str
-    runner: str
-    arch: str
-    julia: str
-    tmux: str
-    threads: int
-    suites: tuple[str, ...]
-    status: str
-    suite: NotRequired[str]
-    job_label: NotRequired[str]
 
 
 class CleanupReceipt(TypedDict):
@@ -277,58 +259,6 @@ def report_skipped(result: dict[str, Any]) -> None:
         with Path(summary).open("a", encoding="utf-8") as output:
             output.write("### Skipped checks\n\n")
             output.writelines(f"- `{name}`: {line}\n" for name, line in skipped)
-
-
-def qa_cells() -> list[QaCell]:
-    cells: list[QaCell] = []
-
-    def add(
-        os_name: str,
-        runner: str,
-        arch: str,
-        julia: str,
-        tmux: str,
-        threads: int = 1,
-        suites: tuple[str, ...] = SUITES,
-    ) -> None:
-        label = f"{os_name}-{arch}-julia{julia}-tmux{tmux}-t{threads}"
-        cells.append(
-            {
-                "label": label,
-                "os": os_name,
-                "runner": runner,
-                "arch": arch,
-                "julia": julia,
-                "tmux": tmux,
-                "threads": threads,
-                "suites": tuple(suites),
-                "status": "NOT RUN",
-            }
-        )
-
-    add("Linux", "ubuntu-24.04", "x86_64", MINIMUM_JULIA, MINIMUM_TMUX)
-    # Releases between the floor and the current one differ in what they accept
-    # and in how they fail, so each runs the runtime suite; the delivery suite
-    # does not depend on the release and runs at the floor and the newest.
-    for tmux in INTERMEDIATE_TMUX:
-        add("Linux", "ubuntu-24.04", "x86_64", MINIMUM_JULIA, tmux, 1, ("runtime",))
-    add("Linux", "ubuntu-24.04", "x86_64", MINIMUM_JULIA, "3.7c")
-    add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.7c", 4)
-    add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.8", 1)
-    return cells
-
-
-def rejection_cells() -> list[dict[str, str]]:
-    return [
-        {
-            "label": f"Linux-x86_64-julia{MINIMUM_JULIA}-tmux{tmux}-rejection",
-            "tmux": tmux,
-            "job_label": f"Reject tmux {tmux}",
-            "real_old": "true" if tmux in PRE_PROBE_TMUX else "false",
-            "suite": "old-daemon" if tmux in PRE_PROBE_TMUX else "rejection",
-        }
-        for tmux in REJECTED_TMUX
-    ]
 
 
 def source_digest() -> str:
@@ -1531,6 +1461,8 @@ println("PASS admitted version arguments construct real Pkg specifications")
             "SKIPPED README.md fence 3: control acquisition needs tmux 3.7",
         ]
         assert skipped_checks(base / "absent.log") == []
+        # The plan carries its own checks; these hold the full scope to the cells
+        # it has always had, and to the table and documents the workflow relies on.
         cells = qa_cells()
         assert [
             (cell["os"], cell["arch"], cell["julia"], cell["tmux"], cell["threads"])
@@ -1556,8 +1488,24 @@ println("PASS admitted version arguments construct real Pkg specifications")
         jobs = [(cell["label"], suite) for cell in cells for suite in cell["suites"]]
         assert len(jobs) == len(set(jobs))
         assert {cell["tmux"] for cell in cells} <= set(TMUX_SHA256)
+        assert set(TMUX_SHA256) == {*SUPPORTED_TMUX, *REJECTED_TMUX}
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
+        # A push and a pull request run the oldest and newest release, and the
+        # newest release at four threads.
+        newest = SUPPORTED_TMUX[-1]
+        assert {cell["tmux"] for cell in qa_cells("edges")} == {MINIMUM_TMUX, newest}
+        assert [cell["tmux"] for cell in cells if cell["docs_artifact"] == "true"] == [
+            newest
+        ]
+        for name in ("docs/src/compatibility.md", "CONTRIBUTING.md"):
+            text = (ROOT / name).read_text()
+            unnamed = [
+                tmux
+                for tmux in (*SUPPORTED_TMUX, *REJECTED_TMUX)
+                if not re.search(rf"(?<![\w.]){re.escape(tmux)}(?![\w])", text)
+            ]
+            assert not unnamed, f"{name} does not name tmux {unnamed}"
         check_tmux_ref(base)
         rejected = rejection_cells()
         assert [cell["tmux"] for cell in rejected] == ["3.0a", "3.1c", "3.2a", "3.3"]
@@ -1795,11 +1743,7 @@ def main() -> int:
         elif args.command == "matrix":
             cells = qa_cells()
             if args.split:
-                cells = [
-                    {**cell, "suite": suite, "job_label": f"{cell['label']}-{suite}"}
-                    for cell in cells
-                    for suite in cell["suites"]
-                ]
+                cells = split_cells(cells)
             print(json.dumps({"include": cells}))
         elif args.command == "self-test":
             self_test(args.julia)

@@ -51,6 +51,10 @@ FOUR_THREAD_TMUX = "3.7c"
 MINIMUM_JULIA = "1.13.1"
 SUITES = ("runtime", "delivery")
 
+WORKFLOW = (
+    Path(__file__).resolve().parent.parent / ".github" / "workflows" / "julia.yml"
+)
+
 SCOPES = ("edges", "full", "custom")
 TMATE_MODES = ("off", "before-tests", "on-failure")
 EVENTS = ("push", "pull_request", "workflow_dispatch")
@@ -418,6 +422,85 @@ def outputs(result: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def workflow_jobs(text: str) -> dict[str, str]:
+    """Split julia.yml into its jobs, read as text because CI has no YAML parser."""
+    _, _, body = text.partition("\njobs:\n")
+    found: dict[str, str] = {}
+    for part in re.split(r"(?m)^  (?=[A-Za-z0-9_-]+:\s*$)", body)[1:]:
+        name, _, rest = part.partition(":")
+        found[name] = rest
+    return found
+
+
+def workflow_problems(text: str) -> list[str]:
+    """Find what julia.yml does that bypasses the plan or the aggregate."""
+    problems: list[str] = []
+    jobs = workflow_jobs(text)
+    for name in ("matrix", "reject", "check", "required", "tag-install"):
+        if name not in jobs:
+            problems.append(f"{name}: missing job")
+    if problems:
+        return problems
+
+    def need(condition: bool, message: str) -> None:
+        if not condition:
+            problems.append(message)
+
+    need(
+        "matrix: ${{ fromJSON(needs.matrix.outputs.cells) }}" in jobs["check"],
+        "check: the cells must come from the plan",
+    )
+    need(
+        "matrix: ${{ fromJSON(needs.matrix.outputs.rejected) }}" in jobs["reject"],
+        "reject: the lanes must come from the plan",
+    )
+    need(
+        "    if: needs.matrix.outputs.run_rejected == 'true'\n" in jobs["reject"],
+        "reject: it runs only where the plan schedules it",
+    )
+    need(
+        "    if:" not in jobs["check"].split("    steps:")[0],
+        "check: no leg may be skipped",
+    )
+    need(
+        "python3 dev/plan_matrix.py plan" in jobs["matrix"]
+        and "python3 dev/plan_matrix.py self-test" in jobs["matrix"],
+        "matrix: it must plan the run and check the plan",
+    )
+    need(
+        "    needs: [matrix, reject, check]\n" in jobs["required"]
+        and "    if: always()\n" in jobs["required"]
+        and "NEEDS: ${{ toJSON(needs) }}" in jobs["required"]
+        and "python3 dev/plan_matrix.py gate" in jobs["required"],
+        "required: it must check the planning job, the lanes and the checks",
+    )
+    need(
+        "    needs: check\n" in jobs["tag-install"],
+        "tag-install: it follows the checks",
+    )
+    need(
+        "matrix.docs_artifact == 'true' && matrix.suite == 'delivery'" in jobs["check"],
+        "check: the documentation artifact comes from the cell the plan marks",
+    )
+    head = text.partition("\njobs:\n")[0]
+    for name in ("scope", "tmux-ref", "julia", "threads", "suite"):
+        need(
+            re.search(rf"(?m)^      {re.escape(name)}:$", head) is not None,
+            f"workflow_dispatch: missing the {name} input",
+        )
+    for number, line in enumerate(text.splitlines(), 1):
+        if "inputs." in line and not re.match(
+            r"^\s+[A-Z_]+: \$\{\{ inputs\.[a-z-]+ \}\}$", line
+        ):
+            problems.append(f"line {number}: pass an input to a script through env")
+    for tmux in (*SUPPORTED_TMUX, *REJECTED_TMUX):
+        need(
+            f"'{tmux}'" not in text,
+            f"tmux {tmux} belongs in the table, not the workflow",
+        )
+    return problems
+
+
 # Checks. Each rule has one, and each check has a deliberate break: the rule is
 # replaced with its absence and the check has to notice.
 
@@ -719,6 +802,75 @@ def needs(
     }
 
 
+WORKFLOW_BREAKS = (
+    (
+        "matrix: ${{ fromJSON(needs.matrix.outputs.cells) }}",
+        "matrix: {tmux: ['3.8']}",
+        "the cells must come from the plan",
+    ),
+    (
+        "matrix: ${{ fromJSON(needs.matrix.outputs.rejected) }}",
+        "matrix: {tmux: ['3.2a']}",
+        "the lanes must come from the plan",
+    ),
+    (
+        "if: needs.matrix.outputs.run_rejected == 'true'",
+        "if: always()",
+        "it runs only where the plan schedules it",
+    ),
+    (
+        "    timeout-minutes: 20\n    env:\n      TMPDIR: /tmp\n      JULIA_TEST_VERBOSE: 'true'\n      JULIA_CPU_TARGET",
+        "    if: true\n    timeout-minutes: 20\n    env:\n      TMPDIR: /tmp\n      JULIA_TEST_VERBOSE: 'true'\n      JULIA_CPU_TARGET",
+        "no leg may be skipped",
+    ),
+    (
+        "python3 dev/plan_matrix.py self-test",
+        "true",
+        "it must plan the run and check the plan",
+    ),
+    (
+        "    needs: [matrix, reject, check]\n",
+        "    needs: [matrix, check]\n",
+        "it must check the planning job, the lanes and the checks",
+    ),
+    (
+        "run: python3 dev/plan_matrix.py gate",
+        "run: true",
+        "it must check the planning job, the lanes and the checks",
+    ),
+    (
+        "    needs: check\n    if: >-",
+        "    needs: matrix\n    if: >-",
+        "it follows the checks",
+    ),
+    (
+        "matrix.docs_artifact == 'true' && matrix.suite == 'delivery'",
+        "matrix.tmux == '3.7c' && matrix.suite == 'delivery'",
+        "the documentation artifact comes from the cell the plan marks",
+    ),
+    ("      suite:\n", "      shell:\n", "missing the suite input"),
+    (
+        '--tmux-ref "$TMUX_REF"',
+        '--tmux-ref "${{ inputs.tmux-ref }}"',
+        "pass an input to a script through env",
+    ),
+    (
+        "python3 dev/check-matrix.py resolve-tmux",
+        "python3 dev/check-matrix.py resolve-tmux '3.8'",
+        "belongs in the table, not the workflow",
+    ),
+)
+
+
+def check_the_workflow_follows_the_plan() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert workflow_problems(text) == []
+    for old, new, expected in WORKFLOW_BREAKS:
+        assert old in text, old
+        found = workflow_problems(text.replace(old, new, 1))
+        assert any(expected in problem for problem in found), (expected, found)
+
+
 def check_the_gate_passes_what_the_plan_scheduled() -> None:
     assert check_needs(needs()) == []
     assert check_needs(needs(reject="success", planned=True)) == []
@@ -772,6 +924,7 @@ ALL_CHECKS: tuple[Check, ...] = (
     check_a_debug_mode_must_be_known,
     check_the_job_count_adds_up,
     check_the_matrix_is_never_empty,
+    check_the_workflow_follows_the_plan,
     check_the_gate_passes_what_the_plan_scheduled,
     check_the_gate_needs_the_planning_job_and_the_checks,
     check_a_planned_lane_that_was_skipped_fails_the_gate,
@@ -1120,6 +1273,12 @@ DELIBERATE_BREAKS: tuple[tuple[str, str, Any, Check], ...] = (
         "require_jobs",
         ignored,
         check_the_matrix_is_never_empty,
+    ),
+    (
+        "the workflow is not checked",
+        "workflow_problems",
+        lambda text: [],
+        check_the_workflow_follows_the_plan,
     ),
     (
         "the gate ignores the refusal lane",
