@@ -275,7 +275,7 @@ $ julia \
     -e 'using Pkg; Pkg.develop([PackageSpec(path="../.."), PackageSpec(path=".")]); Pkg.precompile()'
 ```
 
-After preparation, run the pure inner suite:
+After preparation, run the inner suite:
 
 ```console
 $ julia \

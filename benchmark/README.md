@@ -17,7 +17,7 @@ $ julia \
 
 Set `LIBTMUX_TEST_TMUX` to select a different tmux executable. Every driver
 that needs tmux uses a private owned server. None measures against the default
-server.
+server. Control-based measurements need tmux 3.7 or newer.
 Choose a fresh output file for every run; existing measurements are preserved.
 
 ## Fresh process and first use

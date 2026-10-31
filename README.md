@@ -183,7 +183,7 @@ it names. [`open_server`][open_server] starts a private daemon that you close.
 
 [`send_keys`][send_keys] types into a pane and adds no Enter.
 [`observe_output`][observe_output] streams the bytes a pane prints from then
-on, over a control connection:
+on, over a control connection. This example needs tmux 3.7 or newer:
 
 ```julia
 using LibTmux
