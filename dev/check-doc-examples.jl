@@ -1,6 +1,28 @@
 using SHA
 
+# The contextual mode starts tmux under this process's environment, so a client
+# that names no socket would reach the developer's server without a sandbox.
+include(joinpath(@__DIR__, "test-sandbox.jl"))
+TestSandbox.enter_or_refuse!()
+
 const DOC_EXAMPLE_ROOT = dirname(@__DIR__)
+
+# A snippet that starts a server on its own socket, or a client that names none,
+# leaves a socket in the sandbox. Fail with the names, never the values.
+function check_sandbox_clean()
+    try
+        TestSandbox.verify!()
+    catch error
+        error isa TestSandbox.Refused || rethrow()
+        println(
+            stderr,
+            "doc examples left sockets in the sandbox: ",
+            sprint(showerror, error),
+        )
+        exit(1)
+    end
+    return nothing
+end
 const DOC_EXAMPLE_LANGUAGES =
     Set(("julia", "jl", "jldoctest", "@example", "@repl", "@eval", "@setup"))
 
@@ -729,6 +751,7 @@ function run_contextual_snippets(entries)
             output_difference(selected[key], documented_output(selected[key]), printed[key])
         problem === nothing || error(problem)
     end
+    check_sandbox_clean()
     return println(
         "PASS ",
         length(executed),
@@ -812,6 +835,7 @@ function doc_examples_main(arguments)
         )
         mode == "doctest" && run_snippet_doctests(entries)
         mode == "contextual" && run_contextual_snippets(entries)
+        check_sandbox_clean()
         println(
             "PASS discovery/drift: ",
             length(entries),

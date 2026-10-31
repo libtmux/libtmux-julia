@@ -739,3 +739,83 @@ end
     end
     @test all(relative -> get(sites, relative, 0) > 0, keys(NO_TMUX_ENVIRONMENTS))
 end
+
+@testset "every dev entry point that starts a server enters the sandbox" begin
+    root = dirname(@__DIR__)
+    entries = String[]
+    directories = [joinpath(root, "dev"), joinpath(root, "benchmark")]
+    for package in readdir(joinpath(root, "packages"); join=true)
+        push!(directories, joinpath(package, "dev"))
+    end
+    for directory in directories
+        isdir(directory) || continue
+        for name in readdir(directory; join=true)
+            endswith(name, ".jl") || continue
+            source = read(name, String)
+            code = String(collect(source)[classify(collect(source)) .== :code])
+            occursin(r"\b(with_server|open_server)\(", code) && push!(entries, name)
+        end
+    end
+    relatives = relpath.(entries, root)
+    for expected in (
+        "dev/check-doc-examples.jl",
+        "benchmark/startup.jl",
+        "benchmark/observations.jl",
+        "benchmark/mcp.jl",
+        "benchmark/workflows.jl",
+        "packages/LibTmuxWorkspace/dev/cli_latency.jl",
+    )
+        @test expected in relatives
+    end
+    for entry in entries
+        source = read(entry, String)
+        code = String(collect(source)[classify(collect(source)) .== :code])
+        @test occursin("test-sandbox.jl", source)
+        @test occursin("TestSandbox.enter_or_refuse!()", code)
+    end
+    # The doc-example checker also looks for a leaked socket before it reports.
+    source = read(joinpath(root, "dev", "check-doc-examples.jl"), String)
+    code = String(collect(source)[classify(collect(source)) .== :code])
+    for name in ("run_contextual_snippets", "doc_examples_main")
+        body = match(Regex("(?ms)^function $name\\(.*?^end\$"), code)
+        @test body !== nothing && occursin("check_sandbox_clean()", body.match)
+    end
+end
+
+@testset "the doc-example checker enters the sandbox before it starts tmux" begin
+    checker = joinpath(dirname(SANDBOX_HELPER), "check-doc-examples.jl")
+    mktempdir(ENV["TMUX_TMPDIR"]; prefix="c-") do directory
+        sandbox_fake_tmux(directory)
+        entered = sandbox_child(
+            directory,
+            "include(ARGS[1]); run(`tmux list-sessions`)",
+            checker;
+            record="entered",
+        )
+        @test entered.status == 0
+        for name in ("TMUX", "TMUX_PANE", "LIBTMUX_SOCKET", "LIBTMUX_SOCKET_PATH")
+            @test occursin("$name unset\n", entered.record)
+        end
+        @test occursin("LIBTMUX_SOCKET_FUTURE unset\n", entered.record)
+        @test occursin("TMUX_TMPDIR is the sandbox\n", entered.record)
+        @test !occursin("decoy-secret", join((entered.out, entered.err, entered.record)))
+        leaked = sandbox_child(
+            directory,
+            STALE_SOCKET * """
+            include(ARGS[1])
+            stale_socket(joinpath(ENV["TMUX_TMPDIR"], "custom.sock"))
+            check_sandbox_clean()
+            println("unreachable")
+            """,
+            checker;
+            record="leaked",
+            extra=("LIBTMUX_TEST_TMUX" => sandbox_stopping_tmux(directory),),
+        )
+        @test leaked.status == 1 && !occursin("unreachable", leaked.out)
+        @test occursin(
+            "doc examples left sockets in the sandbox: a socket was left at custom.sock",
+            leaked.err,
+        )
+        @test !occursin("decoy-secret", leaked.err * leaked.out)
+    end
+end

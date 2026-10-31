@@ -274,8 +274,12 @@ def run_example(
         )
         wrapper.chmod(0o700)
         child_env = dict(env, LIBTMUX_TEST_TMUX=str(wrapper), TMPDIR=directory)
-        child_env.pop("TMUX", None)
-        child_env.pop("TMUX_PANE", None)
+        # A client that names no socket must reach neither the caller's server
+        # nor the default socket: the wrapper refuses it, and TMUX_TMPDIR is ours.
+        for name in list(child_env):
+            if name in ("TMUX", "TMUX_PANE") or name.startswith("LIBTMUX_SOCKET"):
+                del child_env[name]
+        child_env["TMUX_TMPDIR"] = directory
         records, problems = [], []
         try:
             result = subprocess.run(

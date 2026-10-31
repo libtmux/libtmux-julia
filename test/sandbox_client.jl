@@ -52,3 +52,59 @@ end
         end
     end
 end
+
+# The cleanup checker runs examples that start tmux. It must hide the caller's
+# selectors from them and give them a socket directory of their own.
+@testset "the example cleanup checker hides every selector from an example" begin
+    tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
+    checker = joinpath(dirname(@__DIR__), "dev", "check-example-cleanup.py")
+    python = Sys.which("python3")
+    decoys = Dict(
+        "TMUX" => "/decoy-secret/sock,1,0",
+        "TMUX_PANE" => "%decoy-secret",
+        "LIBTMUX_SOCKET" => "decoy-secret",
+        "LIBTMUX_SOCKET_PATH" => "/decoy-secret",
+        "LIBTMUX_SOCKET_FUTURE" => "decoy-secret",
+        "TMUX_TMPDIR" => "/decoy-secret",
+    )
+    environment =
+        merge(Dict{String,String}(string(k) => string(v) for (k, v) in ENV), decoys)
+    probe = join(
+        [
+            "test -z \"\${$name+x}\"" for
+            name in ("TMUX", "TMUX_PANE", "LIBTMUX_SOCKET", "LIBTMUX_SOCKET_PATH")
+        ],
+        " && ",
+    )
+    script = "$probe && test -z \"\${LIBTMUX_SOCKET_FUTURE+x}\" && test \"\$TMUX_TMPDIR\" = \"\$TMPDIR\""
+    @test python !== nothing
+    if python !== nothing
+        mktempdir(ENV["TMUX_TMPDIR"]; prefix="c-") do directory
+            # The probe fails in the decoy environment, so a pass means the checker removed them.
+            control = run(
+                pipeline(
+                    ignorestatus(setenv(`/bin/sh -c $script`, environment));
+                    stdout=devnull,
+                    stderr=devnull,
+                ),
+            )
+            @test control.exitcode != 0
+            out, err = IOBuffer(), IOBuffer()
+            checked = run(
+                pipeline(
+                    ignorestatus(
+                        setenv(
+                            `$python $checker --pure --tmux $tmux --cwd $directory -- /bin/sh -c $script`,
+                            environment,
+                        ),
+                    );
+                    stdout=out,
+                    stderr=err,
+                ),
+            )
+            @test checked.exitcode == 0
+            @test occursin("PASS example success", String(take!(out)))
+            @test !occursin("decoy-secret", String(take!(err)))
+        end
+    end
+end
