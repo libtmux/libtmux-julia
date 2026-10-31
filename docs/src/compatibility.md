@@ -5,7 +5,9 @@ share these requirements. A few operations need a newer tmux release and refuse
 on older ones, as the optional capabilities below list; the rest of the library
 keeps working on 3.3a.
 
-CI runs Linux only, using Julia 1.13.1. It checks tmux 3.3a, 3.4, 3.5a, 3.6b,
+CI runs Linux only, using Julia 1.13.1. A push and a pull request check tmux
+3.3a and 3.8 at one thread, and 3.8 at four threads. A release tag, and a
+manual run that asks for the full scope, check tmux 3.3a, 3.4, 3.5a, 3.6b,
 3.7, 3.7a, 3.7b and 3.7c at one thread, 3.7c at four threads and 3.8 at one
 thread. macOS and psmux are excluded from CI and current support.
 
