@@ -41,8 +41,10 @@ on:
           the checks or only after a failure. It needs scope custom with one
           tmux-ref and the default suite, so that exactly one job gets it.
         type: choice
-        options: [off, before-tests, on-failure]
-        default: off
+        # Quoted, because YAML 1.1 reads a bare off as false, which GitHub then
+        # offers as the only allowed value and passes to the plan as 'false'.
+        options: ['off', before-tests, on-failure]
+        default: 'off'
 
 permissions:
   contents: read

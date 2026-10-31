@@ -483,6 +483,12 @@ def workflow_problems(text: str) -> list[str]:
         "check: the documentation artifact comes from the cell the plan marks",
     )
     head = text.partition("\njobs:\n")[0]
+    need(
+        "        options: ['off', before-tests, on-failure]\n        default: 'off'\n"
+        in head,
+        "workflow_dispatch: quote 'off' in the tmate options and default, "
+        "which YAML reads as the boolean false",
+    )
     for name in ("scope", "tmux-ref", "julia", "threads", "suite", "tmate"):
         need(
             re.search(rf"(?m)^      {re.escape(name)}:$", head) is not None,
@@ -911,6 +917,16 @@ WORKFLOW_BREAKS = (
     ),
     ("      suite:\n", "      shell:\n", "missing the suite input"),
     ("      tmate:\n", "      debug:\n", "missing the tmate input"),
+    (
+        "        default: 'off'\n",
+        "        default: off\n",
+        "quote 'off' in the tmate options",
+    ),
+    (
+        "options: ['off', before-tests, on-failure]",
+        "options: [off, before-tests, on-failure]",
+        "quote 'off' in the tmate options",
+    ),
     (
         "${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}",
         "",
