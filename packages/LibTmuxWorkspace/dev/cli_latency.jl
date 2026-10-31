@@ -1,6 +1,10 @@
 using LibTmux, LibTmuxWorkspace
 import JSON, Random, SHA
 
+# A client that names no socket must not reach the developer's server.
+include(joinpath(@__DIR__, "..", "..", "..", "dev", "test-sandbox.jl"))
+TestSandbox.enter_or_refuse!()
+
 
 function workspace_source_hashes()
     root = normpath(joinpath(@__DIR__, "..", "..", ".."))
@@ -64,6 +68,7 @@ function main()
         "PATH" => get(ENV, "PATH", "/usr/local/bin:/usr/bin:/bin"),
         "SHELL" => "/bin/sh",
         "TERM" => "xterm-256color",
+        TestSandbox.child_entries()...,
     )
     report = Dict(
         "schema_version" => 1,

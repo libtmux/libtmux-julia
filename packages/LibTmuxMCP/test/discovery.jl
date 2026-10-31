@@ -68,6 +68,7 @@ if isempty(ARGS) || any(arg -> arg in ("integration", "discovery", "all"), ARGS)
             "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
             "TERM"=>"xterm-256color",
             "SHELL"=>"/bin/sh",
+            Main.TestSandbox.child_entries()...,
         )
         with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do server
             owned[] = dirname(server.socket_path)

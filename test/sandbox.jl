@@ -574,3 +574,168 @@ end
         @test !occursin("decoy-secret", result.err * result.out)
     end
 end
+
+# Marks each character of Julia source as :code, :string or :comment without
+# parsing it, so a `Dict(` in a docstring or a note does not count.
+function classify(chars)
+    kind = fill(:code, length(chars))
+    index = 1
+    while index <= length(chars)
+        char = chars[index]
+        if char == '#'
+            stop = something(findnext(==('\n'), chars, index), length(chars) + 1)
+            kind[index:(stop-1)] .= :comment
+            index = stop
+        elseif char == '\'' && index + 2 <= length(chars) && chars[index+2] == '\''
+            index += 3
+        elseif char == '"'
+            triple = index + 2 <= length(chars) && chars[index+1] == chars[index+2] == '"'
+            width = triple ? 3 : 1
+            cursor = index + width
+            while cursor <= length(chars)
+                if chars[cursor] == '\\'
+                    cursor += 2
+                elseif all(==('"'), chars[cursor:min(end, cursor+width-1)]) &&
+                       cursor + width - 1 <= length(chars)
+                    cursor += width
+                    break
+                else
+                    cursor += 1
+                end
+            end
+            kind[index:min(end, cursor-1)] .= :string
+            index = cursor
+        else
+            index += 1
+        end
+    end
+    kind
+end
+
+# Each `Dict(...)` or `Dict{...}(...)` call as its line, its text without
+# comments, and its text without strings either.
+function dict_literals(source)
+    chars, found = collect(source), Tuple{Int,String,String}[]
+    kind = classify(chars)
+    matching(from, open, close) = begin
+        depth, index = 1, from
+        while index <= length(chars) && depth > 0
+            if kind[index] == :code
+                depth += chars[index] == open
+                depth -= chars[index] == close
+            end
+            index += 1
+        end
+        index
+    end
+    for start = 1:(length(chars)-4)
+        all(==(:code), kind[start:(start+3)]) && String(chars[start:(start+3)]) == "Dict" ||
+            continue
+        start > 1 &&
+            (isletter(chars[start-1]) || chars[start-1] in "_.!{}0123456789") &&
+            continue
+        opening = start + 4
+        if chars[opening] == '{'
+            opening = matching(opening + 1, '{', '}')
+        end
+        opening <= length(chars) && chars[opening] == '(' && kind[opening] == :code ||
+            continue
+        closing = matching(opening + 1, '(', ')') - 1
+        inside = (opening+1):(closing-1)
+        body = String([chars[index] for index in inside if kind[index] != :comment])
+        code = String([chars[index] for index in inside if kind[index] == :code])
+        push!(found, (count(==('\n'), chars[1:start]) + 1, body, code))
+    end
+    found
+end
+
+keyed_path(body) = occursin(r"\"PATH\"\s*=>", body)
+carries_sandbox(body, code) =
+    occursin(r"\"TMUX_TMPDIR\"\s*=>", body) || occursin(r"\bchild_entries\b", code)
+
+# A literal keyed by "PATH" is a child environment: a process started with it
+# sees nothing else, so tmux must find TMUX_TMPDIR there.
+bare_environments(source) = [
+    line for (line, body, code) in dict_literals(source) if
+    keyed_path(body) && !carries_sandbox(body, code)
+]
+
+# These literals reach a shell script and a Julia process, and start no tmux.
+const NO_TMUX_ENVIRONMENTS =
+    Dict("packages/LibTmuxWorkspace/test/script.jl" => 1, "dev/check-tag-install.jl" => 1)
+
+function environment_files(root)
+    files = String[]
+    directories =
+        [joinpath(root, name) for name in ("test", "examples", "benchmark", "dev")]
+    for package in readdir(joinpath(root, "packages"); join=true), name in ("test", "dev")
+        push!(directories, joinpath(package, name))
+    end
+    for directory in directories
+        isdir(directory) || continue
+        for (parent, _, names) in walkdir(directory), name in names
+            endswith(name, ".jl") || continue
+            relpath(joinpath(parent, name), root) == "test/sandbox.jl" && continue
+            push!(files, joinpath(parent, name))
+        end
+    end
+    sort!(files)
+end
+
+@testset "the guard that finds a replaced environment without TMUX_TMPDIR can fail" begin
+    bare = """
+    f() = Dict(
+        "PATH" => get(ENV, "PATH", "/usr/bin:/bin"),
+        "NOTE" => ") # not a closer",
+        "TERM" => "xterm-256color",
+    )
+    """
+    @test bare_environments(bare) == [1]
+    @test bare_environments("x = 1\ny = Dict{String,String}(\"PATH\" => \"a\")\n") == [2]
+    keyed = "Dict(\"PATH\" => \"a\", \"TMUX_TMPDIR\" => get(ENV, \"TMUX_TMPDIR\", \"/tmp\"))"
+    @test isempty(bare_environments(keyed))
+    helper = "Dict(\"PATH\" => \"a\", Main.TestSandbox.child_entries()...)"
+    @test isempty(bare_environments(helper))
+    # Words in a comment or a string are not entries.
+    commented = "Dict(\"PATH\" => \"a\", # TMUX_TMPDIR\n \"TERM\" => \"b\")"
+    @test bare_environments(commented) == [1]
+    named = "Dict(\"PATH\" => \"a\", \"NOTE\" => \"child_entries\")"
+    @test bare_environments(named) == [1]
+    # A literal in a docstring or a comment is not code.
+    @test isempty(
+        bare_environments("\"\"\"\nDict(\"PATH\" => 1)\n\"\"\"\n# Dict(\"PATH\" => 1)\n"),
+    )
+    # Other dictionaries are not child environments.
+    @test isempty(bare_environments("Dict(\"PROJECT\" => \"x\")"))
+    @test isempty(bare_environments("merge(Dict(), Dict{String,String}())"))
+end
+
+@testset "every replaced environment that can start tmux keeps TMUX_TMPDIR" begin
+    root = dirname(@__DIR__)
+    files = environment_files(root)
+    sites = Dict{String,Int}()
+    for file in files
+        relative = relpath(file, root)
+        source = read(file, String)
+        bare = bare_environments(source)
+        sites[relative] = count(literal -> keyed_path(literal[2]), dict_literals(source))
+        allowed = get(NO_TMUX_ENVIRONMENTS, relative, 0)
+        @test length(bare) == allowed
+        length(bare) == allowed ||
+            @info "a replaced environment names no TMUX_TMPDIR" relative lines = bare
+    end
+    # The scan sees the sites it exists for.
+    for relative in (
+        "test/support/owned_tmux.jl",
+        "test/lifecycle.jl",
+        "test/integration.jl",
+        "packages/LibTmuxMCP/test/tools.jl",
+        "packages/LibTmuxWorkspace/test/owned_server.jl",
+        "examples/output_stream.jl",
+        "benchmark/mcp.jl",
+        "packages/LibTmuxWorkspace/dev/cli_latency.jl",
+    )
+        @test get(sites, relative, 0) > 0
+    end
+    @test all(relative -> get(sites, relative, 0) > 0, keys(NO_TMUX_ENVIRONMENTS))
+end

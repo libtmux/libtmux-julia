@@ -1,6 +1,10 @@
 const OBSERVATION_SCRIPT_ENTRY_NS = time_ns()
 using JSON, SHA, Pkg, Random
 
+# A client that names no socket must not reach the developer's server.
+include(joinpath(@__DIR__, "..", "dev", "test-sandbox.jl"))
+TestSandbox.enter_or_refuse!()
+
 const OBSERVATION_ROOT = dirname(@__DIR__)
 
 function observation_parameters(arguments)
@@ -581,6 +585,7 @@ function observation_main(arguments)
         "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
         "TERM"=>"xterm-256color",
         "SHELL"=>"/bin/sh",
+        TestSandbox.child_entries()...,
     )
     random = MersenneTwister(options.seed)
     budget() =

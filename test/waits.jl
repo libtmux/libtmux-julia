@@ -10,6 +10,7 @@ using Test, LibTmux
             "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
             "TERM"=>"xterm-256color",
             "SHELL"=>"/bin/sh",
+            Main.TestSandbox.child_entries()...,
         )
         with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do server
             directory[] = dirname(server.socket_path)
@@ -228,6 +229,7 @@ end
         "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
         "TERM"=>"xterm-256color",
         "SHELL"=>"/bin/sh",
+        Main.TestSandbox.child_entries()...,
     )
     for ending in (:pane, :server, :stopped, :dropped)
         with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do server

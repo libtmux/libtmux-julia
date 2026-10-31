@@ -8,6 +8,7 @@ const SCREEN_ENV = Dict(
     "PATH" => get(ENV, "PATH", "/usr/bin:/bin"),
     "TERM" => "xterm-256color",
     "SHELL" => "/bin/sh",
+    Main.TestSandbox.child_entries()...,
 )
 
 screen_server(f) =

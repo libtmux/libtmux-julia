@@ -17,7 +17,10 @@ $ julia \
 
 Set `LIBTMUX_TEST_TMUX` to select a different tmux executable. Every driver
 that needs tmux uses a private owned server. None measures against the default
-server. Control-based measurements need tmux 3.7 or newer.
+server. Each enters the [test sandbox](../CONTRIBUTING.md#test-sandbox) before
+its first phase, so no phase timing includes the entry, and fails the run if a
+socket remains in it. The entry is part of the whole-script times.
+Control-based measurements need tmux 3.7 or newer.
 Choose a fresh output file for every run; existing measurements are preserved.
 
 ## Fresh process and first use

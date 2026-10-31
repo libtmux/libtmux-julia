@@ -1,6 +1,10 @@
 using LibTmux, BenchmarkTools, JSON, Random, SHA
 import LibTmux.Filters as F
 
+# A client that names no socket must not reach the developer's server.
+include(joinpath(@__DIR__, "..", "dev", "test-sandbox.jl"))
+TestSandbox.enter_or_refuse!()
+
 const ROOT = dirname(@__DIR__)
 
 function parameters(arguments)
@@ -287,6 +291,7 @@ function main(arguments)
         "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
         "TERM"=>"xterm-256color",
         "SHELL"=>"/bin/sh",
+        TestSandbox.child_entries()...,
     )
     whole = time_ns()
     directory = nothing

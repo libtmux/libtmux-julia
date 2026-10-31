@@ -9,6 +9,7 @@ isdefined(@__MODULE__, :NamedTmux) ||
         "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
         "TERM"=>"xterm-256color",
         "SHELL"=>"/bin/sh",
+        Main.TestSandbox.child_entries()...,
     )
     with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do server
         borrowed = new_session(server; name="borrowed", command=["/bin/cat"])

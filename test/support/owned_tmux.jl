@@ -71,6 +71,7 @@ function stop_daemon(tmux, socket; pidfd_symbols=nothing)
         "PATH" => get(ENV, "PATH", "/usr/bin:/bin"),
         "TERM" => "xterm-256color",
         "SHELL" => "/bin/sh",
+        Main.TestSandbox.child_entries()...,
     )
     command(args...) = setenv(Cmd([tmux, "-N", "-S", socket, args...]), environment)
     errors = Any[]
@@ -208,6 +209,7 @@ function with_tmux(f; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"))
             "PATH" => get(ENV, "PATH", "/usr/local/bin:/usr/bin:/bin"),
             "TERM" => "xterm-256color",
             "SHELL" => "/bin/sh",
+            Main.TestSandbox.child_entries()...,
         )
         log = open(joinpath(directory, "stderr"), "w+")
         monitor = FolderMonitor(directory)

@@ -1,5 +1,9 @@
 using JSON, SHA, Pkg, Random
 
+# A client that names no socket must not reach the developer's server.
+include(joinpath(@__DIR__, "..", "dev", "test-sandbox.jl"))
+TestSandbox.enter_or_refuse!()
+
 const MCP_BENCH_ROOT = dirname(@__DIR__)
 const MCP_BENCH_PROFILES =
     Dict("normal"=>String[], "o0"=>["-O0"], "minimal"=>["--compile=min", "-O0"])
@@ -255,6 +259,7 @@ function mcp_main(arguments)
         "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
         "TERM"=>"xterm-256color",
         "SHELL"=>"/bin/sh",
+        TestSandbox.child_entries()...,
     )
     child_environment = Dict(ENV)
     pop!(child_environment, "TMUX", nothing)
