@@ -25,6 +25,7 @@ const UNIT_FILES = (
 )
 const INTEGRATION_FILES = (
     "fixture_contract",
+    "sandbox_client",
     "named_tmux",
     "lifecycle",
     "support_check",
