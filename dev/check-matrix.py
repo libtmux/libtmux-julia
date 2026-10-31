@@ -30,6 +30,8 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
+from plan_matrix import check_ref
+
 ROOT = Path(__file__).resolve().parent.parent
 PINNED_TOOLS = {
     "Aqua": "0.8.18",
@@ -173,6 +175,76 @@ def build_tmux(args: argparse.Namespace) -> None:
     if observed != f"tmux {args.version}":
         raise ValueError("built tmux version differs from the requested release")
     print(binary)
+
+
+def tmux_repository() -> str:
+    return os.environ.get("LIBTMUX_TMUX_REPOSITORY", "https://github.com/tmux/tmux.git")
+
+
+def resolve_tmux_ref(ref: str) -> str:
+    """Name the commit that a tag, a branch or a full commit of tmux points at.
+
+    A tag is peeled to its commit and wins over a branch of the same name, as it
+    does for a clone.
+    """
+    check_ref(ref)
+    if re.fullmatch(r"[0-9a-f]{40}", ref):
+        return ref
+    names = (f"refs/tags/{ref}^{{}}", f"refs/tags/{ref}", f"refs/heads/{ref}")
+    listing = subprocess.check_output(
+        ["git", "ls-remote", tmux_repository(), *names], text=True
+    )
+    found = {
+        name: commit
+        for commit, _, name in (line.partition("\t") for line in listing.splitlines())
+    }
+    for name in names:
+        if re.fullmatch(r"[0-9a-f]{40}", found.get(name, "")):
+            return found[name]
+    raise ValueError(f"{ref} is not a tag, a branch or a full commit of tmux")
+
+
+def build_tmux_ref(args: argparse.Namespace) -> None:
+    """Build tmux from source at the commit a ref names.
+
+    Table releases are built from their official tarballs and checked against
+    pinned digests. A ref has neither, so it is fetched by commit and its built
+    version is reported, not compared with a release.
+    """
+    commit = resolve_tmux_ref(args.ref)
+    stage = checked_stage(args.stage, create=True)
+    target = stage / "tmux" / f"ref-{commit}"
+    binary = target / "bin" / "tmux"
+    if not binary.is_file():
+        source = target / "source"
+        source.mkdir(parents=True, exist_ok=True)
+        git = ["git", "-C", str(source)]
+        subprocess.run([*git, "init", "--quiet"], check=True)
+        subprocess.run(
+            [*git, "fetch", "--quiet", "--depth", "1", tmux_repository(), commit],
+            check=True,
+        )
+        subprocess.run(
+            [*git, "checkout", "--quiet", "--detach", "FETCH_HEAD"], check=True
+        )
+        if (
+            subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+            != commit
+        ):
+            raise ValueError("tmux source is not at the requested commit")
+        for command in (
+            ["sh", "autogen.sh"],
+            tmux_configure_command(target, commit, platform.system()),
+            ["make", "-j2"],
+            ["make", "install"],
+        ):
+            subprocess.run(command, cwd=source, check=True, stdout=sys.stderr)
+    observed = subprocess.check_output([str(binary), "-V"], text=True).strip()
+    if not observed.startswith("tmux "):
+        raise ValueError("built tmux reports no version")
+    print(f"commit={commit}")
+    print(f"binary={binary}")
+    print(f"version={observed.removeprefix('tmux ')}")
 
 
 SKIPPED_PATTERN = re.compile(r"(?:^|\s)SKIPPED\b.*|Warning: .*\bskipped\b.*")
@@ -1175,6 +1247,99 @@ def artifacts(stage: str | Path) -> int:
     return 1 if incomplete else 0
 
 
+STAND_IN_AUTOGEN = """\
+cat > configure <<'CONFIGURE'
+#!/bin/sh
+case "$1" in --prefix=*) prefix="${1#--prefix=}" ;; esac
+printf 'PREFIX = %s\\n' "$prefix" > Makefile
+cat >> Makefile <<'MAKEFILE'
+all:
+\t:
+install:
+\tmkdir -p $(PREFIX)/bin
+\tprintf '#!/bin/sh\\necho "tmux %s"\\n' "$$(cat VERSION)" > $(PREFIX)/bin/tmux
+\tchmod +x $(PREFIX)/bin/tmux
+MAKEFILE
+CONFIGURE
+chmod +x configure
+"""
+
+
+def check_tmux_ref(base: Path) -> None:
+    """Resolve and build refs against a local stand-in for the tmux repository."""
+    from contextlib import redirect_stdout
+    from io import StringIO
+    from unittest import mock
+
+    repository = base / "tmux-stand-in"
+    repository.mkdir()
+    identity = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.invalid",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.invalid",
+    }
+
+    def git(*arguments: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(repository), *arguments],
+            text=True,
+            env={**os.environ, **identity},
+        ).strip()
+
+    def commit(version: str) -> str:
+        (repository / "VERSION").write_text(version + "\n")
+        (repository / "autogen.sh").write_text(STAND_IN_AUTOGEN)
+        git("add", "-A")
+        git("commit", "--quiet", "-m", f"tmux {version}")
+        return git("rev-parse", "HEAD")
+
+    git("init", "--quiet", "-b", "master")
+    release = commit("3.8")
+    git("tag", "3.8")
+    git("checkout", "--quiet", "-b", "topic")
+    annotated = commit("9.1")
+    git("tag", "-a", "-m", "annotated", "9.1")
+    tip = commit("9.2")
+
+    def refusal(ref: str) -> str:
+        try:
+            resolve_tmux_ref(ref)
+        except ValueError as error:
+            return str(error)
+        return ""
+
+    with mock.patch.dict(os.environ, {"LIBTMUX_TMUX_REPOSITORY": str(repository)}):
+        assert resolve_tmux_ref("3.8") == release
+        assert resolve_tmux_ref("9.1") == annotated != git("rev-parse", "9.1")
+        assert resolve_tmux_ref("topic") == tip
+        assert resolve_tmux_ref(tip) == tip
+        git("branch", "3.8", tip)
+        assert resolve_tmux_ref("3.8") == release, "a tag wins over a branch"
+        for bad in ("--upload-pack=x", "a..b", "topic.lock", "$(id)", "deadbeef"):
+            assert "tmux-ref item" in refusal(bad), bad
+        assert "is not a tag, a branch" in refusal("no-such")
+
+        stage = base / "ref-stage"
+        arguments = argparse.Namespace(stage=str(stage), ref="topic")
+        for _ in range(2):
+            printed = StringIO()
+            with redirect_stdout(printed):
+                build_tmux_ref(arguments)
+            binary = stage / "tmux" / f"ref-{tip}" / "bin" / "tmux"
+            assert dict(
+                line.split("=", 1) for line in printed.getvalue().splitlines()
+            ) == {
+                "commit": tip,
+                "binary": str(binary),
+                "version": "9.2",
+            }
+        # Preparation accepts only an empty or an owned stage, so a ref build has
+        # to leave the owner's marker.
+        assert (stage / ".libtmux-julia-matrix").is_file()
+    print("PASS tmux refs resolve to commits and build at them")
+
+
 def self_test(julia: str | None = None) -> None:
     enable_subreaper()
     if julia:
@@ -1393,6 +1558,7 @@ println("PASS admitted version arguments construct real Pkg specifications")
         assert {cell["tmux"] for cell in cells} <= set(TMUX_SHA256)
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
+        check_tmux_ref(base)
         rejected = rejection_cells()
         assert [cell["tmux"] for cell in rejected] == ["3.0a", "3.1c", "3.2a", "3.3"]
         assert [cell["tmux"] for cell in rejected if cell["real_old"] == "true"] == [
@@ -1595,6 +1761,16 @@ def main() -> int:
     )
     build.add_argument("stage")
     build.add_argument("version", choices=tuple(TMUX_SHA256))
+    resolve = sub.add_parser(
+        "resolve-tmux", help="print the commit a tmux tag, branch or commit names"
+    )
+    resolve.add_argument("ref")
+    build_ref = sub.add_parser(
+        "build-tmux-ref",
+        help="setup only: build tmux from source at a tag, branch or commit",
+    )
+    build_ref.add_argument("stage")
+    build_ref.add_argument("ref")
     export = sub.add_parser("artifacts", help="sanitize logs and results for upload")
     export.add_argument("stage")
     preparation = sub.add_parser("prepare")
@@ -1629,6 +1805,10 @@ def main() -> int:
             self_test(args.julia)
         elif args.command == "build-tmux":
             build_tmux(args)
+        elif args.command == "resolve-tmux":
+            print(f"commit={resolve_tmux_ref(args.ref)}")
+        elif args.command == "build-tmux-ref":
+            build_tmux_ref(args)
         elif args.command == "prepare":
             prepare(args)
         elif args.command == "artifacts":
