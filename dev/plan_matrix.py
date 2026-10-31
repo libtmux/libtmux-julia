@@ -483,7 +483,7 @@ def workflow_problems(text: str) -> list[str]:
         "check: the documentation artifact comes from the cell the plan marks",
     )
     head = text.partition("\njobs:\n")[0]
-    for name in ("scope", "tmux-ref", "julia", "threads", "suite"):
+    for name in ("scope", "tmux-ref", "julia", "threads", "suite", "tmate"):
         need(
             re.search(rf"(?m)^      {re.escape(name)}:$", head) is not None,
             f"workflow_dispatch: missing the {name} input",
@@ -498,6 +498,58 @@ def workflow_problems(text: str) -> list[str]:
             f"'{tmux}'" not in text,
             f"tmux {tmux} belongs in the table, not the workflow",
         )
+    problems += debug_session_problems(jobs)
+    return problems
+
+
+TMATE = "mxschmitt/action-tmate"
+
+
+def debug_session_problems(jobs: dict[str, str]) -> list[str]:
+    """Find what makes a debugging session unsafe or misplaced."""
+    problems: list[str] = []
+    found = 0
+    for name, job in jobs.items():
+        for step in re.split(r"(?m)^(?=      - )", job)[1:]:
+            if TMATE not in step:
+                continue
+            found += 1
+            if name != "check":
+                problems.append(
+                    f"{name}: a debugging session belongs only in the check job"
+                )
+            if not re.search(rf"uses: {TMATE}@[0-9a-f]{{40}} #", step):
+                problems.append(
+                    "a debugging session must be pinned to a full commit SHA"
+                )
+            if "limit-access-to-actor: true" not in step:
+                problems.append("a debugging session must be limited to the actor")
+            if not re.search(r"(?m)^        timeout-minutes: \d+$", step):
+                problems.append("a debugging session needs its own time limit")
+            condition = re.search(r"(?m)^        if: (.*)$", step)
+            text = condition.group(1) if condition else ""
+            if "github.event_name == 'workflow_dispatch'" not in text or (
+                "matrix.tmate ==" not in text
+            ):
+                problems.append(
+                    "a debugging session runs only on a dispatch, on the job the plan chose"
+                )
+    if found != 2:
+        problems.append(
+            "the check job must offer a debugging session before the checks and after a failure"
+        )
+    check = jobs.get("check", "")
+    if "timeout-minutes: ${{ matrix.tmate == 'off' && 20 || 50 }}" not in check:
+        problems.append(
+            "check: the job must cap its time and give the debugging job more"
+        )
+    if "TMATE: ${{ inputs.tmate }}" not in jobs.get("matrix", "") or (
+        '--tmate "$TMATE"' not in jobs.get("matrix", "")
+    ):
+        problems.append("matrix: the plan must receive the tmate input through env")
+    restart = "MATRIX_JOB_DEADLINE=$(( $(date +%s) + 1200 ))"
+    if restart not in check.split("Debug session before the checks")[-1]:
+        problems.append("check: the work clock must restart after the session")
     return problems
 
 
@@ -819,8 +871,8 @@ WORKFLOW_BREAKS = (
         "it runs only where the plan schedules it",
     ),
     (
-        "    timeout-minutes: 20\n    env:\n      TMPDIR: /tmp\n      JULIA_TEST_VERBOSE: 'true'\n      JULIA_CPU_TARGET",
-        "    if: true\n    timeout-minutes: 20\n    env:\n      TMPDIR: /tmp\n      JULIA_TEST_VERBOSE: 'true'\n      JULIA_CPU_TARGET",
+        "      matrix: ${{ fromJSON(needs.matrix.outputs.cells) }}\n",
+        "      matrix: ${{ fromJSON(needs.matrix.outputs.cells) }}\n    if: true\n",
         "no leg may be skipped",
     ),
     (
@@ -849,6 +901,47 @@ WORKFLOW_BREAKS = (
         "the documentation artifact comes from the cell the plan marks",
     ),
     ("      suite:\n", "      shell:\n", "missing the suite input"),
+    ("      tmate:\n", "      debug:\n", "missing the tmate input"),
+    (
+        "action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3.24",
+        "action-tmate@v3.24 # v3.24",
+        "must be pinned to a full commit SHA",
+    ),
+    (
+        "          limit-access-to-actor: true\n",
+        "          limit-access-to-actor: false\n",
+        "must be limited to the actor",
+    ),
+    (
+        "        timeout-minutes: 30\n        continue-on-error: true\n",
+        "        continue-on-error: true\n",
+        "needs its own time limit",
+    ),
+    (
+        "if: github.event_name == 'workflow_dispatch' && matrix.tmate == 'before-tests'",
+        "if: matrix.tmate == 'before-tests'",
+        "runs only on a dispatch",
+    ),
+    (
+        "if: failure() && github.event_name == 'workflow_dispatch' && matrix.tmate == 'on-failure'",
+        "if: failure() && github.event_name == 'workflow_dispatch'",
+        "on the job the plan chose",
+    ),
+    (
+        "timeout-minutes: ${{ matrix.tmate == 'off' && 20 || 50 }}",
+        "timeout-minutes: 20",
+        "give the debugging job more",
+    ),
+    (
+        "          TMATE: ${{ inputs.tmate }}\n",
+        "",
+        "receive the tmate input through env",
+    ),
+    (
+        '        run: echo "MATRIX_JOB_DEADLINE=',
+        '        run: echo "MATRIX_JOB_DEADLINE_UNUSED=',
+        "work clock must restart",
+    ),
     (
         '--tmux-ref "$TMUX_REF"',
         '--tmux-ref "${{ inputs.tmux-ref }}"',

@@ -35,6 +35,14 @@ on:
         description: With scope custom, runtime, delivery or both. Empty uses runtime.
         type: string
         default: ''
+      tmate:
+        description: >-
+          Open a tmate SSH session for the person who started the run, before
+          the checks or only after a failure. It needs scope custom with one
+          tmux-ref and the default suite, so that exactly one job gets it.
+        type: choice
+        options: [off, before-tests, on-failure]
+        default: off
 
 permissions:
   contents: read
@@ -68,6 +76,7 @@ jobs:
           JULIA_VERSION: ${{ inputs.julia }}
           THREADS: ${{ inputs.threads }}
           SUITE: ${{ inputs.suite }}
+          TMATE: ${{ inputs.tmate }}
         run: >-
           python3 dev/plan_matrix.py plan
           --event "$EVENT"
@@ -77,6 +86,7 @@ jobs:
           --julia "$JULIA_VERSION"
           --threads "$THREADS"
           --suite "$SUITE"
+          --tmate "$TMATE"
           --github-output "$GITHUB_OUTPUT"
           --summary "$GITHUB_STEP_SUMMARY"
       - name: Prepare Python quality tools
@@ -188,7 +198,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.matrix.outputs.cells) }}
-    timeout-minutes: 20
+    # The job that holds a debugging session gets the time to use it.
+    timeout-minutes: ${{ matrix.tmate == 'off' && 20 || 50 }}
     env:
       TMPDIR: /tmp
       JULIA_TEST_VERBOSE: 'true'
@@ -248,6 +259,20 @@ jobs:
           python3 dev/check-matrix.py prepare "$MATRIX_STAGE" \
             --threads '${{ matrix.threads }}' \
             2>&1 | tee "$MATRIX_STAGE/logs/preparation.log"
+      # A debugging session is for a dispatch, and the plan gives it to exactly
+      # one job. It is limited to the person who started the run, who needs an
+      # SSH key on their GitHub profile, and it is closed after the step's
+      # limit. The work clock restarts after it, so the checks keep their time.
+      - name: Debug session before the checks
+        if: github.event_name == 'workflow_dispatch' && matrix.tmate == 'before-tests'
+        uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3.24
+        timeout-minutes: 30
+        continue-on-error: true
+        with:
+          limit-access-to-actor: true
+      - name: Restart the work clock after the session
+        if: matrix.tmate == 'before-tests'
+        run: echo "MATRIX_JOB_DEADLINE=$(( $(date +%s) + 1200 ))" >> "$GITHUB_ENV"
       - name: Check prepared cell offline
         env:
           THREADS: ${{ matrix.threads }}
@@ -286,6 +311,12 @@ jobs:
           if-no-files-found: warn
           path: ${{ env.MATRIX_STAGE }}/artifacts/
           retention-days: 7
+      - name: Debug session after a failure
+        if: failure() && github.event_name == 'workflow_dispatch' && matrix.tmate == 'on-failure'
+        uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3.24
+        timeout-minutes: 30
+        with:
+          limit-access-to-actor: true
 
   # A lane the plan left out of scope must be skipped and a lane it planned
   # must succeed. Accepting a skip for a planned lane would let a failure that
