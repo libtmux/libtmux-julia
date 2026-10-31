@@ -499,6 +499,15 @@ def workflow_problems(text: str) -> list[str]:
             f"tmux {tmux} belongs in the table, not the workflow",
         )
     problems += debug_session_problems(jobs)
+    group = (
+        "  group: julia-${{ github.workflow }}-${{ github.ref }}"
+        "${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}\n"
+    )
+    need(group in head, "concurrency: add github.run_id to a dispatch run's group")
+    need(
+        "  cancel-in-progress: true\n" in head,
+        "concurrency: a superseded push must still be cancelled",
+    )
     return problems
 
 
@@ -902,6 +911,21 @@ WORKFLOW_BREAKS = (
     ),
     ("      suite:\n", "      shell:\n", "missing the suite input"),
     ("      tmate:\n", "      debug:\n", "missing the tmate input"),
+    (
+        "${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}",
+        "",
+        "add github.run_id to a dispatch run's group",
+    ),
+    (
+        "${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}",
+        "-${{ github.run_id }}",
+        "add github.run_id to a dispatch run's group",
+    ),
+    (
+        "  cancel-in-progress: true\n",
+        "  cancel-in-progress: false\n",
+        "a superseded push must still be cancelled",
+    ),
     (
         "action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3.24",
         "action-tmate@v3.24 # v3.24",

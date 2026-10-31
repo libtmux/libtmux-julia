@@ -48,7 +48,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: julia-${{ github.workflow }}-${{ github.ref }}
+  # A dispatch is a request for that run, so another dispatch on the same ref
+  # does not cancel it and it does not cancel the ref's push run.
+  group: julia-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:
