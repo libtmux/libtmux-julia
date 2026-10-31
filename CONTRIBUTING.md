@@ -27,6 +27,59 @@ tests require tmux on `PATH`; `LIBTMUX_TEST_TMUX` selects another executable.
 Keep temporary paths short enough for a Unix socket. Fixtures clear inherited
 tmux variables, own a unique socket, and never use the default server.
 
+## Test sandbox
+
+A tmux client that names no socket follows an inherited `TMUX` to the server
+its caller is inside, and otherwise connects to the default socket under
+`TMUX_TMPDIR`. Every test runner therefore enters a sandbox first. It removes
+`TMUX`, `TMUX_PANE` and every `LIBTMUX_SOCKET*` variable, and points
+`TMUX_TMPDIR` at a private directory under `TMPDIR`, or under `/tmp` when
+`TMPDIR` is too long. Only its owner can open the directory.
+
+[`dev/test-sandbox.jl`](dev/test-sandbox.jl) makes the sandbox. The core,
+workspace and MCP runners reach it through `dev/test-diagnostics.jl`, which
+each includes on its first line. The doc-example checker, the benchmark
+drivers and `packages/LibTmuxWorkspace/dev/cli_latency.jl` include
+`dev/test-sandbox.jl` and call `TestSandbox.enter_or_refuse!()` before they
+start tmux. A new runner or probe that can start tmux does the same, or runs
+under `dev/check-matrix.py`, which gives every phase its own sandbox.
+
+A child started with a replaced environment, through `env=` or `setenv`, sees
+only that environment. It would lose `TMUX_TMPDIR`, and a client that names no
+socket would reach the developer's default server. Splat
+`TestSandbox.child_entries()` into every such dictionary that can start tmux.
+An example cannot load the sandbox, so it passes `TMUX_TMPDIR` on from its
+caller. `test/sandbox.jl` scans the Julia files under `test`, `examples`,
+`benchmark`, `dev` and `packages` for a dictionary keyed by `"PATH"` that has
+neither.
+
+The runner exits with status 2 before any test when no directory is short
+enough for a socket path, which is 60 bytes here. Set `TMPDIR` to a shorter
+path. After each test file, and again before the runner reports, it checks that
+the sandbox still holds and looks for sockets anywhere below it. The socket
+`tmux-<uid>/default` means a client started without `-S` or `-L`; any other
+socket, under `tmux-<uid>` or elsewhere, means a test left a server on one of
+its own. The runner stops each server with `tmux -S <path> kill-server`,
+connects to see that nothing answers, removes the file and fails the file or
+the run, naming the path below the sandbox. A server too busy to accept still
+answers. A server that survives `kill-server` keeps the directory: the process
+that made it deletes the directory only when nothing answers there, and fails
+the run either way. The matrix applies the same sweep and fails the cell.
+Findings name variables and sockets, never values.
+
+The README runner keeps its own directory under `/tmp` and removes
+`LIBTMUX_SOCKET*` from its commands. It stops the server on any socket below
+that directory, keeps the directory while one still answers, and then fails.
+Fixtures keep their own socket roots.
+
+`test/sandbox.jl` shows, with a recording tmux and decoy variables, that the
+runner hides every selector from a client and that each check can fail.
+`test/sandbox_client.jl` runs a tmux client with no socket flag inside the
+sandbox, and under a fixture's replaced environment, and requires its
+connection error to name `$TMUX_TMPDIR/tmux-<uid>/default`.
+`test/sandbox_sweep.jl` starts real servers on a custom socket, on the default
+socket and on a stopped process, and checks what the sweep does with each.
+
 Prepare toolchains and package dependencies before timed test loops. Report
 preparation separately; include process startup and fixture setup/cleanup in
 each check's whole-command time.
