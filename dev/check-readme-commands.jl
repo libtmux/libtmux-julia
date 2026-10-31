@@ -650,15 +650,23 @@ function sandbox_create()
     end
     LibTmuxMCP.install_cli(joinpath(root, "bin"))
     LibTmuxWorkspace.install_cli(joinpath(root, "bin"))
-    environment = Dict{String,String}(ENV)
-    delete!(environment, "TMUX")
-    delete!(environment, "TMUX_PANE")
+    ReadmeSandbox(root, sandbox_environment(ENV, root), joinpath(root, "tool", "tmux"))
+end
+
+# Variables that select a server are removed so that a socket exported in the
+# caller's shell cannot override the runner's own TMUX_TMPDIR.
+function sandbox_environment(parent, root)
+    environment = Dict{String,String}(parent)
+    for name in collect(keys(environment))
+        (name in ("TMUX", "TMUX_PANE") || startswith(name, "LIBTMUX_SOCKET")) &&
+            delete!(environment, name)
+    end
     environment["HOME"] = joinpath(root, "home")
     environment["TMUX_TMPDIR"] = joinpath(root, "t")
     environment["SHELL"] = "/bin/sh"
     environment["PATH"] =
-        join([joinpath(root, "tool"), joinpath(root, "bin"), ENV["PATH"]], ':')
-    ReadmeSandbox(root, environment, joinpath(root, "tool", "tmux"))
+        join([joinpath(root, "tool"), joinpath(root, "bin"), parent["PATH"]], ':')
+    environment
 end
 
 function sandbox_sockets(box::ReadmeSandbox)
@@ -1316,6 +1324,21 @@ function self_test()
         structure_problems("## Quick start\n\n## What it leaves out\n", "t.md"),
         "Support and status",
     )
+
+    decoys = Dict(
+        "TMUX" => "/decoy,1,0",
+        "TMUX_PANE" => "%9",
+        "LIBTMUX_SOCKET" => "decoy",
+        "LIBTMUX_SOCKET_PATH" => "/decoy",
+        "LIBTMUX_TEST_TMUX" => "tmux",
+        "TMUX_TMPDIR" => "/decoy",
+        "PATH" => "/usr/bin",
+    )
+    box = sandbox_environment(decoys, "/sandbox-root")
+    @assert !any(name -> name in keys(box), ("TMUX", "TMUX_PANE", "LIBTMUX_SOCKET"))
+    @assert !haskey(box, "LIBTMUX_SOCKET_PATH")
+    @assert box["TMUX_TMPDIR"] == "/sandbox-root/t" && box["LIBTMUX_TEST_TMUX"] == "tmux"
+    @assert box["PATH"] == "/sandbox-root/tool:/sandbox-root/bin:/usr/bin"
 
     step = ReadmeStep("x", ReadmeFence("console", "\$ x\n", 1, nothing), "valid\n")
     @assert output_problem("x", "valid\n", "valid\n") === nothing
