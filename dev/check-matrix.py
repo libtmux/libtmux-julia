@@ -30,6 +30,17 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
+from plan_matrix import (
+    MINIMUM_TMUX,
+    REJECTED_TMUX,
+    SUITES,
+    SUPPORTED_TMUX,
+    check_ref,
+    qa_cells,
+    rejection_cells,
+    split_cells,
+)
+
 ROOT = Path(__file__).resolve().parent.parent
 PINNED_TOOLS = {
     "Aqua": "0.8.18",
@@ -59,7 +70,6 @@ DELIVERY_PHASES = frozenset(
         "api-export-check",
     )
 )
-SUITES = ("runtime", "delivery")
 TMUX_SHA256 = {
     "3.0a": "4ad1df28b4afa969e59c08061b45082fdc49ff512f30fc8e43217d7b0e5f8db9",
     "3.1c": "918f7220447bef33a1902d4faff05317afd9db4ae1c9971bef5c787ac6c88386",
@@ -77,33 +87,7 @@ TMUX_SHA256 = {
 }
 
 
-# Releases below the supported floor. Their cells assert refusal without effect
-# and stay outside the supported matrix.
-REJECTED_TMUX = ("3.0a", "3.1c", "3.2a", "3.3")
-# Releases whose daemon answers a current client with a protocol mismatch or a
-# usage error; their cells run the real-build refusal test in place of the
-# owned-daemon rejection suite.
-PRE_PROBE_TMUX = ("3.0a", "3.1c")
-MINIMUM_TMUX = "3.3a"
-# Supported releases between the floor and tmux 3.7c; 3.7 exactly refuses names
-# with ':' or '.', and 3.7a restores them.
-INTERMEDIATE_TMUX = ("3.4", "3.5a", "3.6b", "3.7", "3.7a", "3.7b")
-MINIMUM_JULIA = "1.13.1"
 HARD_WORK_SECONDS = 15 * 60
-
-
-class QaCell(TypedDict):
-    label: str
-    os: str
-    runner: str
-    arch: str
-    julia: str
-    tmux: str
-    threads: int
-    suites: tuple[str, ...]
-    status: str
-    suite: NotRequired[str]
-    job_label: NotRequired[str]
 
 
 class CleanupReceipt(TypedDict):
@@ -175,6 +159,76 @@ def build_tmux(args: argparse.Namespace) -> None:
     print(binary)
 
 
+def tmux_repository() -> str:
+    return os.environ.get("LIBTMUX_TMUX_REPOSITORY", "https://github.com/tmux/tmux.git")
+
+
+def resolve_tmux_ref(ref: str) -> str:
+    """Name the commit that a tag, a branch or a full commit of tmux points at.
+
+    A tag is peeled to its commit and wins over a branch of the same name, as it
+    does for a clone.
+    """
+    check_ref(ref)
+    if re.fullmatch(r"[0-9a-f]{40}", ref):
+        return ref
+    names = (f"refs/tags/{ref}^{{}}", f"refs/tags/{ref}", f"refs/heads/{ref}")
+    listing = subprocess.check_output(
+        ["git", "ls-remote", tmux_repository(), *names], text=True
+    )
+    found = {
+        name: commit
+        for commit, _, name in (line.partition("\t") for line in listing.splitlines())
+    }
+    for name in names:
+        if re.fullmatch(r"[0-9a-f]{40}", found.get(name, "")):
+            return found[name]
+    raise ValueError(f"{ref} is not a tag, a branch or a full commit of tmux")
+
+
+def build_tmux_ref(args: argparse.Namespace) -> None:
+    """Build tmux from source at the commit a ref names.
+
+    Table releases are built from their official tarballs and checked against
+    pinned digests. A ref has neither, so it is fetched by commit and its built
+    version is reported, not compared with a release.
+    """
+    commit = resolve_tmux_ref(args.ref)
+    stage = checked_stage(args.stage, create=True)
+    target = stage / "tmux" / f"ref-{commit}"
+    binary = target / "bin" / "tmux"
+    if not binary.is_file():
+        source = target / "source"
+        source.mkdir(parents=True, exist_ok=True)
+        git = ["git", "-C", str(source)]
+        subprocess.run([*git, "init", "--quiet"], check=True)
+        subprocess.run(
+            [*git, "fetch", "--quiet", "--depth", "1", tmux_repository(), commit],
+            check=True,
+        )
+        subprocess.run(
+            [*git, "checkout", "--quiet", "--detach", "FETCH_HEAD"], check=True
+        )
+        if (
+            subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+            != commit
+        ):
+            raise ValueError("tmux source is not at the requested commit")
+        for command in (
+            ["sh", "autogen.sh"],
+            tmux_configure_command(target, commit, platform.system()),
+            ["make", "-j2"],
+            ["make", "install"],
+        ):
+            subprocess.run(command, cwd=source, check=True, stdout=sys.stderr)
+    observed = subprocess.check_output([str(binary), "-V"], text=True).strip()
+    if not observed.startswith("tmux "):
+        raise ValueError("built tmux reports no version")
+    print(f"commit={commit}")
+    print(f"binary={binary}")
+    print(f"version={observed.removeprefix('tmux ')}")
+
+
 SKIPPED_PATTERN = re.compile(r"(?:^|\s)SKIPPED\b.*|Warning: .*\bskipped\b.*")
 
 
@@ -205,58 +259,6 @@ def report_skipped(result: dict[str, Any]) -> None:
         with Path(summary).open("a", encoding="utf-8") as output:
             output.write("### Skipped checks\n\n")
             output.writelines(f"- `{name}`: {line}\n" for name, line in skipped)
-
-
-def qa_cells() -> list[QaCell]:
-    cells: list[QaCell] = []
-
-    def add(
-        os_name: str,
-        runner: str,
-        arch: str,
-        julia: str,
-        tmux: str,
-        threads: int = 1,
-        suites: tuple[str, ...] = SUITES,
-    ) -> None:
-        label = f"{os_name}-{arch}-julia{julia}-tmux{tmux}-t{threads}"
-        cells.append(
-            {
-                "label": label,
-                "os": os_name,
-                "runner": runner,
-                "arch": arch,
-                "julia": julia,
-                "tmux": tmux,
-                "threads": threads,
-                "suites": tuple(suites),
-                "status": "NOT RUN",
-            }
-        )
-
-    add("Linux", "ubuntu-24.04", "x86_64", MINIMUM_JULIA, MINIMUM_TMUX)
-    # Releases between the floor and the current one differ in what they accept
-    # and in how they fail, so each runs the runtime suite; the delivery suite
-    # does not depend on the release and runs at the floor and the newest.
-    for tmux in INTERMEDIATE_TMUX:
-        add("Linux", "ubuntu-24.04", "x86_64", MINIMUM_JULIA, tmux, 1, ("runtime",))
-    add("Linux", "ubuntu-24.04", "x86_64", MINIMUM_JULIA, "3.7c")
-    add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.7c", 4)
-    add("Linux", "ubuntu-24.04", "x86_64", "1.13.1", "3.8", 1)
-    return cells
-
-
-def rejection_cells() -> list[dict[str, str]]:
-    return [
-        {
-            "label": f"Linux-x86_64-julia{MINIMUM_JULIA}-tmux{tmux}-rejection",
-            "tmux": tmux,
-            "job_label": f"Reject tmux {tmux}",
-            "real_old": "true" if tmux in PRE_PROBE_TMUX else "false",
-            "suite": "old-daemon" if tmux in PRE_PROBE_TMUX else "rejection",
-        }
-        for tmux in REJECTED_TMUX
-    ]
 
 
 def source_digest() -> str:
@@ -1175,6 +1177,99 @@ def artifacts(stage: str | Path) -> int:
     return 1 if incomplete else 0
 
 
+STAND_IN_AUTOGEN = """\
+cat > configure <<'CONFIGURE'
+#!/bin/sh
+case "$1" in --prefix=*) prefix="${1#--prefix=}" ;; esac
+printf 'PREFIX = %s\\n' "$prefix" > Makefile
+cat >> Makefile <<'MAKEFILE'
+all:
+\t:
+install:
+\tmkdir -p $(PREFIX)/bin
+\tprintf '#!/bin/sh\\necho "tmux %s"\\n' "$$(cat VERSION)" > $(PREFIX)/bin/tmux
+\tchmod +x $(PREFIX)/bin/tmux
+MAKEFILE
+CONFIGURE
+chmod +x configure
+"""
+
+
+def check_tmux_ref(base: Path) -> None:
+    """Resolve and build refs against a local stand-in for the tmux repository."""
+    from contextlib import redirect_stdout
+    from io import StringIO
+    from unittest import mock
+
+    repository = base / "tmux-stand-in"
+    repository.mkdir()
+    identity = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.invalid",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.invalid",
+    }
+
+    def git(*arguments: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(repository), *arguments],
+            text=True,
+            env={**os.environ, **identity},
+        ).strip()
+
+    def commit(version: str) -> str:
+        (repository / "VERSION").write_text(version + "\n")
+        (repository / "autogen.sh").write_text(STAND_IN_AUTOGEN)
+        git("add", "-A")
+        git("commit", "--quiet", "-m", f"tmux {version}")
+        return git("rev-parse", "HEAD")
+
+    git("init", "--quiet", "-b", "master")
+    release = commit("3.8")
+    git("tag", "3.8")
+    git("checkout", "--quiet", "-b", "topic")
+    annotated = commit("9.1")
+    git("tag", "-a", "-m", "annotated", "9.1")
+    tip = commit("9.2")
+
+    def refusal(ref: str) -> str:
+        try:
+            resolve_tmux_ref(ref)
+        except ValueError as error:
+            return str(error)
+        return ""
+
+    with mock.patch.dict(os.environ, {"LIBTMUX_TMUX_REPOSITORY": str(repository)}):
+        assert resolve_tmux_ref("3.8") == release
+        assert resolve_tmux_ref("9.1") == annotated != git("rev-parse", "9.1")
+        assert resolve_tmux_ref("topic") == tip
+        assert resolve_tmux_ref(tip) == tip
+        git("branch", "3.8", tip)
+        assert resolve_tmux_ref("3.8") == release, "a tag wins over a branch"
+        for bad in ("--upload-pack=x", "a..b", "topic.lock", "$(id)", "deadbeef"):
+            assert "tmux-ref item" in refusal(bad), bad
+        assert "is not a tag, a branch" in refusal("no-such")
+
+        stage = base / "ref-stage"
+        arguments = argparse.Namespace(stage=str(stage), ref="topic")
+        for _ in range(2):
+            printed = StringIO()
+            with redirect_stdout(printed):
+                build_tmux_ref(arguments)
+            binary = stage / "tmux" / f"ref-{tip}" / "bin" / "tmux"
+            assert dict(
+                line.split("=", 1) for line in printed.getvalue().splitlines()
+            ) == {
+                "commit": tip,
+                "binary": str(binary),
+                "version": "9.2",
+            }
+        # Preparation accepts only an empty or an owned stage, so a ref build has
+        # to leave the owner's marker.
+        assert (stage / ".libtmux-julia-matrix").is_file()
+    print("PASS tmux refs resolve to commits and build at them")
+
+
 def self_test(julia: str | None = None) -> None:
     enable_subreaper()
     if julia:
@@ -1366,6 +1461,8 @@ println("PASS admitted version arguments construct real Pkg specifications")
             "SKIPPED README.md fence 3: control acquisition needs tmux 3.7",
         ]
         assert skipped_checks(base / "absent.log") == []
+        # The plan carries its own checks; these hold the full scope to the cells
+        # it has always had, and to the table and documents the workflow relies on.
         cells = qa_cells()
         assert [
             (cell["os"], cell["arch"], cell["julia"], cell["tmux"], cell["threads"])
@@ -1391,8 +1488,25 @@ println("PASS admitted version arguments construct real Pkg specifications")
         jobs = [(cell["label"], suite) for cell in cells for suite in cell["suites"]]
         assert len(jobs) == len(set(jobs))
         assert {cell["tmux"] for cell in cells} <= set(TMUX_SHA256)
+        assert set(TMUX_SHA256) == {*SUPPORTED_TMUX, *REJECTED_TMUX}
         assert len({cell["label"] for cell in cells}) == len(cells)
         assert all(cell["status"] == "NOT RUN" for cell in cells)
+        # A push and a pull request run the oldest and newest release, and the
+        # newest release at four threads.
+        newest = SUPPORTED_TMUX[-1]
+        assert {cell["tmux"] for cell in qa_cells("edges")} == {MINIMUM_TMUX, newest}
+        assert [cell["tmux"] for cell in cells if cell["docs_artifact"] == "true"] == [
+            newest
+        ]
+        for name in ("docs/src/compatibility.md", "CONTRIBUTING.md"):
+            text = (ROOT / name).read_text()
+            unnamed = [
+                tmux
+                for tmux in (*SUPPORTED_TMUX, *REJECTED_TMUX)
+                if not re.search(rf"(?<![\w.]){re.escape(tmux)}(?![\w])", text)
+            ]
+            assert not unnamed, f"{name} does not name tmux {unnamed}"
+        check_tmux_ref(base)
         rejected = rejection_cells()
         assert [cell["tmux"] for cell in rejected] == ["3.0a", "3.1c", "3.2a", "3.3"]
         assert [cell["tmux"] for cell in rejected if cell["real_old"] == "true"] == [
@@ -1595,6 +1709,16 @@ def main() -> int:
     )
     build.add_argument("stage")
     build.add_argument("version", choices=tuple(TMUX_SHA256))
+    resolve = sub.add_parser(
+        "resolve-tmux", help="print the commit a tmux tag, branch or commit names"
+    )
+    resolve.add_argument("ref")
+    build_ref = sub.add_parser(
+        "build-tmux-ref",
+        help="setup only: build tmux from source at a tag, branch or commit",
+    )
+    build_ref.add_argument("stage")
+    build_ref.add_argument("ref")
     export = sub.add_parser("artifacts", help="sanitize logs and results for upload")
     export.add_argument("stage")
     preparation = sub.add_parser("prepare")
@@ -1619,16 +1743,16 @@ def main() -> int:
         elif args.command == "matrix":
             cells = qa_cells()
             if args.split:
-                cells = [
-                    {**cell, "suite": suite, "job_label": f"{cell['label']}-{suite}"}
-                    for cell in cells
-                    for suite in cell["suites"]
-                ]
+                cells = split_cells(cells)
             print(json.dumps({"include": cells}))
         elif args.command == "self-test":
             self_test(args.julia)
         elif args.command == "build-tmux":
             build_tmux(args)
+        elif args.command == "resolve-tmux":
+            print(f"commit={resolve_tmux_ref(args.ref)}")
+        elif args.command == "build-tmux-ref":
+            build_tmux_ref(args)
         elif args.command == "prepare":
             prepare(args)
         elif args.command == "artifacts":
