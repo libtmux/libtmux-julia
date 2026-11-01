@@ -46,79 +46,121 @@ each takes a `Server` as its first argument, and most also have a method for a
 `cancel` keywords, where `cancel` takes a [`CancellationToken`](@ref). They fall
 into a few groups:
 
-**Connecting.** `Server` itself only describes an endpoint. [`from_env`](@ref)
-asks for the one named by `TMUX` when this process is inside tmux, and selects
-the `default` socket when it is not. [`open_server`](@ref) starts a private daemon
-you own and returns an [`OwnedServer`](@ref); [`with_server`](@ref) runs a
-function against one and closes it afterwards. [`open_control`](@ref) attaches a
-[`ControlConnection`](@ref) to one session, which [`observe_output`](@ref),
-[`notifications`](@ref), and [`subscribe_format`](@ref) need.
+**Connecting.** `Server` itself only describes an endpoint. Ask for the endpoint
+named by `TMUX` when this process is inside tmux, or for the `default` socket
+when it is not. Start a private daemon you own and get back an
+[`OwnedServer`](@ref), or run a function against one and close it afterwards.
+Attach a [`ControlConnection`](@ref) to one session; the output, notification,
+and format-subscription functions need that connection.
 
-**Finding one thing.** Operations act on references, such as
-[`SessionRef`](@ref), [`WindowRef`](@ref), [`PaneRef`](@ref), and
-[`ClientRef`](@ref), each tied to the daemon it came from.
-[`new_session`](@ref), [`new_window`](@ref), and [`split_window`](@ref) return
-the reference to what they create, and a captured session, window, pane, or
-client carries its own as `.ref`.
-A `Server` has no lookup by name: take a [`snapshot`](@ref) and give
-[`onlymatch`](@ref) a criterion, such as [`SessionWhere`](@ref), and one of the
-snapshot's collections. It raises [`NoMatchError`](@ref) or
+- The endpoint named in the environment: [`from_env`](@ref)
+- Start a private daemon: [`open_server`](@ref)
+- Run a function, then close it: [`with_server`](@ref)
+- Attach to one session: [`open_control`](@ref)
+- Need a control connection: [`observe_output`](@ref), [`notifications`](@ref),
+  [`subscribe_format`](@ref)
+
+**Finding one thing.** Operations act on references, each tied to the daemon it
+came from. Creating a session, window, or pane returns the reference to what it
+creates, and a captured session, window, pane, or client carries its own as
+`.ref`. A `Server` has no lookup by name: take a snapshot and give the matching
+function a criterion, such as [`SessionWhere`](@ref), and one of the snapshot's
+collections. The matching function raises [`NoMatchError`](@ref) or
 [`MultipleMatchesError`](@ref) instead of choosing for you.
 
-**Listing everything.** [`snapshot`](@ref) captures every session, window,
-pane, and attached client into a [`Snapshot`](@ref), and raises when tmux does
-not answer, so an outage never reads as an empty server. [`sessions`](@ref),
-[`windows`](@ref), [`panes`](@ref), [`clients`](@ref), [`windowlinks`](@ref),
-and [`paneoccurrences`](@ref) list what a snapshot holds without contacting tmux
-again. A snapshot is a point-in-time copy that never refreshes; take another to
-see later changes.
+- References: [`SessionRef`](@ref), [`WindowRef`](@ref), [`PaneRef`](@ref),
+  [`ClientRef`](@ref)
+- Return a reference: [`new_session`](@ref), [`new_window`](@ref),
+  [`split_window`](@ref)
+- Capture: [`snapshot`](@ref)
+- Match exactly one: [`onlymatch`](@ref)
 
-**Querying things and getting around.** [`SessionWhere`](@ref),
-[`WindowWhere`](@ref), [`PaneWhere`](@ref), [`ClientWhere`](@ref), and
-[`WindowLinkWhere`](@ref) are [`Criterion`](@ref) values that match captured
-records with no I/O. Pass one to `filter`, and the [`Selection`](@ref) it
-returns keeps its snapshot. To move between levels, go down with
-[`windows`](@ref) on a session and [`panes`](@ref) on a window, and up with
-[`window`](@ref) on a pane or window link and [`session`](@ref) on a client or
-window link. [`snapshotof`](@ref) returns the snapshot a record came from.
+**Listing everything.** Take a snapshot to capture every session, window, pane,
+and attached client into a [`Snapshot`](@ref); the call raises when tmux does
+not answer, so an outage never reads as an empty server. Listing what a snapshot
+holds does not contact tmux again. A snapshot is a point-in-time copy that never
+refreshes; take another to see later changes.
 
-**Changing things.** [`new_session`](@ref), [`new_window`](@ref), and
-[`split_window`](@ref) create one and return its reference;
-[`kill_session`](@ref), [`kill_window`](@ref), and [`kill_pane`](@ref) remove
-one. [`rename_session`](@ref), [`rename_window`](@ref),
-[`resize_window`](@ref), [`resize_pane`](@ref), [`respawn_window`](@ref),
-[`respawn_pane`](@ref), [`select_window`](@ref), [`select_pane`](@ref),
-[`select_layout`](@ref), [`swap_window`](@ref), [`swap_pane`](@ref),
-[`move_window`](@ref), [`move_pane`](@ref), [`link_window`](@ref), and
-[`unlink_window`](@ref) rearrange what is there. Each acts on tmux when called
-and returns a [`CommandResult`](@ref) unless it creates something.
+- Capture: [`snapshot`](@ref)
+- List what it holds: [`sessions`](@ref), [`windows`](@ref), [`panes`](@ref),
+  [`clients`](@ref), [`windowlinks`](@ref), [`paneoccurrences`](@ref)
 
-**Options and hooks.** [`get_option`](@ref), [`set_option`](@ref), and
-[`unset_option`](@ref) work at a scope such as `:server`, `:global_session`, or
-a session, window, or pane reference. [`get_hook`](@ref), [`set_hook`](@ref),
-and [`unset_hook`](@ref) do the same for hooks, which have no `:server` scope.
-The environment has [`get_environment`](@ref), [`set_environment`](@ref),
-[`unset_environment`](@ref), which deletes an entry, and
-[`remove_environment`](@ref), which marks a variable for removal from new
-processes.
+**Querying things and getting around.** Criteria are [`Criterion`](@ref) values
+that match captured records with no I/O. Pass one to `filter`, and the
+[`Selection`](@ref) it returns keeps its snapshot. To move between levels, go
+down from a session or a window and up from a pane, a window link, or a client.
+A record can be asked for the snapshot it came from.
 
-**Everything else tmux keeps.** For paste buffers, [`load_buffer`](@ref)
-returns a reference that [`delete_buffer`](@ref) releases, and
-[`save_buffer`](@ref) reads one back. [`paste_text`](@ref) and
-[`paste_bytes`](@ref) paste into a pane through a temporary buffer.
-[`send_keys`](@ref) sends keys to a pane, [`capture_pane`](@ref) returns its
-screen as text, and [`capture_bytes`](@ref) returns it as bytes. For formats,
-[`read_formats`](@ref) reads typed fields, [`render_format`](@ref) expands a raw
-expression, and [`format_hints`](@ref) lists candidate names.
+- Criteria: [`SessionWhere`](@ref), [`WindowWhere`](@ref), [`PaneWhere`](@ref),
+  [`ClientWhere`](@ref), [`WindowLinkWhere`](@ref)
+- Windows of a session, down: [`windows`](@ref)
+- Panes of a window, down: [`panes`](@ref)
+- Window of a pane or window link, up: [`window`](@ref)
+- Session of a client or window link, up: [`session`](@ref)
+- Snapshot a record came from: [`snapshotof`](@ref)
+
+**Changing things.** Creating a session, window, or pane returns its reference,
+and killing one removes it. The rest rearrange what is there: renaming,
+resizing, respawning, selecting, swapping, moving, linking, and unlinking. Each
+function acts on tmux when called and returns a [`CommandResult`](@ref) unless
+it creates something.
+
+- Create: [`new_session`](@ref), [`new_window`](@ref), [`split_window`](@ref)
+- Remove: [`kill_session`](@ref), [`kill_window`](@ref), [`kill_pane`](@ref)
+- Rename: [`rename_session`](@ref), [`rename_window`](@ref)
+- Resize: [`resize_window`](@ref), [`resize_pane`](@ref)
+- Respawn: [`respawn_window`](@ref), [`respawn_pane`](@ref)
+- Select: [`select_window`](@ref), [`select_pane`](@ref),
+  [`select_layout`](@ref)
+- Swap: [`swap_window`](@ref), [`swap_pane`](@ref)
+- Move: [`move_window`](@ref), [`move_pane`](@ref)
+- Link and unlink: [`link_window`](@ref), [`unlink_window`](@ref)
+
+**Options and hooks.** Getting, setting, and unsetting options work at a scope
+such as `:server`, `:global_session`, or a session, window, or pane reference.
+The hook functions work the same way, but hooks have no `:server` scope. The
+environment can be read, set, unset, and removed: unsetting deletes an entry,
+and removing marks a variable for removal from new processes.
+
+- Options: [`get_option`](@ref), [`set_option`](@ref), [`unset_option`](@ref)
+- Hooks: [`get_hook`](@ref), [`set_hook`](@ref), [`unset_hook`](@ref)
+- Read and set the environment: [`get_environment`](@ref),
+  [`set_environment`](@ref)
+- Delete an entry: [`unset_environment`](@ref)
+- Remove from new processes: [`remove_environment`](@ref)
+
+**Everything else tmux keeps.** For paste buffers, the load function returns a
+reference that the delete function releases, and the save function reads one
+back. Paste text or bytes into a pane; each goes through a temporary buffer.
+Send keys to a pane, and read its screen back as text or as bytes. For formats,
+one function reads typed fields, one expands a raw expression, and one lists
+candidate names.
+
+- Load a buffer: [`load_buffer`](@ref)
+- Release it: [`delete_buffer`](@ref)
+- Read one back: [`save_buffer`](@ref)
+- Paste: [`paste_text`](@ref), [`paste_bytes`](@ref)
+- Send keys to a pane: [`send_keys`](@ref)
+- Screen as text: [`capture_pane`](@ref)
+- Screen as bytes: [`capture_bytes`](@ref)
+- Read typed fields: [`read_formats`](@ref)
+- Expand a raw expression: [`render_format`](@ref)
+- List candidate names: [`format_hints`](@ref)
 
 **Things that need a terminal.** Popups, menus, and prompts, which draw on an
-attached client's terminal, have no function here. [`switch_client`](@ref) and
-[`detach_client`](@ref) act on a client that is already attached.
+attached client's terminal, have no function here. Switching and detaching act
+on a client that is already attached.
 
-Anything tmux can do that is not here is reachable through
-[`run_command`](@ref), which runs one tmux command with literal arguments, or
-[`run_group`](@ref) and [`run_batch`](@ref), which run several
+- Switch a client: [`switch_client`](@ref)
+- Detach a client: [`detach_client`](@ref)
+
+**Running a command.** Anything tmux can do that is not here is reachable by
+running a tmux command with literal arguments, or by running several
 [`TmuxCommand`](@ref) values as one semicolon group or as independent commands.
+
+- One command with literal arguments: [`run_command`](@ref)
+- Several as one semicolon group: [`run_group`](@ref)
+- Several as independent commands: [`run_batch`](@ref)
 """
 struct Server
     socket_path::Union{Nothing,String}
