@@ -8,7 +8,9 @@ plan FILE          Expand supplied values and print an inert plan.
 load FILE          Apply detached; existing session names fail by default.
 freeze SESSION     Capture names, indices, paths, layout and focus.
 
---socket PATH | --socket-name NAME   Required for load/freeze.
+--socket PATH | --socket-name NAME   Select the tmux server for load/freeze.
+                                     Default: LIBTMUX_SOCKET_PATH, else
+                                     LIBTMUX_SOCKET, else tmux's own choice.
 --tmux EXECUTABLE                    Default: tmux.
 --output human|json|ndjson           Default: human.
 --env NAME=VALUE                     Explicit expansion value; repeatable.
@@ -141,8 +143,9 @@ function _cli_options(arguments)
     output = get(values, "--output", "human")
     output in ("human", "json", "ndjson") || throw(ArgumentError("invalid --output mode"))
     if command in ("load", "freeze")
-        haskey(values, "--socket") != haskey(values, "--socket-name") ||
-            throw(ArgumentError("supply exactly one --socket or --socket-name"))
+        haskey(values, "--socket") &&
+            haskey(values, "--socket-name") &&
+            throw(ArgumentError("supply at most one of --socket or --socket-name"))
     elseif any(haskey(values, k) for k in ("--socket", "--socket-name", "--tmux")) ||
            !isempty(flags)
         throw(ArgumentError("server and load options are not valid for this pure command"))
@@ -258,7 +261,7 @@ function _attach_cli(server, target)
     environment = Dict(k => v for (k, v) in ENV if !(k in ("TMUX", "TMUX_PANE")))
     # An interactive client is not fenced; check the version of the daemon it
     # will attach to.
-    LibTmux._check_daemon(server, environment; timeout=5.0)
+    LibTmux._check_daemon(server, LibTmux._client_environment(ENV, server); timeout=5.0)
     result = try
         run(setenv(ignorestatus(Cmd(argv)), environment))
     catch error
@@ -274,8 +277,10 @@ end
     main(args=ARGS; out=stdout, err=stderr) -> Int
 
 Run the installed CLI protocol. Pure commands need no server. `load` and `freeze`
-require one explicit socket selector; there is no default-server fallback.
-Only `--attach` opens an interactive client. Return a documented exit code.
+take at most one of `--socket` and `--socket-name`. With neither, the core's
+`Server` reads `LIBTMUX_SOCKET_PATH`, then `LIBTMUX_SOCKET`, and otherwise leaves
+the choice to tmux. Only `--attach` opens an interactive client. Return a
+documented exit code.
 The supplied streams remain borrowed and open; their writes must return promptly.
 The installed launcher separately owns bounded, cancellable stdout/stderr writes.
 """

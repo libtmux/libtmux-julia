@@ -276,6 +276,34 @@ end
     end
 end
 
+@testset "workspace load and freeze reach the server a variable names, and a flag beats it" begin
+    with_workspace_server() do fixture
+        server = LibTmux.Server(socket_path=fixture.socket, tmux=fixture.tmux)
+        path = joinpath(fixture.directory, "workspace.yaml")
+        write(path, "session_name: from-variable\nwindows:\n  - window_name: main\n")
+        common = ["--tmux", fixture.tmux, "--output", "json"]
+        withenv("LIBTMUX_SOCKET_PATH" => fixture.socket, "LIBTMUX_SOCKET" => nothing) do
+            # No flag: the variable chose the server.
+            out, err = IOBuffer(), IOBuffer()
+            code = main(["load", path, "--no-readiness", common...]; out, err)
+            @test code == 0 && JSON.parse(String(take!(out)))["status"] == "loaded"
+            @test [s.name for s in LibTmux.sessions(LibTmux.snapshot(server))] == ["from-variable"]
+            code = main(["freeze", "from-variable", common...]; out, err)
+            @test code == 0 && JSON.parse(String(take!(out)))["status"] == "frozen"
+            # A flag leaves the variable unread: nothing listens on this socket.
+            absent = joinpath(fixture.directory, "absent")
+            code =
+                main(["freeze", "from-variable", "--socket", absent, common...]; out, err)
+            @test code != 0 && JSON.parse(String(take!(out)))["status"] == "error"
+        end
+        withenv("LIBTMUX_SOCKET_PATH" => nothing, "LIBTMUX_SOCKET" => nothing) do
+            both = ["--socket", fixture.socket, "--socket-name", "x"]
+            out, err = IOBuffer(), IOBuffer()
+            @test main(["freeze", "from-variable", both..., common...]; out, err) == 2
+        end
+    end
+end
+
 if isdefined(Main, :include_test_file)
     Main.include_test_file(@__MODULE__, joinpath(@__DIR__, "cli_backpressure.jl"))
 else
