@@ -517,6 +517,67 @@ def workflow_problems(text: str) -> list[str]:
     return problems
 
 
+RAW_APT = re.compile(
+    r"(?:^|[;&|(!]\s*|\b(?:then|do|else)\s+)"
+    r"(?:(?:sudo(?:\s+-\S+)*|\w+=\S*)\s+)*(apt(?:-get)?)(?=\s|$)"
+)
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def run_scripts(text: str) -> list[tuple[int, str, str, str]]:
+    """List each step's run script as (line, job, step name, script), read as text."""
+    lines = text.splitlines()
+    found: list[tuple[int, str, str, str]] = []
+    job = ""
+    for number, line in enumerate(lines):
+        if match := re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line):
+            job = match.group(1)
+        key = re.match(r"^(\s*(?:- )?)run:\s*(.*)$", line)
+        if not key:
+            continue
+        column = len(key.group(1))
+        script = [key.group(2)] if key.group(2) not in ("|", ">", "|-", ">-") else []
+        rest = lines[number + 1 :]
+        for follower in rest:
+            if follower.strip() and len(follower) - len(follower.lstrip()) < column + 1:
+                break
+            script.append(follower.strip())
+        start = number
+        while start > 0 and not lines[start].startswith(" " * (column - 2) + "- "):
+            start -= 1
+        step = ""
+        for each in lines[start : number + 1]:
+            if name := re.match(rf"^\s{{{column - 2}}}(?:- |  )name:\s*(.*)$", each):
+                step = name.group(1).strip("'\"")
+        found.append((number + 1, job, step, "\n".join(script)))
+    return found
+
+
+def raw_apt_problems(name: str, text: str) -> list[str]:
+    """Find a run script that calls apt or apt-get outside dev/apt-get.sh."""
+    problems: list[str] = []
+    for number, job, step, script in run_scripts(text):
+        for each in script.splitlines():
+            code = each.strip()
+            if code.startswith("#"):
+                continue
+            if match := RAW_APT.search(code):
+                problems.append(
+                    f"{name}:{number}: job {job or '-'}, step {step or 'unnamed'}: "
+                    f"raw {match.group(1)} call; "
+                    "run it through dev/apt-get.sh"
+                )
+    return problems
+
+
+def ci_files() -> list[Path]:
+    """List every workflow and composite action the repository defines."""
+    return [
+        *sorted((ROOT / ".github" / "workflows").glob("*.yml")),
+        *sorted((ROOT / ".github" / "actions").glob("*/action.yml")),
+    ]
+
+
 TMATE = "mxschmitt/action-tmate"
 
 
@@ -1004,6 +1065,38 @@ def check_the_workflow_follows_the_plan() -> None:
         assert any(expected in problem for problem in found), (expected, found)
 
 
+SYNTHETIC_WORKFLOW = """\
+jobs:
+  build:
+    steps:
+      - name: Raw update
+        run: |
+          # sudo apt-get install ignored-comment
+          sudo apt-get update
+      - name: Wrapped update
+        run: ./dev/apt-get.sh update
+"""
+
+
+def check_apt_goes_through_the_wrapper() -> None:
+    wrapped = SYNTHETIC_WORKFLOW.replace(
+        "sudo apt-get update", "./dev/apt-get.sh update"
+    )
+    assert raw_apt_problems("w.yml", wrapped) == []
+    found = raw_apt_problems("w.yml", SYNTHETIC_WORKFLOW)
+    assert found == [
+        (
+            "w.yml:5: job build, step Raw update: raw apt-get call; "
+            "run it through dev/apt-get.sh"
+        )
+    ], found
+    inline = "jobs:\n  a:\n    steps:\n      - run: sudo -E apt install -y tmux\n"
+    assert any("raw apt call" in each for each in raw_apt_problems("w.yml", inline))
+    assert ci_files(), "no workflow found"
+    for path in ci_files():
+        assert raw_apt_problems(path.name, path.read_text(encoding="utf-8")) == []
+
+
 def check_the_gate_passes_what_the_plan_scheduled() -> None:
     assert check_needs(needs()) == []
     assert check_needs(needs(reject="success", planned=True)) == []
@@ -1058,6 +1151,7 @@ ALL_CHECKS: tuple[Check, ...] = (
     check_the_job_count_adds_up,
     check_the_matrix_is_never_empty,
     check_the_workflow_follows_the_plan,
+    check_apt_goes_through_the_wrapper,
     check_the_gate_passes_what_the_plan_scheduled,
     check_the_gate_needs_the_planning_job_and_the_checks,
     check_a_planned_lane_that_was_skipped_fails_the_gate,
@@ -1412,6 +1506,12 @@ DELIBERATE_BREAKS: tuple[tuple[str, str, Any, Check], ...] = (
         "workflow_problems",
         lambda text: [],
         check_the_workflow_follows_the_plan,
+    ),
+    (
+        "raw apt-get calls are accepted",
+        "raw_apt_problems",
+        lambda name, text: [],
+        check_apt_goes_through_the_wrapper,
     ),
     (
         "the gate ignores the refusal lane",
