@@ -9,11 +9,18 @@ reads `LIBTMUX_SOCKET_PATH` (tmux's `-S`), then `LIBTMUX_SOCKET` (`-L`), and
 with neither set it passes tmux no socket, so tmux picks the server: the one
 `TMUX` names inside tmux, otherwise its default socket. A socket named in the
 call leaves both variables unread, a blank variable counts as unset, and naming
-both `socket_path` and `socket_name` still raises. A command whose server names
-no socket keeps `TMUX` and `TMUX_PANE` in its environment so tmux can follow
-them, and a named socket still drops both. `from_env` is unchanged and remains
-how to ask for the `TMUX` socket. Code that relied on `Server()` raising now
-reaches the server tmux picks. (#64)
+both `socket_path` and `socket_name` still raises. A `LIBTMUX_SOCKET` that holds
+a slash raises, because it names a socket and not a path, and a relative
+`LIBTMUX_SOCKET_PATH` becomes absolute against the working directory. The
+variables are read from the new `env` keyword of `Server`, which is not the
+environment a tmux command gets, and the choice is kept in the value when the
+`Server` is built. A command whose server names no socket keeps `TMUX` and
+`TMUX_PANE` in its environment so tmux can follow them, which also means a raw
+command with no target acts on the caller's pane. A named socket still drops
+both. `from_env` is unchanged and remains how to ask for the `TMUX` socket. Code
+that relied on `Server()` raising now reaches the server tmux picks. A control
+connection from a server that names no socket now checks the release of the
+session's daemon, the one it attaches to. (#64)
 
 #### Tests run in a private tmux sandbox
 
