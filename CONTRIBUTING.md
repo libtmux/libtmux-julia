@@ -105,8 +105,18 @@ follow:
 $ set -a && . ./.env && set +a
 ```
 
-Use `LIBTMUX_SOCKET_PATH` instead to name a socket file. When both are set the
-path wins. The test runners ignore the file: the sandbox removes every
+`libtmux-workspace load` starts the server it needs, but `libtmux-mcp` and
+`libtmux-workspace freeze` only borrow a running one and exit with an error when
+nothing listens on the socket. Start the server that the file names before you
+run them:
+
+```console
+$ tmux -L libtmux-julia-dev -f /dev/null new-session -d
+```
+
+Use `LIBTMUX_SOCKET_PATH` instead to name a socket file, and start its server
+with `-S` and the same path. When both variables are set the path wins. The test
+runners ignore the file: the sandbox removes every
 `LIBTMUX_SOCKET*` variable before anything runs, and fixtures keep their own
 explicit sockets.
 
