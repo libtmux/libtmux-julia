@@ -541,7 +541,9 @@ If cleanup also fails, `CompositeException` preserves the primary error first.
 Arguments and individual environment entries are limited to a conservative
 14 KiB; the combined client environment is limited to 128 KiB. Oversized
 entries fail before submission instead of being silently omitted by tmux.
-Inherited `TMUX` and `TMUX_PANE` are always removed.
+Inherited `TMUX` and `TMUX_PANE` are removed, unless `server` names no socket:
+then tmux finds the server through them, as it does for any client that is given
+neither `-S` nor `-L`.
 """
 function run_command(
     server::Server,
@@ -561,7 +563,7 @@ function run_command(
             "command exceeds the conservative 14 KiB limit; use a buffer/input operation for large data",
         ),
     )
-    environment = _client_environment(env)
+    environment = _client_environment(env, server)
     cleanup = first(args) == "kill-server"
     result = checked = nothing
     for attempt = 1:2
@@ -623,11 +625,14 @@ function run_command(
     result
 end
 
-function _client_environment(env)
+# The environment a tmux child gets. `TMUX` and `TMUX_PANE` name the caller's own
+# server and pane, so they are dropped, unless the child has no socket flag: tmux
+# then finds its server through them.
+function _client_environment(env; inherit_tmux::Bool=false)
     environment = Dict{String,String}()
     bytes = 0
     for (key, value) in env
-        key in ("TMUX", "TMUX_PANE") && continue
+        !inherit_tmux && key in ("TMUX", "TMUX_PANE") && continue
         name, text = _argument(key), _argument(value)
         (isempty(name) || occursin('=', name)) &&
             throw(ArgumentError("environment names must be nonempty and contain no '='"))
@@ -643,3 +648,6 @@ function _client_environment(env)
     end
     environment
 end
+
+_client_environment(env, server::Server) =
+    _client_environment(env; inherit_tmux=isempty(_selector(server)))

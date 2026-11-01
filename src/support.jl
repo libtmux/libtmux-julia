@@ -74,10 +74,6 @@ function _require_supported(version::AbstractString)
     nothing
 end
 
-_selector(server::Server) =
-    server.socket_path === nothing ? ["-L", something(server.socket_name)] :
-    ["-S", server.socket_path]
-
 _version_marker() = "libtmux-version-" * replace(string(uuid4()), "-" => "")
 
 _stderr_lines(result::CommandResult) = [
@@ -299,7 +295,13 @@ end
 # Refuse an unsupported release before a caller announces any work. The result
 # is not remembered; the commands that follow check again.
 function _preflight(server::Server; cancel=nothing, timeout=nothing)
-    _check_version(server, _client_environment(ENV); cancel, timeout, started=time_ns())
+    _check_version(
+        server,
+        _client_environment(ENV, server);
+        cancel,
+        timeout,
+        started=time_ns(),
+    )
     nothing
 end
 
@@ -314,7 +316,7 @@ end
 # Read the daemon release without running a user hook, or the release of the
 # executable that would create an absent daemon.
 function _context_release(context)
-    environment = _client_environment(ENV)
+    environment = _client_environment(ENV, context.server)
     options = (; cancel=context.cancel, timeout=context.budget, started=context.started)
     version = _daemon_version(context.server, environment; options...)
     version === nothing ? _executable_version(context.server, environment; options...) :

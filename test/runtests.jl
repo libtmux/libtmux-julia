@@ -27,6 +27,7 @@ const INTEGRATION_FILES = (
     "fixture_contract",
     "sandbox_client",
     "sandbox_sweep",
+    "socket_default",
     "named_tmux",
     "lifecycle",
     "support_check",
