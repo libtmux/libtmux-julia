@@ -162,11 +162,14 @@ end
 """
     main(arguments=ARGS; input=stdin, output=stdout, err=stderr) -> Int
 
-Run `libtmux-mcp` with an explicit socket selector. Startup captures exact
-caller/allowed pane references. `--help` and invalid options perform no tmux
-I/O. Returns 0 after clean EOF, 2 for option errors, 130 for interruption and
-1 for startup, protocol or cleanup failure. Only `--help` writes human text
-to stdout; serving reserves it for MCP messages.
+Run `libtmux-mcp`. It takes at most one of `--socket` and `--socket-name`. With
+neither, the core's `Server` reads `LIBTMUX_SOCKET_PATH`, then `LIBTMUX_SOCKET`,
+and otherwise leaves the choice to tmux. Startup captures exact caller/allowed
+pane references. `--help` and invalid options perform no tmux I/O, and a
+variable that cannot be used is an option error. Returns 0 after clean EOF, 2
+for option errors, 130 for interruption and 1 for startup, protocol or cleanup
+failure. Only `--help` writes human text to stdout; serving reserves it for MCP
+messages.
 """
 function main(arguments=ARGS; input::IO=stdin, output::IO=stdout, err::IO=stderr)
     options = try
