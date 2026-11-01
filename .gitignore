@@ -6,6 +6,7 @@
 /docs/Manifest.toml
 /benchmark/Manifest.toml
 /benchmark/results/
+/.env
 /.mcp-env/
 /.workspace-env/
 /bin/libtmux-mcp

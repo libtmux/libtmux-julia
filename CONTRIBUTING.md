@@ -82,6 +82,33 @@ sandbox, and under a fixture's replaced environment, and requires its
 connection error to name `$TMUX_TMPDIR/tmux-<uid>/default`.
 `test/sandbox_sweep.jl` starts real servers on a custom socket, on the default
 socket and on a stopped process, and checks what the sweep does with each.
+`test/socket_default.jl` starts a `Server` that names no socket inside the
+sandbox, and stops it and removes its socket before the file ends.
+
+## Running tools by hand
+
+Outside the test runners, a `Server`, `libtmux-workspace` and `libtmux-mcp` that
+name no socket pass tmux none. tmux then picks the server: the one `TMUX` names
+in a tmux pane, and your default server elsewhere. To keep a tool you run by
+hand on a server of its own, keep a `.env` file in the repository root that
+names a socket, and load it into the shell before you run the tool. The file is
+listed in `.gitignore`, so it is never committed.
+
+```console
+$ printf 'LIBTMUX_SOCKET=libtmux-julia-dev\n' > .env
+```
+
+Load it with the shell, which exports each variable for the commands that
+follow:
+
+```console
+$ set -a && . ./.env && set +a
+```
+
+Use `LIBTMUX_SOCKET_PATH` instead to name a socket file. When both are set the
+path wins. The test runners ignore the file: the sandbox removes every
+`LIBTMUX_SOCKET*` variable before anything runs, and fixtures keep their own
+explicit sockets.
 
 Prepare toolchains and package dependencies before timed test loops. Report
 preparation separately; include process startup and fixture setup/cleanup in
