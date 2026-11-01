@@ -158,8 +158,8 @@ jobs:
           arch: x64
       - name: Prepare Linux build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libevent-dev libncurses-dev bison
+          ./dev/apt-get.sh update
+          ./dev/apt-get.sh install -y build-essential pkg-config libevent-dev libncurses-dev bison
       - name: Prepare pinned tmux release
         run: python3 dev/check-matrix.py build-tmux "$RUNNER_TEMP/libtmux-julia-reject" '${{ matrix.tmux }}'
       - name: Prepare the current client
@@ -223,8 +223,8 @@ jobs:
         run: python3 dev/check-matrix.py self-test --julia julia
       - name: Prepare Linux build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libevent-dev libncurses-dev bison
+          ./dev/apt-get.sh update
+          ./dev/apt-get.sh install -y build-essential pkg-config libevent-dev libncurses-dev bison
       - name: Prepare pinned tmux release
         if: matrix.kind == 'release'
         env:
