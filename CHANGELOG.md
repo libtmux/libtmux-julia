@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+#### Tests run in a private tmux sandbox
+
+Every test runner, the doc-example checker, the benchmark drivers and each
+matrix cell now remove `TMUX`, `TMUX_PANE` and every `LIBTMUX_SOCKET*` variable
+and point `TMUX_TMPDIR` at a private directory of their own, so a tmux client
+that names no socket cannot reach the server its caller sits in or the default
+socket of the developer running the tests. A runner refuses to start when it
+cannot make that directory, and the run fails when a test leaves a server or a
+socket in it, after the server has been stopped. See the test sandbox section
+of `CONTRIBUTING.md`. (#63)
+
 ## 0.1.1-alpha.2 - 2026-10-25
 
 #### Wait for pane text below tmux 3.7
