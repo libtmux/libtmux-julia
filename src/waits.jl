@@ -172,7 +172,7 @@ end
 # `nothing` when the pane lives or a probe cannot run. A probe that fails for
 # any other reason says nothing about the pane, so the caller keeps its error.
 function _wait_end_reason(server::Server, pane::PaneRef; cancel=nothing)
-    environment = _client_environment(ENV)
+    environment = _client_environment(ENV, server)
     release = try
         _daemon_version(server, environment; cancel)
     catch error

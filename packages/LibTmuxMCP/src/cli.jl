@@ -1,9 +1,15 @@
 const _CLI_HELP = """
-Usage: libtmux-mcp (--socket PATH | --socket-name NAME) [options]
+Usage: libtmux-mcp [--socket PATH | --socket-name NAME] [options]
 
 Serve MCP over stdin/stdout; diagnostics go to stderr. The tmux server is
 borrowed. Only sessions created through enabled tools belong to this process.
 
+Without a socket option, LIBTMUX_SOCKET_PATH (-S), else LIBTMUX_SOCKET (-L),
+selects the server. With neither set, tmux picks it: the one TMUX names inside
+tmux, otherwise its default socket. A socket option leaves both unread.
+
+  --socket PATH         tmux socket path (-S); not with --socket-name
+  --socket-name NAME    tmux socket name (-L); not with --socket
   --tmux PATH           tmux executable (default: tmux)
   --caller-pane ID      captured pane used when a tool omits its target
   --allow-pane ID       permit this pane; repeat to restrict the target set
@@ -61,8 +67,9 @@ function _cli_options(arguments)
         end
         index += 2
     end
-    xor(haskey(values, "--socket"), haskey(values, "--socket-name")) ||
-        throw(ArgumentError("supply exactly one of --socket or --socket-name"))
+    haskey(values, "--socket") &&
+        haskey(values, "--socket-name") &&
+        throw(ArgumentError("supply at most one of --socket or --socket-name"))
     caller = get(values, "--caller-pane", nothing)
     caller === nothing || LibTmux.PaneID(caller)
     length(pane_ids) <= 256 && length(unique(pane_ids)) == length(pane_ids) ||
@@ -155,11 +162,14 @@ end
 """
     main(arguments=ARGS; input=stdin, output=stdout, err=stderr) -> Int
 
-Run `libtmux-mcp` with an explicit socket selector. Startup captures exact
-caller/allowed pane references. `--help` and invalid options perform no tmux
-I/O. Returns 0 after clean EOF, 2 for option errors, 130 for interruption and
-1 for startup, protocol or cleanup failure. Only `--help` writes human text
-to stdout; serving reserves it for MCP messages.
+Run `libtmux-mcp`. It takes at most one of `--socket` and `--socket-name`. With
+neither, the core's `Server` reads `LIBTMUX_SOCKET_PATH`, then `LIBTMUX_SOCKET`,
+and otherwise leaves the choice to tmux. Startup captures exact caller/allowed
+pane references. `--help` and invalid options perform no tmux I/O, and a
+variable that cannot be used is an option error. Returns 0 after clean EOF, 2
+for option errors, 130 for interruption and 1 for startup, protocol or cleanup
+failure. Only `--help` writes human text to stdout; serving reserves it for MCP
+messages.
 """
 function main(arguments=ARGS; input::IO=stdin, output::IO=stdout, err::IO=stderr)
     options = try

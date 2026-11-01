@@ -1,15 +1,40 @@
 """
-    Server(; socket_path=nothing, socket_name=nothing, tmux="tmux")
+    Server(; socket_path=nothing, socket_name=nothing, tmux="tmux", env=ENV)
 
-Describe a tmux endpoint without contacting it. Supply exactly one socket
-selector. A description does not own a daemon or any sessions. Use
-[`from_env`](@ref) to opt into the ambient tmux endpoint.
+Describe a tmux endpoint without contacting it. Name at most one socket. A
+description does not own a daemon or any sessions.
 
 `socket_path` selects a socket file with tmux's `-S` and `socket_name` a named
-socket with `-L`. `tmux` is the executable; a bare name is resolved through
-`PATH` when an operation runs. Construction validates the arguments and does
-not check that the executable or the socket exists. A `Server` is an immutable
-value with nothing to close, and the daemon it names may not be running yet:
+socket with `-L`; naming both raises `ArgumentError`. With neither, `env` is
+read: `LIBTMUX_SOCKET_PATH` selects a socket file and `LIBTMUX_SOCKET` a named
+socket, the path first when both are set. A variable that is empty or only
+whitespace counts as unset, each one alone. A socket named in the call leaves
+both variables unread. When neither variable is set the server names no socket
+and passes tmux neither `-S` nor `-L`, so tmux picks the server itself: the one
+`TMUX` names inside tmux, otherwise its `default` socket. Use [`from_env`](@ref)
+to ask for the `TMUX` socket as an explicit path.
+
+`LIBTMUX_SOCKET` names a socket, so a value that holds a slash raises
+`ArgumentError`; put a path in `LIBTMUX_SOCKET_PATH`. A relative path, from the
+variable or from `socket_path`, is made absolute against the working directory
+when the `Server` is built.
+
+`env` is only the mapping those two variables are read from. It is not the
+environment a tmux command gets, which is the `env` of [`run_command`](@ref), so
+`Server(env=Dict("TMUX_TMPDIR" => dir))` changes nothing. The choice is made
+when the `Server` is built and kept in the value. A `Server` held in a `const`
+keeps the variables of the process that built it, which under precompilation is
+the precompiling process.
+
+A server that names no socket also leaves `TMUX` and `TMUX_PANE` in the
+environment of its commands. A command with no target then acts on the pane
+`TMUX_PANE` names, so a bare `kill-pane` through [`run_command`](@ref) kills the
+caller's own pane. A named socket drops both variables.
+
+`tmux` is the executable; a bare name is resolved through `PATH` when an
+operation runs. Construction validates the arguments and does not check that
+the executable or the socket exists. A `Server` is an immutable value with
+nothing to close, and the daemon it names may not be running yet:
 [`new_session`](@ref) can start one at this endpoint.
 
 # What is on here
@@ -22,8 +47,8 @@ each takes a `Server` as its first argument, and most also have a method for a
 into a few groups:
 
 **Connecting.** `Server` itself only describes an endpoint. [`from_env`](@ref)
-reads the one named by `TMUX` when this process is inside tmux, and selects the
-`default` socket when it is not. [`open_server`](@ref) starts a private daemon
+asks for the one named by `TMUX` when this process is inside tmux, and selects
+the `default` socket when it is not. [`open_server`](@ref) starts a private daemon
 you own and returns an [`OwnedServer`](@ref); [`with_server`](@ref) runs a
 function against one and closes it afterwards. [`open_control`](@ref) attaches a
 [`ControlConnection`](@ref) to one session, which [`observe_output`](@ref),
@@ -100,16 +125,21 @@ struct Server
     socket_name::Union{Nothing,String}
     tmux::String
 
-    function Server(; socket_path=nothing, socket_name=nothing, tmux="tmux")
-        (socket_path === nothing) != (socket_name === nothing) ||
-            throw(ArgumentError("supply exactly one of socket_path or socket_name"))
+    function Server(; socket_path=nothing, socket_name=nothing, tmux="tmux", env=ENV)
+        socket_path === nothing ||
+            socket_name === nothing ||
+            throw(ArgumentError("supply at most one of socket_path or socket_name"))
         executable = _argument(tmux)
         isempty(executable) && throw(ArgumentError("tmux executable cannot be empty"))
+        if socket_path === nothing && socket_name === nothing
+            socket_path, socket_name = _environment_socket(env)
+        end
         if socket_path !== nothing
             path = _argument(socket_path)
             isempty(path) && throw(ArgumentError("socket_path cannot be empty"))
             return new(abspath(path), nothing, executable)
         end
+        socket_name === nothing && return new(nothing, nothing, executable)
         name = _argument(socket_name)
         (isempty(name) || occursin('/', name)) &&
             throw(ArgumentError("socket_name must be nonempty and contain no slash"))
@@ -122,12 +152,38 @@ function _argument(value::AbstractString)
     String(value)
 end
 
+# The socket the environment names when the caller named none: the path from
+# LIBTMUX_SOCKET_PATH, else the name from LIBTMUX_SOCKET, else neither. A blank
+# value counts as unset, and any other value is used as written. An error names
+# the variable and never its value.
+function _environment_socket(env)
+    path = _environment_value(env, "LIBTMUX_SOCKET_PATH")
+    path === nothing || return (path, nothing)
+    name = _environment_value(env, "LIBTMUX_SOCKET")
+    name !== nothing &&
+        occursin('/', name) &&
+        throw(
+            ArgumentError(
+                "LIBTMUX_SOCKET must name a socket without a slash; " *
+                "use LIBTMUX_SOCKET_PATH for a path",
+            ),
+        )
+    (nothing, name)
+end
+
+function _environment_value(env, variable)
+    value = get(env, variable, nothing)
+    (value === nothing || isempty(strip(value))) ? nothing : value
+end
+
 """
     from_env(; env=ENV, socket_path=nothing, socket_name=nothing, tmux="tmux")
 
 Read the endpoint from `TMUX`, or select the named `default` socket when it
 is absent. Explicit selectors take precedence. Return a [`Server`](@ref)
-description without contacting tmux or starting a daemon.
+description without contacting tmux or starting a daemon. This is how a caller
+asks for the `TMUX` socket as a path; `Server` itself leaves that choice to
+tmux. Neither `LIBTMUX_SOCKET_PATH` nor `LIBTMUX_SOCKET` is read here.
 
 # Arguments
 
@@ -168,23 +224,28 @@ function from_env(; env=ENV, socket_path=nothing, socket_name=nothing, tmux="tmu
     Server(; socket_path=fields[1], tmux)
 end
 
-function _argv(server::Server, args)
-    selector =
-        server.socket_path === nothing ? ["-L", something(server.socket_name)] :
-        ["-S", server.socket_path]
-    [server.tmux; "-u"; selector; "--"; _argument.(args)]
+# What tmux gets to find the server. A server that names no socket passes
+# neither flag, so tmux follows `TMUX` and otherwise uses its default socket.
+function _selector(server::Server)
+    server.socket_path !== nothing && return ["-S", server.socket_path]
+    server.socket_name !== nothing && return ["-L", server.socket_name]
+    String[]
 end
+
+_argv(server::Server, args) = [server.tmux; "-u"; _selector(server); "--"; _argument.(args)]
 
 function Base.show(io::IO, server::Server)
     print(io, "Server(")
-    if server.socket_path === nothing
-        print(io, "socket_name=")
-        show(io, server.socket_name)
-    else
+    if server.socket_path !== nothing
         print(io, "socket_path=")
         show(io, server.socket_path)
+        print(io, ", ")
+    elseif server.socket_name !== nothing
+        print(io, "socket_name=")
+        show(io, server.socket_name)
+        print(io, ", ")
     end
-    print(io, ", tmux=")
+    print(io, "tmux=")
     show(io, server.tmux)
     print(io, ')')
 end

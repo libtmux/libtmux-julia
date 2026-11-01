@@ -626,15 +626,24 @@ function _open_control_lane(
     server.socket_path === nothing ||
         server.socket_path == session.server.socket_path ||
         throw(CrossServerReference(string(session.id)))
+    # A server that names no socket leaves the choice to tmux, which would follow
+    # TMUX. The attach drops TMUX and names the session's daemon, so that daemon is
+    # the one whose release is checked.
+    endpoint =
+        isempty(_selector(server)) ?
+        Server(; socket_path=session.server.socket_path, tmux=server.tmux) : server
     # The attach cannot start a daemon, so only a live endpoint needs a release
     # check; the handshake below binds the connection to the captured daemon.
-    release =
-        _check_daemon(server, _client_environment(ENV); cancel, timeout=budget, started)
+    release = _check_daemon(
+        endpoint,
+        _client_environment(ENV, endpoint);
+        cancel,
+        timeout=budget,
+        started,
+    )
     # Short-lived control attaches crash servers before 3.7, so decide first.
     _require_release(release, CONTROL_MINIMUM_TMUX, :open_control, "control acquisition")
-    selector =
-        server.socket_path === nothing ? ["-L", something(server.socket_name)] :
-        ["-S", server.socket_path]
+    selector = _selector(endpoint)
     flags = "ignore-size,no-output"
     release !== nothing && _version_at_least(release, "3.8") && (flags *= ",new-layouts")
     argv = [

@@ -658,6 +658,39 @@ exit 99
         end
     end
 
+    @testset "the MCP command line reaches the server a variable names, and a flag beats it" begin
+        environment = Dict(
+            "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
+            "TERM"=>"xterm-256color",
+            "SHELL"=>"/bin/sh",
+            Main.TestSandbox.child_entries()...,
+        )
+        LibTmux.with_server(;
+            tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
+            env=environment,
+        ) do server
+            new_session(server; name="selected", command=["/bin/cat"])
+            pane = only(panes(snapshot(server))).ref
+            arguments = ["--tmux", server.tmux, "--caller-pane", string(pane.id)]
+            withenv(
+                "LIBTMUX_SOCKET_PATH" => server.socket_path,
+                "LIBTMUX_SOCKET" => nothing,
+            ) do
+                # No flag: the variable chose the server, so its pane resolves.
+                app = LibTmuxMCP._cli_application(LibTmuxMCP._cli_options(arguments))
+                try
+                    @test app.caller == pane
+                finally
+                    close(app)
+                end
+                # A flag leaves the variable unread: nothing listens on this socket.
+                absent = joinpath(dirname(server.socket_path), "absent")
+                options = LibTmuxMCP._cli_options([arguments; "--socket"; absent])
+                @test_throws Exception LibTmuxMCP._cli_application(options)
+            end
+        end
+    end
+
 end
 
 # Outer integration: three fresh dual-client control connections exercise real cancellation cleanup.

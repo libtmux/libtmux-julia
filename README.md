@@ -158,17 +158,43 @@ links one window into two sessions and queries both views.
 
 ## Choose which server to use
 
-### [`Server`][server]: name the socket
+### [`Server`][server]: name the socket, or leave it to tmux
 
-[`Server`][server] describes a tmux endpoint without contacting it. Give it
-exactly one of `socket_name` or `socket_path`. [`from_env`][from_env] reads
-`TMUX`, and selects the `default` socket outside tmux:
+[`Server`][server] describes a tmux endpoint without contacting it. Name at
+most one of `socket_name` (tmux's `-L`) or `socket_path` (`-S`).
+
+With neither, `Server` reads `LIBTMUX_SOCKET_PATH`, then `LIBTMUX_SOCKET`. A
+socket named in the call leaves both unread.
+
+`LIBTMUX_SOCKET` names a socket, so a value with a slash is refused; put a path
+in `LIBTMUX_SOCKET_PATH`. A relative path resolves against the working directory
+when the `Server` is built.
+
+When neither variable is set, `Server` passes tmux no socket, and tmux picks
+the server itself: the one `TMUX` names inside tmux, and its `default` socket
+elsewhere.
+
+Its commands then keep `TMUX` and `TMUX_PANE`, so a raw
+[`run_command`][run_command] with no target acts on the caller's own pane.
+
+The `env` keyword supplies only the two variables. It is not the environment a
+tmux command gets, which is the `env` of [`run_command`][run_command]. The
+choice is frozen when the `Server` is built.
+
+[`from_env`][from_env] asks for the `TMUX` socket as a path, and selects the
+`default` socket outside tmux:
 
 ```jldoctest
 julia> using LibTmux
 
 julia> Server(socket_name="work")
 Server(socket_name="work", tmux="tmux")
+
+julia> Server(env=Dict("LIBTMUX_SOCKET" => "work"))
+Server(socket_name="work", tmux="tmux")
+
+julia> Server(env=Dict{String,String}())
+Server(tmux="tmux")
 
 julia> from_env(env=Dict("TMUX" => "/tmp/tmux-1000/default,1234,0"))
 Server(socket_path="/tmp/tmux-1000/default", tmux="tmux")
@@ -405,8 +431,9 @@ valid
 
 ### [`LibTmuxMCP`](https://github.com/libtmux/libtmux-julia/tree/master/packages/LibTmuxMCP): a tmux server for agents
 
-A local stdio MCP server for one tmux server that you name. Its default tools
-list panes, capture a pane and send keys.
+A local stdio MCP server for one tmux server, which a socket option or a
+variable names and which tmux otherwise picks. Its default tools list panes,
+capture a pane and send keys.
 
 [API reference](https://libtmux.org/en/julia/latest/mcp/reference/) ·
 [Tools](https://libtmux.org/en/julia/latest/mcp/tools/) ·
@@ -502,6 +529,7 @@ Core, MCP and workspace packages use the [MIT license][repo-license].
 [sessions]: https://libtmux.org/en/julia/latest/reference/libtmux-sessions/
 [server]: https://libtmux.org/en/julia/latest/reference/libtmux-server/
 [from_env]: https://libtmux.org/en/julia/latest/reference/libtmux-from_env/
+[run_command]: https://libtmux.org/en/julia/latest/reference/libtmux-run_command/
 [open_server]: https://libtmux.org/en/julia/latest/reference/libtmux-open_server/
 [panewhere]: https://libtmux.org/en/julia/latest/reference/libtmux-panewhere/
 [panes]: https://libtmux.org/en/julia/latest/reference/libtmux-panes/

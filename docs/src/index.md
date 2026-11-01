@@ -20,10 +20,11 @@ using Markdown
 Markdown.parse("```julia\n" * read(joinpath(@__DIR__, "..", "..", "examples", "owned_capture.jl"), String) * "\n```")
 ```
 
-Use [`Server`](@ref) for a borrowed endpoint. Neither construction nor local
-snapshot reads contact tmux. [`from_env`](@ref) is the explicit opt-in to
-ambient server selection. [`with_server`](@ref) owns its daemon; ordinary
-server values do not.
+Use [`Server`](@ref) for a borrowed endpoint. It takes a named socket, reads
+`LIBTMUX_SOCKET_PATH` or `LIBTMUX_SOCKET`, or leaves the choice to tmux. Neither
+construction nor local snapshot reads contact tmux. [`from_env`](@ref) asks for
+the socket `TMUX` names. [`with_server`](@ref) owns its daemon; ordinary server
+values do not.
 
 Next, read [Captured queries](queries.md) for filtering and shared windows,
 or [Ownership and I/O](ownership.md) for effects, cancellation and control.

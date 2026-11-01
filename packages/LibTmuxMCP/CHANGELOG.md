@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+#### Take the server from a variable or tmux
+
+`libtmux-mcp` no longer needs `--socket` or `--socket-name`. With neither, it
+reads `LIBTMUX_SOCKET_PATH`, then `LIBTMUX_SOCKET`, and otherwise leaves the
+choice to tmux: the server `TMUX` names inside tmux, and the default socket
+elsewhere. A socket option leaves both variables unread, and the launcher still
+refuses `--socket` together with `--socket-name`. A `LIBTMUX_SOCKET` that holds a
+slash is refused with exit status 2. (#64)
+
 ## 0.1.1-alpha.1 - 2026-10-24
 
 #### Require tmux 3.3a

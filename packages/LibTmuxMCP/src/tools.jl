@@ -907,7 +907,7 @@ function _wait_text(app, ref, plan, context)
     # Control clients need tmux 3.7; below it, poll the screen instead.
     release = LibTmux._daemon_version(
         app.server,
-        LibTmux._client_environment(ENV);
+        LibTmux._client_environment(ENV, app.server);
         cancel=context.cancel,
     )
     if release !== nothing &&
@@ -1185,7 +1185,7 @@ end
     _tool_remaining(tool_context)
     LibTmux._check_version(
         invocation.app.server,
-        LibTmux._client_environment(ENV);
+        LibTmux._client_environment(ENV, invocation.app.server);
         cancel=tool_context.cancel,
         timeout=tool_context.budget,
         started=tool_context.started,
