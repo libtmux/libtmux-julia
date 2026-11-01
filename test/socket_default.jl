@@ -181,3 +181,29 @@ end
         end
     end
 end
+
+# The attach names the session's daemon, so that daemon is the one checked. A
+# server that names no socket would otherwise check the daemon tmux picks and let
+# a control client attach to a tmux older than 3.7 that the gate exists to refuse.
+@testset "a control connection from a server that names no socket is gated by the session's daemon" begin
+    OwnedTmux.with_tmux() do fixture
+        fixed = Server(socket_path=fixture.socket, tmux=fixture.tmux)
+        session = new_session(fixed; name="gated", command=["/bin/cat"])
+        bare = Server(env=Dict{String,String}(); tmux=fixture.tmux)
+        release = LibTmux._daemon_version(fixed, LibTmux._client_environment(ENV, fixed))
+        if LibTmux._version_at_least(release, LibTmux.CONTROL_MINIMUM_TMUX)
+            open_control(bare, session) do connection
+                @test connection.identity.socket_path == fixture.socket
+            end
+        else
+            # The sandbox's default socket has no server, so only the session's
+            # daemon can refuse, as it does for a server that names its socket.
+            @test_throws UnsupportedCapability open_control(fixed, session) do connection
+                nothing
+            end
+            @test_throws UnsupportedCapability open_control(bare, session) do connection
+                nothing
+            end
+        end
+    end
+end
