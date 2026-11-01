@@ -22,6 +22,16 @@ import JSON
             @test main(["load", path, conflict..., "--output", "json"]; out, err) == 2
             @test JSON.parse(String(take!(out)))["status"] == "error"
             @test occursin("socket", String(take!(err)))
+            for command in ("load", "freeze")
+                withenv(
+                    "LIBTMUX_SOCKET" => "decoy-secret/name",
+                    "LIBTMUX_SOCKET_PATH" => nothing,
+                ) do
+                    @test main([command, path, "--output", "json"]; out, err) == 2
+                end
+                text = String(take!(out)) * String(take!(err))
+                @test occursin("LIBTMUX_SOCKET", text) && !occursin("decoy-secret", text)
+            end
             write(path, "session_name: a\nsession_name: b\n")
             @test main(["validate", path, "--output", "json"]; out, err) == 2
             @test JSON.parse(String(take!(out)))["error"]["code"] == "duplicate"

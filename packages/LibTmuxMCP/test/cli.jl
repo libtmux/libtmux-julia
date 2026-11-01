@@ -69,6 +69,16 @@ end
     end
 end
 
+@testset "MCP exits with status 2 for a variable it cannot use, naming it and not its value" begin
+    out, err = IOBuffer(), IOBuffer()
+    withenv("LIBTMUX_SOCKET" => "decoy-secret/name", "LIBTMUX_SOCKET_PATH" => nothing) do
+        @test LibTmuxMCP.main(String[]; input=IOBuffer(), output=out, err) == 2
+    end
+    @test isempty(take!(out))
+    message = String(take!(err))
+    @test occursin("LIBTMUX_SOCKET", message) && !occursin("decoy-secret", message)
+end
+
 @testset "public MCP serve retires streams and application on EOF" begin
     app = Application(
         LibTmuxMCP.LibTmux.Server(socket_name="uncontacted", tmux="missing-tmux"),
