@@ -8,6 +8,7 @@ function lifecycle_environment()
         "TMUX" => "borrowed",
         "TMUX_PANE" => "%999",
         "LIBTMUX_OWNER_TEST" => "owned-environment-marker",
+        Main.TestSandbox.child_entries()...,
     )
 end
 

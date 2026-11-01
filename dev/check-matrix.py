@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import argparse
+import atexit
+import contextlib
 import csv
 import ctypes
 import hashlib
@@ -18,6 +20,8 @@ import re
 import selectors
 import shutil
 import signal
+import socket
+import stat
 import subprocess
 import sys
 import tarfile
@@ -543,16 +547,142 @@ Pkg.precompile()
 )
 
 
+# A client that names no socket follows an inherited TMUX to the server its
+# caller is inside, and otherwise goes to the default socket under TMUX_TMPDIR.
+# sun_path is 104 bytes on macOS; the sandbox leaves room for /tmux-<uid>/<name>.
+SANDBOX_MAX_BYTES = 60
+SANDBOX_PREFIX = "ltj-sb-"
+_sandbox: Path | None = None
+
+
+def selects_server(name: str) -> bool:
+    return name in ("TMUX", "TMUX_PANE") or name.startswith("LIBTMUX_SOCKET")
+
+
+def make_sandbox(roots: Iterable[str]) -> Path:
+    """Make a private directory under the first root short enough for a socket path."""
+    for root in roots:
+        # The separator, the prefix and the eight characters mkdtemp appends.
+        if len(root.encode()) + len(SANDBOX_PREFIX) + 9 <= SANDBOX_MAX_BYTES:
+            try:
+                return Path(tempfile.mkdtemp(prefix=SANDBOX_PREFIX, dir=root))
+            except OSError:
+                continue
+    raise ValueError(
+        "no temporary directory is short enough for a tmux socket path; "
+        "set TMPDIR to a shorter one"
+    )
+
+
+def matrix_sandbox() -> Path:
+    """Return this process's sandbox, made once and removed when it exits."""
+    global _sandbox
+    if _sandbox is None:
+        _sandbox = make_sandbox(dict.fromkeys([tempfile.gettempdir(), "/tmp"]))
+        atexit.register(remove_sandbox, _sandbox)
+    _sandbox.mkdir(mode=0o700, exist_ok=True)
+    return _sandbox
+
+
+def sandbox_findings(env: Mapping[str, str], sandbox: Path) -> list[str]:
+    """Name what keeps `env` from being the sandbox, never a value."""
+    found = [f"{name} is set" for name in sorted(env) if selects_server(name)]
+    if env.get("TMUX_TMPDIR") != str(sandbox):
+        found.append("TMUX_TMPDIR is not the matrix sandbox")
+    return found
+
+
+def sandbox_leaks(sandbox: Path) -> list[str]:
+    """List every socket below the sandbox, however a server came to be on it.
+
+    A client with no -S or -L chooses one under tmux-<uid>; a test may name its
+    own. A symbolic link is not followed: the server it names is not ours to stop.
+    """
+    found = []
+    for directory, _, names in os.walk(sandbox):
+        for name in names:
+            path = Path(directory) / name
+            try:
+                is_socket = stat.S_ISSOCK(os.lstat(path).st_mode)
+            except OSError:
+                continue
+            if is_socket:
+                found.append(str(path.relative_to(sandbox)))
+    return sorted(found)
+
+
+def socket_answers(path: Path) -> bool:
+    """Connect as a client does: only a live server accepts, or is too busy to."""
+    with socket.socket(socket.AF_UNIX) as client:
+        client.settimeout(1)
+        try:
+            client.connect(str(path))
+        except (TimeoutError, BlockingIOError):
+            return True
+        except OSError:
+            return False
+    return True
+
+
+def socket_gone(path: Path, patience: float = 5.0) -> bool:
+    deadline = time.monotonic() + patience
+    while socket_answers(path):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.025)
+    return True
+
+
+def remove_sandbox(sandbox: Path) -> None:
+    """Remove the sandbox unless a server still answers on a socket in it."""
+    if not any(socket_answers(sandbox / name) for name in sandbox_leaks(sandbox)):
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def release_sandbox(
+    sandbox: Path, tmux: str, patience: float = 5.0
+) -> tuple[list[str], list[str]]:
+    """Stop the server on each socket with -S and list them, then remove the sandbox.
+
+    Return the sockets found and those whose server still answers after
+    kill-server. The sandbox stays while any answers.
+    """
+    found = sandbox_leaks(sandbox)
+    kept = []
+    env = {k: v for k, v in os.environ.items() if not selects_server(k)}
+    for relative in found:
+        path = sandbox / relative
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            subprocess.run(
+                [tmux, "-u", "-N", "-S", str(path), "kill-server"],
+                env=env,
+                capture_output=True,
+                check=False,
+                timeout=patience,
+            )
+        if not socket_gone(path, patience):
+            kept.append(relative)
+    if not kept:
+        shutil.rmtree(sandbox, ignore_errors=True)
+    return found, kept
+
+
 def environment(stage: Path, *, offline: bool) -> dict[str, str]:
-    env = os.environ.copy()
-    env.pop("TMUX", None)
-    env.pop("TMUX_PANE", None)
+    sandbox = matrix_sandbox()
+    env = {k: v for k, v in os.environ.items() if not selects_server(k)}
+    env.pop("LIBTMUX_TEST_SANDBOX", None)
     env.update(
         JULIA_DEPOT_PATH=str(stage / "depot"),
         JULIA_LOAD_PATH="@:@stdlib",
         JULIA_PKG_OFFLINE="true" if offline else "false",
         JULIA_PKG_PRECOMPILE_AUTO="0",
+        TMUX_TMPDIR=str(sandbox),
     )
+    findings = sandbox_findings(env, sandbox)
+    if findings:
+        raise ValueError(
+            "the cell environment is not a tmux sandbox: " + "; ".join(findings)
+        )
     return env
 
 
@@ -1018,6 +1148,19 @@ def run(args: argparse.Namespace) -> int:
                         result["status"] = item["status"]
                         break
                 report_skipped(result)
+                leaked, kept = release_sandbox(Path(env["TMUX_TMPDIR"]), args.tmux)
+                result["sandbox_leaks"] = leaked
+                result["sandbox_kept"] = kept
+                for relative in leaked:
+                    print(
+                        f"::error title=tmux sandbox::a socket was left at {relative}"
+                        + (
+                            "; its server still answers and the sandbox was kept"
+                            if relative in kept
+                            else ""
+                        ),
+                        flush=True,
+                    )
                 completed = {item["name"] for item in phases}
                 result["not_run"] = [
                     name for name, *_ in commands if name not in completed
@@ -1026,6 +1169,7 @@ def run(args: argparse.Namespace) -> int:
                     result["status"] = (
                         "PASS"
                         if not result["not_run"]
+                        and not leaked
                         and phases
                         and all(p["status"] == "PASS" for p in phases)
                         else "FAIL"
@@ -1268,6 +1412,13 @@ def check_tmux_ref(base: Path) -> None:
         # to leave the owner's marker.
         assert (stage / ".libtmux-julia-matrix").is_file()
     print("PASS tmux refs resolve to commits and build at them")
+
+
+def bind_stale_socket(path: Path) -> None:
+    """Leave a socket file nothing listens on, as a server killed mid-run does."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with socket.socket(socket.AF_UNIX) as stale:
+        stale.bind(str(path))
 
 
 def self_test(julia: str | None = None) -> None:
@@ -1550,6 +1701,72 @@ println("PASS admitted version arguments construct real Pkg specifications")
         from io import StringIO
         from unittest.mock import patch
 
+        dirty = {
+            "TMUX": "/decoy-secret/sock,1,0",
+            "TMUX_PANE": "%decoy-secret",
+            "LIBTMUX_SOCKET": "decoy-secret",
+            "LIBTMUX_SOCKET_PATH": "/decoy-secret",
+            "LIBTMUX_SOCKET_FUTURE": "decoy-secret",
+            "TMUX_TMPDIR": "/decoy-secret",
+            "LIBTMUX_TEST_SANDBOX": "/decoy-secret",
+            "LIBTMUX_TEST_TMUX": "tmux",
+        }
+        sandbox_stage = base / "sandbox-stage"
+        sandbox_stage.mkdir()
+        with patch.dict(os.environ, dirty):
+            cleaned = environment(sandbox_stage, offline=True)
+        sandbox = Path(cleaned["TMUX_TMPDIR"])
+        assert sandbox_findings(cleaned, sandbox) == []
+        assert sandbox == matrix_sandbox() and sandbox.is_dir()
+        assert len(str(sandbox).encode()) < SANDBOX_MAX_BYTES
+        assert cleaned["LIBTMUX_TEST_TMUX"] == "tmux"
+        assert "LIBTMUX_TEST_SANDBOX" not in cleaned
+        # The check fails on the environment it replaced, and names no value.
+        flagged = sandbox_findings(dirty, sandbox)
+        assert flagged == [
+            "LIBTMUX_SOCKET is set",
+            "LIBTMUX_SOCKET_FUTURE is set",
+            "LIBTMUX_SOCKET_PATH is set",
+            "TMUX is set",
+            "TMUX_PANE is set",
+            "TMUX_TMPDIR is not the matrix sandbox",
+        ]
+        assert "decoy-secret" not in "".join(flagged)
+        too_long = "/" + "x" * SANDBOX_MAX_BYTES
+        try:
+            make_sandbox([too_long])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("a root too long for a socket path was accepted")
+        fallback = make_sandbox([too_long, "/tmp"])
+        assert fallback.parent == Path("/tmp") and fallback.is_dir()
+        fallback.rmdir()
+        assert sandbox_leaks(sandbox) == []
+        (sandbox / "tmux-1000").mkdir()
+        (sandbox / "tmux-1000" / "regular-file").write_text("")
+        assert sandbox_leaks(sandbox) == []
+        for name in ("tmux-1000/default", "custom.sock", "deep/er/nested.sock"):
+            bind_stale_socket(sandbox / name)
+        (sandbox / "link.sock").symlink_to(sandbox / "custom.sock")
+        everywhere = ["custom.sock", "deep/er/nested.sock", "tmux-1000/default"]
+        assert sandbox_leaks(sandbox) == everywhere
+        # `true` stands in for a tmux whose kill-server leaves nothing listening.
+        assert release_sandbox(sandbox, "true", patience=0.2) == (everywhere, [])
+        assert not sandbox.exists()
+        # A listener outlives a tmux that stops nothing, so the sandbox stays.
+        sandbox = matrix_sandbox()
+        survivor = sandbox / "survivor.sock"
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(str(survivor))
+            listener.listen()
+            released = release_sandbox(sandbox, "true", patience=0.2)
+            assert released == (["survivor.sock"], ["survivor.sock"])
+            remove_sandbox(sandbox)
+            assert sandbox.is_dir() and survivor.exists()
+        remove_sandbox(sandbox)
+        assert not sandbox.exists()
+
         args = argparse.Namespace(
             stage=str(base),
             julia="julia",
@@ -1666,6 +1883,39 @@ println("PASS admitted version arguments construct real Pkg specifications")
         ]
         passed = next(report for report in reports if report["status"] == "PASS")
         assert passed["phases"][0]["over_target"] and len(passed["phases"]) == 2
+
+        def leaking_phase(name: str, argv: list[str], **kwargs: Any) -> dict[str, Any]:
+            bind_stale_socket(
+                Path(kwargs["env"]["TMUX_TMPDIR"]) / "tmux-1000" / "default"
+            )
+            return {
+                "name": name,
+                "status": "PASS",
+                "seconds": 0.01,
+                "cleanup": {"survivors": []},
+            }
+
+        with (
+            patch(__name__ + ".source_digest", return_value="fixed"),
+            patch.object(shutil, "which", return_value="binary"),
+            patch.object(subprocess, "check_output", return_value="version"),
+            patch(__name__ + ".command_plan", return_value=[("leaky", [], 30, "unit")]),
+            patch(__name__ + ".phase", side_effect=leaking_phase),
+            redirect_stdout(StringIO()),
+        ):
+            assert run(args) == 1
+        leaked = next(
+            report
+            for report in (
+                json.loads(path.read_text())
+                for path in base.glob("results-all-t1-*.json")
+            )
+            if report["phases"] and report["phases"][0]["name"] == "leaky"
+        )
+        assert leaked["status"] == "FAIL"
+        assert leaked["sandbox_leaks"] == ["tmux-1000/default"]
+        assert leaked["sandbox_kept"] == [] and passed["sandbox_kept"] == []
+        assert passed["sandbox_leaks"] == []
         logs = base / "logs" / "probe"
         logs.mkdir(parents=True)
         (logs / "failure.log").write_text(

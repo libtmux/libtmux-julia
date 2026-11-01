@@ -10,7 +10,11 @@
             "display-message",
             "-p",
             "é 雪";
-            env=Dict("PATH" => get(ENV, "PATH", "/usr/bin:/bin"), "LC_ALL" => "C"),
+            env=Dict(
+                "PATH" => get(ENV, "PATH", "/usr/bin:/bin"),
+                "LC_ALL" => "C",
+                Main.TestSandbox.child_entries()...,
+            ),
         )
         @test unicode.stdout == codeunits("é 雪\n")
         failed = run_command(server, "kill-pane", "-t", "%999999"; check=false)

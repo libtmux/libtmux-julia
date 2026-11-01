@@ -34,3 +34,6 @@ Each guide is the single home for its subject.
 Give each tmux test or probe a unique, owned socket in a directory scoped to
 this port. Clear inherited `TMUX` and `TMUX_PANE` values. Never use the default
 tmux server for tests, and only stop servers or remove files owned by the run.
+Test runners enter a private tmux sandbox, described in
+[CONTRIBUTING.md](CONTRIBUTING.md#test-sandbox). A new runner includes it, and
+a replaced child environment that can start tmux carries its `TMUX_TMPDIR`.

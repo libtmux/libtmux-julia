@@ -1,9 +1,11 @@
 using LibTmux
 
+# TMUX_TMPDIR keeps tmux looking where its caller expects.
 environment = Dict(
     "PATH" => get(ENV, "PATH", "/usr/bin:/bin"),
     "TERM" => "xterm-256color",
     "SHELL" => "/bin/sh",
+    "TMUX_TMPDIR" => get(ENV, "TMUX_TMPDIR", "/tmp"),
 )
 
 with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do server

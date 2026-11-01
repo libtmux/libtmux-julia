@@ -8,6 +8,7 @@ function with_workspace_server(f)
         "PATH" => get(ENV, "PATH", "/usr/local/bin:/usr/bin:/bin"),
         "SHELL" => "/bin/sh",
         "TERM" => "xterm-256color",
+        Main.TestSandbox.child_entries()...,
     )
     LibTmux.with_server(; tmux, env) do server
         # Use a POSIX shell that skips host login profiles.

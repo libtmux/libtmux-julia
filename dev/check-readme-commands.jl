@@ -1,5 +1,6 @@
 using JSON
 using LibTmux
+using Sockets
 using LibTmuxMCP
 using LibTmuxWorkspace
 
@@ -650,35 +651,79 @@ function sandbox_create()
     end
     LibTmuxMCP.install_cli(joinpath(root, "bin"))
     LibTmuxWorkspace.install_cli(joinpath(root, "bin"))
-    environment = Dict{String,String}(ENV)
-    delete!(environment, "TMUX")
-    delete!(environment, "TMUX_PANE")
+    ReadmeSandbox(root, sandbox_environment(ENV, root), joinpath(root, "tool", "tmux"))
+end
+
+# Variables that select a server are removed so that a socket exported in the
+# caller's shell cannot override the runner's own TMUX_TMPDIR.
+function sandbox_environment(parent, root)
+    environment = Dict{String,String}(parent)
+    for name in collect(keys(environment))
+        (name in ("TMUX", "TMUX_PANE") || startswith(name, "LIBTMUX_SOCKET")) &&
+            delete!(environment, name)
+    end
     environment["HOME"] = joinpath(root, "home")
     environment["TMUX_TMPDIR"] = joinpath(root, "t")
     environment["SHELL"] = "/bin/sh"
     environment["PATH"] =
-        join([joinpath(root, "tool"), joinpath(root, "bin"), ENV["PATH"]], ':')
-    ReadmeSandbox(root, environment, joinpath(root, "tool", "tmux"))
+        join([joinpath(root, "tool"), joinpath(root, "bin"), parent["PATH"]], ':')
+    environment
 end
 
+# Every socket below the sandbox root, not only those under TMUX_TMPDIR: a
+# command that names its own socket with -S can put one anywhere. A symbolic
+# link is not followed, as the server it names is not the sandbox's to stop.
 function sandbox_sockets(box::ReadmeSandbox)
-    directory = joinpath(box.root, "t")
     found = String[]
-    for (path, _, files) in walkdir(directory), file in files
-        ispath(joinpath(path, file)) &&
-            issocket(joinpath(path, file)) &&
-            push!(found, joinpath(path, file))
+    for (path, _, files) in walkdir(box.root), file in files
+        issocket(lstat(joinpath(path, file))) && push!(found, joinpath(path, file))
     end
-    found
+    sort!(found)
 end
 
-function sandbox_close(box::ReadmeSandbox)
+# Connecting is what a client does, so it tells a live server from a stale file.
+# A full backlog is a server too busy to accept, not an absent one.
+function sandbox_answers(socket)
+    try
+        close(Sockets.connect(socket))
+        return true
+    catch error
+        error isa Base.IOError || rethrow()
+        return error.code == Base.UV_EAGAIN
+    end
+end
+
+function sandbox_waits_for_exit(socket; seconds=5.0)
+    deadline = time() + seconds
+    while sandbox_answers(socket)
+        time() < deadline || return false
+        sleep(0.025)
+    end
+    true
+end
+
+# Stops the server on each socket with -S. While any server still answers, the
+# directory stays and the sockets are named on stderr. Returns those sockets.
+function sandbox_close(box::ReadmeSandbox; seconds=5.0)
+    answering = String[]
     for socket in sandbox_sockets(box)
         # Julia 1.10 defines ignorestatus only for commands, not redirections.
         kill = ignorestatus(setenv(`$(box.tmux) -S $socket kill-server`, box.environment))
         run(pipeline(kill; stdout=devnull, stderr=devnull))
+        sandbox_waits_for_exit(socket; seconds) ||
+            push!(answering, relpath(socket, box.root))
     end
-    rm(box.root; recursive=true, force=true)
+    if isempty(answering)
+        rm(box.root; recursive=true, force=true)
+    else
+        println(
+            stderr,
+            "a server still answers on ",
+            join(answering, ", "),
+            " after kill-server; the README sandbox was kept",
+        )
+    end
+    answering
 end
 
 struct ReadmeRun
@@ -929,8 +974,12 @@ function static_launcher_reason(command)
     occursin(r"--socket [\"']?/", command) ? "uses a socket path you choose" : nothing
 end
 
-function run_readme(name, text, helps, cache)
-    box = sandbox_create()
+# `create` and `seconds` let the self-test stand in a sandbox and shorten the wait.
+function run_readme(name, text, helps, cache; create=sandbox_create, seconds=5.0)
+    box = create()
+    # Assigned before the try: a variable first assigned in the finally block
+    # is local to it, and the check below would not see it.
+    answering = String[]
     counts = Dict("run" => 0, "client" => 0, "accounted" => 0, "flags" => 0)
     try
         for fence in readme_fences(text)
@@ -1003,8 +1052,9 @@ function run_readme(name, text, helps, cache)
             end
         end
     finally
-        sandbox_close(box)
+        answering = sandbox_close(box; seconds)
     end
+    isempty(answering) || error("a server still answers in the README sandbox")
     @assert !ispath(box.root)
     println(
         "PASS $name: ",
@@ -1106,6 +1156,125 @@ end
 
 function expect_clean(label, problems)
     isempty(problems) || error("$label: a clean control reported $problems")
+end
+
+# A tmux that stops the server on `-S socket` as kill-server does, or does nothing.
+function stand_in_tmux(directory, name; stops)
+    path = joinpath(directory, name)
+    write(path, stops ? "#!/bin/sh\nrm -f \"\$2\"\nexit 0\n" : "#!/bin/sh\nexit 0\n")
+    chmod(path, 0o755)
+    path
+end
+
+# A listener with a backlog of one, filled until a connect fails with EAGAIN, as
+# it does for a server too busy to accept.
+function full_backlog_listener(path)
+    mkpath(dirname(path))
+    server = Sockets.PipeServer()
+    Sockets.bind(server, path) || error("could not bind a test socket")
+    Sockets.listen(server; backlog=1)
+    clients = []
+    while true
+        try
+            push!(clients, Sockets.connect(path))
+        catch failure
+            failure isa Base.IOError && failure.code == Base.UV_EAGAIN || rethrow()
+            break
+        end
+        length(clients) < 64 || error("the backlog of a test socket did not fill")
+    end
+    (server, clients)
+end
+
+# Drives the close path of run_readme with a stand-in sandbox that holds no
+# commands, and stands in for a tmux that stops its servers or leaves them.
+function close_self_test(helps)
+    mktempdir(; prefix="ltj-readme-close-") do scratch
+        stopper = stand_in_tmux(scratch, "stopper"; stops=true)
+        bystander = stand_in_tmux(scratch, "bystander"; stops=false)
+        listeners = []
+        listen_at(path) = (mkpath(dirname(path)); push!(listeners, Sockets.listen(path)))
+        count = Ref(0)
+        function stand_in(tmux, sockets...)
+            root = joinpath(scratch, "root$(count[] += 1)")
+            mkpath(joinpath(root, "t"))
+            foreach(socket -> listen_at(joinpath(root, socket)), sockets)
+            () -> ReadmeSandbox(root, Dict{String,String}(), tmux)
+        end
+        function attempt(create, text)
+            failure = nothing
+            diagnostic = tempname(scratch)
+            open(diagnostic, "w") do io
+                redirect_stderr(io) do
+                    redirect_stdout(devnull) do
+                        try
+                            run_readme(
+                                "close.md",
+                                text,
+                                helps,
+                                Set{String}();
+                                create,
+                                seconds=0.2,
+                            )
+                        catch error
+                            failure = error
+                        end
+                    end
+                end
+            end
+            failure, read(diagnostic, String)
+        end
+        refusal(failure, fragment) =
+            failure isa ErrorException && occursin(fragment, failure.msg)
+        unverifiable = "```console\n\$ frobnicate --now\n```\n"
+
+        # Sockets are found anywhere below the root, and a link is not followed.
+        box = stand_in(stopper, "t/tmux-1000/default", "elsewhere/custom.sock")()
+        outside = joinpath(scratch, "outside")
+        listen_at(joinpath(outside, "outside.sock"))
+        symlink(outside, joinpath(box.root, "packages"))
+        symlink(joinpath(box.root, "elsewhere", "custom.sock"), joinpath(box.root, "link"))
+        write(joinpath(box.root, "t", "note"), "")
+        @assert sandbox_sockets(box) ==
+                joinpath.(box.root, ["elsewhere/custom.sock", "t/tmux-1000/default"])
+
+        # A full backlog answers; a missing path and a plain file do not.
+        full, clients = full_backlog_listener(joinpath(scratch, "full.sock"))
+        @assert sandbox_answers(joinpath(scratch, "full.sock"))
+        @assert !sandbox_answers(joinpath(scratch, "missing.sock"))
+        @assert !sandbox_answers(joinpath(box.root, "t", "note"))
+        foreach(close, clients)
+        close(full)
+
+        # A clean run removes its root, with or without sockets for tmux to stop.
+        for sockets in ((), ("elsewhere/custom.sock",))
+            create = stand_in(stopper, sockets...)
+            failure, diagnostic = attempt(create, "No commands.\n")
+            @assert failure === nothing && isempty(diagnostic) (failure, diagnostic)
+            @assert !ispath(joinpath(scratch, "root$(count[])"))
+        end
+
+        # A server that survives kill-server keeps the root and fails the run,
+        # naming the socket below the root and no other path.
+        create = stand_in(bystander, "elsewhere/survivor.sock")
+        failure, diagnostic = attempt(create, "No commands.\n")
+        root = joinpath(scratch, "root$(count[])")
+        @assert refusal(failure, "a server still answers") failure
+        @assert isdir(root) && issocket(joinpath(root, "elsewhere", "survivor.sock"))
+        @assert occursin("elsewhere/survivor.sock", diagnostic) &&
+                occursin("was kept", diagnostic) &&
+                !occursin(scratch, diagnostic)
+
+        # A failing command is reported as itself, and the root still closes.
+        failure, _ = attempt(stand_in(stopper), unverifiable)
+        @assert refusal(failure, "has no verifier") failure
+        @assert !ispath(joinpath(scratch, "root$(count[])"))
+        failure, diagnostic = attempt(stand_in(bystander, "t/survivor.sock"), unverifiable)
+        @assert refusal(failure, "has no verifier") failure
+        @assert isdir(joinpath(scratch, "root$(count[])")) &&
+                occursin("t/survivor.sock", diagnostic)
+        foreach(close, listeners)
+    end
 end
 
 function self_test()
@@ -1316,6 +1485,23 @@ function self_test()
         structure_problems("## Quick start\n\n## What it leaves out\n", "t.md"),
         "Support and status",
     )
+
+    decoys = Dict(
+        "TMUX" => "/decoy,1,0",
+        "TMUX_PANE" => "%9",
+        "LIBTMUX_SOCKET" => "decoy",
+        "LIBTMUX_SOCKET_PATH" => "/decoy",
+        "LIBTMUX_TEST_TMUX" => "tmux",
+        "TMUX_TMPDIR" => "/decoy",
+        "PATH" => "/usr/bin",
+    )
+    box = sandbox_environment(decoys, "/sandbox-root")
+    @assert !any(name -> name in keys(box), ("TMUX", "TMUX_PANE", "LIBTMUX_SOCKET"))
+    @assert !haskey(box, "LIBTMUX_SOCKET_PATH")
+    @assert box["TMUX_TMPDIR"] == "/sandbox-root/t" && box["LIBTMUX_TEST_TMUX"] == "tmux"
+    @assert box["PATH"] == "/sandbox-root/tool:/sandbox-root/bin:/usr/bin"
+
+    close_self_test(helps)
 
     step = ReadmeStep("x", ReadmeFence("console", "\$ x\n", 1, nothing), "valid\n")
     @assert output_problem("x", "valid\n", "valid\n") === nothing

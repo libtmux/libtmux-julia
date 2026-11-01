@@ -192,6 +192,7 @@ end
             "XDG_CONFIG_HOME" => directory,
             "TERM" => "xterm-256color",
             "SHELL" => "/bin/sh",
+            Main.TestSandbox.child_entries()...,
         )
         failure = try
             run_command(server, "new-session", "-d", "-s", "revived"; env=environment)
@@ -219,6 +220,7 @@ end
             "XDG_CONFIG_HOME" => directory,
             "TERM" => "xterm-256color",
             "SHELL" => "/bin/sh",
+            Main.TestSandbox.child_entries()...,
         )
 
         # Cleanup of an absent endpoint is a no-op after its probe.

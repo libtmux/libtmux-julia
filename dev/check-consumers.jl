@@ -54,6 +54,37 @@ function run_consumer_child(phase::AbstractString, command)
     return result
 end
 
+# A script run by sandboxed_script finds the helper loaded and the sandbox entered
+# with the caller's selectors gone, however the caller's environment was set.
+function sandbox_self_test()
+    mktempdir(; prefix="ltj-consumer-") do directory
+        probe = joinpath(directory, "probe.jl")
+        write(
+            probe,
+            """
+            sandbox = get(ENV, "TMUX_TMPDIR", "")
+            println(isdefined(Main, :TestSandbox) && isempty(Main.TestSandbox.violations()))
+            println(!any(name -> haskey(ENV, name), ("TMUX", "TMUX_PANE", "LIBTMUX_SOCKET")))
+            println(startswith(basename(sandbox), "ltj-sb-") && sandbox != "/decoy")
+            """,
+        )
+        julia = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=min -O0`
+        decoys = Dict(
+            "TMUX" => "/decoy,1,0",
+            "TMUX_PANE" => "%9",
+            "LIBTMUX_SOCKET" => "decoy",
+            "TMUX_TMPDIR" => "/decoy",
+            "TMPDIR" => directory,
+        )
+        output = read(setenv(sandboxed_script(julia, probe), decoys), String)
+        @assert output == "true\ntrue\ntrue\n" repr(output)
+        # Without the wrapper the probe finds neither the helper nor a sandbox.
+        bare = read(ignorestatus(setenv(`$julia $probe`, decoys)), String)
+        @assert !startswith(bare, "true\ntrue\ntrue") repr(bare)
+    end
+    return nothing
+end
+
 function consumer_self_test()
     marker = "consumer-synthetic-credential-sentinel"
     child = Cmd(["/bin/sh", "-c", "echo child-stdout; echo child-stderr >&2; exit 7"])
@@ -91,6 +122,7 @@ function consumer_self_test()
     @assert failure.cause isa ProcessFailedException
     @assert only(failure.cause.procs).exitcode == 7
     @assert success(run_consumer_child("successful child", `/bin/sh -c "exit 0"`))
+    sandbox_self_test()
     installation = Module(:ReleaseInstallChecks)
     Base.include(installation, joinpath(@__DIR__, "check-tag-install.jl"))
     Base.invokelatest(installation.self_test)
@@ -367,6 +399,13 @@ function check_examples(stage)
     )
 end
 
+# An exported package has no dev directory, so its test scripts cannot load the
+# sandbox helper. This checker does, and runs the script inside the sandbox.
+const SANDBOX_HELPER = joinpath(SOURCE_ROOT, "dev", "test-sandbox.jl")
+const SANDBOXED_SCRIPT = "include(ARGS[1]); TestSandbox.enter_or_refuse!(); include(ARGS[2])"
+
+sandboxed_script(julia, program) = `$julia -e $SANDBOXED_SCRIPT $SANDBOX_HELPER $program`
+
 function check_launchers(stage)
     check(stage; imports=false)
     for (name, script) in
@@ -378,7 +417,8 @@ function check_launchers(stage)
             name,
         )
         program = joinpath(stage, "source", name, "test", script)
-        command = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$project $program`
+        julia = `$(Base.julia_cmd()) --startup-file=no --history-file=no --compile=yes -O2 --threads=1 --project=$project`
+        command = sandboxed_script(julia, program)
         started = time_ns()
         run_consumer_child(
             "$name installed launcher",

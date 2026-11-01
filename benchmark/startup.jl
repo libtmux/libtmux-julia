@@ -2,6 +2,11 @@ const STARTUP_ENTRY_NS = time_ns()
 const STARTUP_SELF_TEST = ARGS == ["--self-test"]
 isempty(ARGS) || STARTUP_SELF_TEST || error("usage: startup.jl [--self-test]")
 
+# A client that names no socket must not reach the developer's server. The
+# entry precedes every phase, so no phase timing includes it.
+include(joinpath(@__DIR__, "..", "dev", "test-sandbox.jl"))
+TestSandbox.enter_or_refuse!()
+
 function startup_emit(io, name, status, elapsed, rss)
     println(
         io,
@@ -119,6 +124,7 @@ function startup_workload!(report)
         "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
         "TERM"=>"xterm-256color",
         "SHELL"=>"/bin/sh",
+        TestSandbox.child_entries()...,
     )
     try
         Base.get_extension(LibTmux, :LibTmuxJSONExt) === nothing ||

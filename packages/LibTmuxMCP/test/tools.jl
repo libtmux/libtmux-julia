@@ -267,6 +267,7 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
             "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
             "TERM"=>"xterm-256color",
             "SHELL"=>"/bin/sh",
+            Main.TestSandbox.child_entries()...,
         )
         LibTmux.with_server(;
             tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
@@ -566,6 +567,7 @@ exit 99
             "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
             "TERM"=>"xterm-256color",
             "SHELL"=>"/bin/sh",
+            Main.TestSandbox.child_entries()...,
         )
         LibTmux.with_server(;
             tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
@@ -665,6 +667,7 @@ if any(arg -> arg in ("observation", "all"), ARGS)
             "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
             "TERM"=>"xterm-256color",
             "SHELL"=>"/bin/sh",
+            Main.TestSandbox.child_entries()...,
         )
         LibTmux.with_server(;
             tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
@@ -767,6 +770,7 @@ if any(arg -> arg in ("observation", "all"), ARGS)
             "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
             "TERM"=>"xterm-256color",
             "SHELL"=>"/bin/sh",
+            Main.TestSandbox.child_entries()...,
         )
         LibTmux.with_server(;
             tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
@@ -810,6 +814,7 @@ if any(arg -> arg in ("observation", "all"), ARGS)
             "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
             "TERM"=>"xterm-256color",
             "SHELL"=>"/bin/sh",
+            Main.TestSandbox.child_entries()...,
         )
         for (ending, stopped) in ((:pane, false), (:server, false), (:server, true))
             LibTmux.with_server(;

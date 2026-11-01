@@ -18,7 +18,8 @@ import JSON
             payloads = JSON.parse.(split(chomp(String(take!(out))), '\n'))
             @test last(payloads)["event"] == "result"
             @test last(payloads)["status"] == "planned"
-            @test main(["load", path, "--output", "json"]; out, err) == 2
+            conflict = ["--socket", "a", "--socket-name", "b"]
+            @test main(["load", path, conflict..., "--output", "json"]; out, err) == 2
             @test JSON.parse(String(take!(out)))["status"] == "error"
             @test occursin("socket", String(take!(err)))
             write(path, "session_name: a\nsession_name: b\n")

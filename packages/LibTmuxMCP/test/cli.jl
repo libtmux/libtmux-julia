@@ -30,7 +30,8 @@ using Test, LibTmuxMCP
     help = String(take!(out))
     @test occursin("--caller-pane", help) && isempty(take!(err))
     @test occursin("tmux 3.3a or newer", help) && occursin("unsupported_tmux", help)
-    @test LibTmuxMCP.main(String[]; output=out, err) == 2
+    conflict = ["--socket", "a", "--socket-name", "b"]
+    @test LibTmuxMCP.main(conflict; input=IOBuffer(), output=out, err) == 2
     @test isempty(take!(out)) && occursin("socket", String(take!(err)))
 end
 

@@ -1,6 +1,9 @@
 const CI_TEST_IMPORTS_STARTED = time_ns()
 using TOML
 
+include(joinpath(@__DIR__, "test-sandbox.jl"))
+TestSandbox.enter_or_refuse!()
+
 const CI_TEST_ROOT = dirname(@__DIR__)
 const CI_TEST_FILE_FAILURES = CapturedException[]
 const CI_TEST_FILE_RESULTS = Dict{String,Any}[]
@@ -27,6 +30,7 @@ function run_test_file(f::Function, path::AbstractString)
     flush(stderr)
     try
         f()
+        TestSandbox.verify!()
         outcome = "RETURNED"
     catch error
         if _test_interrupted(error)
@@ -63,7 +67,22 @@ end
 include_test_file(namespace::Module, path::AbstractString) =
     run_test_file(() -> Base.include(namespace, path), path)
 
+# Sockets made after the last file, or by the runner itself, still fail the run
+# before it reports PASS.
+function verify_test_sandbox()
+    try
+        TestSandbox.verify!()
+    catch error
+        error isa TestSandbox.Refused || rethrow()
+        push!(CI_TEST_FILE_FAILURES, CapturedException(error, catch_backtrace()))
+        showerror(stderr, error)
+        println(stderr)
+    end
+    return nothing
+end
+
 function finish_test_diagnostics()
+    verify_test_sandbox()
     status = isempty(CI_TEST_FILE_FAILURES) ? "PASS" : "FAIL"
     if haskey(ENV, "LIBTMUX_TEST_COMPLETION")
         report = Dict(
