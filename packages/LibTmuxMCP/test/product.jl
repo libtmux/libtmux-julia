@@ -1,5 +1,10 @@
 using Test, LibTmux, LibTmuxMCP
 
+# The matrix runs this script on its own, with no runner to enter the sandbox.
+isdefined(Main, :TestSandbox) ||
+    include(joinpath(@__DIR__, "..", "..", "..", "dev", "test-sandbox.jl"))
+Main.TestSandbox.enter_or_refuse!()
+
 isdefined(@__MODULE__, :NamedTmux) ||
     include(joinpath(@__DIR__, "support", "named_tmux.jl"))
 

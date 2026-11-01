@@ -782,6 +782,40 @@ end
     end
 end
 
+# The matrix runs some test scripts on their own, so no runner has entered the
+# sandbox for them. A script that no other Julia file names has to enter itself.
+@testset "a test script that no runner includes enters the sandbox itself" begin
+    root = dirname(@__DIR__)
+    directories = [joinpath(root, "test")]
+    for package in readdir(joinpath(root, "packages"); join=true)
+        push!(directories, joinpath(package, "test"))
+    end
+    files = String[]
+    for directory in directories, (parent, _, names) in walkdir(directory)
+        for name in names
+            endswith(name, ".jl") && push!(files, joinpath(parent, name))
+        end
+    end
+    # This file names the script it checks, so it does not count as a runner.
+    filter!(file -> relpath(file, root) != "test/sandbox.jl", files)
+    sources = Dict(file => read(file, String) for file in files)
+    named(file, other) =
+        file != other && occursin(
+            Regex("[\"/]" * splitext(basename(file))[1] * "(\\.jl)?\""),
+            sources[other],
+        )
+    standalone = filter(file -> !any(other -> named(file, other), files), files)
+    users = filter(file -> occursin("TestSandbox", sources[file]), standalone)
+    # The scan sees the script it exists for.
+    @test "packages/LibTmuxMCP/test/product.jl" in relpath.(users, root)
+    for file in users
+        source = sources[file]
+        code = String(collect(source)[classify(collect(source)) .== :code])
+        @test occursin("test-sandbox.jl", source)
+        @test occursin("TestSandbox.enter_or_refuse!()", code)
+    end
+end
+
 @testset "the doc-example checker enters the sandbox before it starts tmux" begin
     checker = joinpath(dirname(SANDBOX_HELPER), "check-doc-examples.jl")
     mktempdir(ENV["TMUX_TMPDIR"]; prefix="c-") do directory

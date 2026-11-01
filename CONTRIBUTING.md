@@ -42,7 +42,10 @@ each includes on its first line. The doc-example checker, the benchmark
 drivers and `packages/LibTmuxWorkspace/dev/cli_latency.jl` include
 `dev/test-sandbox.jl` and call `TestSandbox.enter_or_refuse!()` before they
 start tmux. A new runner or probe that can start tmux does the same, or runs
-under `dev/check-matrix.py`, which gives every phase its own sandbox.
+under `dev/check-matrix.py`, which gives every phase its own sandbox. A test
+script that the matrix runs on its own, such as
+`packages/LibTmuxMCP/test/product.jl`, enters the sandbox itself, and
+`test/sandbox.jl` fails one that does not.
 
 A child started with a replaced environment, through `env=` or `setenv`, sees
 only that environment. It would lose `TMUX_TMPDIR`, and a client that names no
