@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.1 - 2026-11-01
+
 #### Take the server from a variable or tmux
 
 `libtmux-workspace load` and `freeze` no longer need `--socket` or

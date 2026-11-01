@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.1 - 2026-11-01
+
 #### `Server` passes tmux no socket by default
 
 `Server()` no longer needs `socket_path` or `socket_name`. With neither, it
