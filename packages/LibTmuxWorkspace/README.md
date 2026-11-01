@@ -91,9 +91,13 @@ $ bin/libtmux-workspace validate workspace.yaml
 valid
 ```
 
-`load` and `freeze` need a server you name. For this demonstration, choose an
-unused socket name. The commands use `work`; use another name throughout if
-a daemon already has that name. Start the example's server:
+`load` and `freeze` choose a tmux server the way [`Server`][server] does:
+`--socket` or `--socket-name`, else `LIBTMUX_SOCKET_PATH`, else `LIBTMUX_SOCKET`,
+else tmux's own choice.
+
+For this demonstration, name an unused socket so that nothing reaches your own
+server. The commands use `work`; use another name throughout if a daemon already
+has that name. Start the example's server:
 
 ```console
 $ tmux -L work new-session -d -s scratch
@@ -337,8 +341,10 @@ Each command runs the operation of the same name: [`validate`][validate],
 | `load FILE` | Detached application; `--reuse` explicitly borrows the named session |
 | `freeze SESSION` | Supported reconstruction document for the exact named session |
 
-- `load` and `freeze` need exactly one of `--socket` or `--socket-name`. There
-  is no default-server fallback.
+- `load` and `freeze` take at most one of `--socket` or `--socket-name`. With
+  neither, they read `LIBTMUX_SOCKET_PATH`, then `LIBTMUX_SOCKET`, and
+  otherwise tmux picks the server: the one `TMUX` names inside tmux, and the
+  default socket elsewhere.
 - Progress goes to stderr. `--output json` writes one final document, and
   `--output ndjson` writes progress records and one result.
 - `--no-readiness` skips the shell handshake. `--attach` attaches after a load
@@ -468,7 +474,6 @@ lists the defaults and what `validate` copies.
 - **Full tmuxp compatibility.** The package imports a subset with stricter
   duplicate, type, version and focus checks.
   [Relation to tmuxp][ws-docs-contracts-md-relation-to-tmuxp] names the sources.
-- **A default server.** `load` and `freeze` need a socket that you name.
 - **Undoing shell effects.** Sent commands and scripts stay done. Rollback
   removes only [resources it proved it created][ws-docs-contracts-md-rollback].
 - **An exact freeze.** [`freeze`][freeze] keeps names, indices, layouts,
@@ -503,6 +508,7 @@ lists the defaults and what `validate` copies.
 [MIT][ws-license].
 
 [libtmux]: https://libtmux.org/en/julia/latest/reference/libtmux/
+[server]: https://libtmux.org/en/julia/latest/reference/libtmux-server/
 [validate]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-validate/
 [plan]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-plan/
 [apply]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-apply/

@@ -56,8 +56,8 @@ $ julia \
 $ bin/libtmux-mcp --help
 ```
 
-[Connect an MCP client](mcp.md) explains targets, policy and the explicit
-socket selector.
+[Connect an MCP client](mcp.md) explains targets, policy and how the launcher
+chooses a tmux server.
 
 ## Workspace loader
 

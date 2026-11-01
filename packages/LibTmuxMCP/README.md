@@ -19,8 +19,8 @@ send keys.
 </div>
 
 The package uses public [LibTmux][libtmux] APIs and a bounded adapter around
-ModelContextProtocol.jl. It borrows the tmux server you name. Shutdown tears
-down only application-owned sessions.
+ModelContextProtocol.jl. It borrows one tmux server: the one you name, or else
+the one tmux picks. Shutdown tears down only application-owned sessions.
 
 **Contents** — [Quick start](#quick-start) ·
 [Point a client at a server](#point-a-client-at-a-server) ·
@@ -84,9 +84,21 @@ messages to stdout. Diagnostics go to stderr.
 
 ### `--socket-name` and `--socket`: choose the tmux server
 
-Pass an explicit socket selector. `--socket-name mcp-demo` addresses an
-existing server started with `tmux -L mcp-demo`. `--socket` selects a socket
-path, which must resolve from the client's working directory.
+Pass at most one socket option. `--socket-name mcp-demo` addresses an existing
+server started with `tmux -L mcp-demo`. `--socket` selects a socket path, which
+must resolve from the client's working directory. Passing both is an error.
+
+With neither option, the launcher reads `LIBTMUX_SOCKET_PATH` (a socket path,
+tmux's `-S`), then `LIBTMUX_SOCKET` (a socket name, `-L`). A variable that is
+empty or only whitespace counts as unset. A socket option leaves both variables
+unread.
+
+When neither is set, the launcher passes tmux no socket and tmux picks the
+server: the one `TMUX` names when the client runs inside tmux, and its `default`
+socket otherwise.
+
+A client started outside tmux therefore reaches the default server. Name a
+socket when that is not the server you want.
 
 ### The `mcpServers` shape: other clients
 

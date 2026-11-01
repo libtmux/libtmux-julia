@@ -27,9 +27,12 @@ $ bin/libtmux-mcp --help
 
 In your MCP client, select this launcher and provide `--socket PATH` or
 `--socket-name NAME` for an existing server. Paths must resolve from the
-client's working directory. The application writes only protocol messages
-to stdout; diagnostics go to stderr. It owns its streams and any sessions
-it creates. Shutdown tears down only application-owned sessions.
+client's working directory. With neither, the launcher reads
+`LIBTMUX_SOCKET_PATH`, then `LIBTMUX_SOCKET`, and otherwise leaves the choice
+to tmux: the server `TMUX` names inside tmux, and the default socket elsewhere.
+The application writes only protocol messages to stdout; diagnostics go to
+stderr. It owns its streams and any sessions it creates. Shutdown tears down
+only application-owned sessions.
 
 Call [`list_panes`][list_panes], then pass a returned `target` object to [`capture_pane`][capture_pane] or
 [`send_keys`][send_keys]. Targets carry both a pane ID and observed server generation.

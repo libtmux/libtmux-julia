@@ -188,8 +188,11 @@ launcher into a directory you choose. It binds to that resolved project and
 performs no dependency installs. Existing launchers are preserved unless
 `force=true` is explicit.
 
-`load` and [`freeze`][freeze] require exactly one `--socket` or `--socket-name`;
-there is no default-server fallback. Use `--tmux` to choose the executable.
+`load` and [`freeze`][freeze] take at most one `--socket` or `--socket-name`.
+With neither they read `LIBTMUX_SOCKET_PATH`, then `LIBTMUX_SOCKET`, and with
+neither variable set they pass tmux no socket, so tmux picks the server: the one
+`TMUX` names inside tmux, and the default socket elsewhere. A socket option
+leaves both variables unread. Use `--tmux` to choose the executable.
 `--env`, `--home` and `--base-directory` supply expansion inputs.
 `--no-readiness` is an explicit opt-out.
 

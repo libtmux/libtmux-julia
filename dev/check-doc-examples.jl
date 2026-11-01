@@ -93,7 +93,7 @@ const DOC_SNIPPETS = Dict(
     ("README.md", 4) => (
         kind=:executable,
         gate=:doctest,
-        fingerprint="982e665661e6074f54dfdac1e789622ac1dd7bbeaf11191d4b9370439c89fd4f",
+        fingerprint="1b740f15b2f14da824abb5342557f35ef0eeac27d394a5c9749d30af5fb5e338",
         source="",
         note="Server descriptions without contacting tmux",
     ),
