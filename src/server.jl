@@ -14,6 +14,23 @@ and passes tmux neither `-S` nor `-L`, so tmux picks the server itself: the one
 `TMUX` names inside tmux, otherwise its `default` socket. Use [`from_env`](@ref)
 to ask for the `TMUX` socket as an explicit path.
 
+`LIBTMUX_SOCKET` names a socket, so a value that holds a slash raises
+`ArgumentError`; put a path in `LIBTMUX_SOCKET_PATH`. A relative path, from the
+variable or from `socket_path`, is made absolute against the working directory
+when the `Server` is built.
+
+`env` is only the mapping those two variables are read from. It is not the
+environment a tmux command gets, which is the `env` of [`run_command`](@ref), so
+`Server(env=Dict("TMUX_TMPDIR" => dir))` changes nothing. The choice is made
+when the `Server` is built and kept in the value. A `Server` held in a `const`
+keeps the variables of the process that built it, which under precompilation is
+the precompiling process.
+
+A server that names no socket also leaves `TMUX` and `TMUX_PANE` in the
+environment of its commands. A command with no target then acts on the pane
+`TMUX_PANE` names, so a bare `kill-pane` through [`run_command`](@ref) kills the
+caller's own pane. A named socket drops both variables.
+
 `tmux` is the executable; a bare name is resolved through `PATH` when an
 operation runs. Construction validates the arguments and does not check that
 the executable or the socket exists. A `Server` is an immutable value with

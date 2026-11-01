@@ -93,6 +93,10 @@ tmux's `-S`), then `LIBTMUX_SOCKET` (a socket name, `-L`). A variable that is
 empty or only whitespace counts as unset. A socket option leaves both variables
 unread.
 
+A `LIBTMUX_SOCKET` that holds a slash is refused with exit status 2, so put a
+path in `LIBTMUX_SOCKET_PATH`. A relative path resolves against the launcher's
+working directory.
+
 When neither is set, the launcher passes tmux no socket and tmux picks the
 server: the one `TMUX` names when the client runs inside tmux, and its `default`
 socket otherwise.

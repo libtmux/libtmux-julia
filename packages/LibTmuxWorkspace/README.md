@@ -95,6 +95,10 @@ valid
 `--socket` or `--socket-name`, else `LIBTMUX_SOCKET_PATH`, else `LIBTMUX_SOCKET`,
 else tmux's own choice.
 
+A `LIBTMUX_SOCKET` that holds a slash is refused with exit status 2, so put a
+path in `LIBTMUX_SOCKET_PATH`. A relative path resolves against the working
+directory.
+
 For this demonstration, name an unused socket so that nothing reaches your own
 server. The commands use `work`; use another name throughout if a daemon already
 has that name. Start the example's server:

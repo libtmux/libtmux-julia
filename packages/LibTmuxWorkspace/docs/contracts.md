@@ -192,7 +192,9 @@ performs no dependency installs. Existing launchers are preserved unless
 With neither they read `LIBTMUX_SOCKET_PATH`, then `LIBTMUX_SOCKET`, and with
 neither variable set they pass tmux no socket, so tmux picks the server: the one
 `TMUX` names inside tmux, and the default socket elsewhere. A socket option
-leaves both variables unread. Use `--tmux` to choose the executable.
+leaves both variables unread. A `LIBTMUX_SOCKET` that holds a slash is refused
+with exit status 2, and a relative `LIBTMUX_SOCKET_PATH` resolves against the
+working directory. Use `--tmux` to choose the executable.
 `--env`, `--home` and `--base-directory` supply expansion inputs.
 `--no-readiness` is an explicit opt-out.
 

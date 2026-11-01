@@ -78,9 +78,11 @@ supplied environment/home values and produces inert ordered steps.
 `load FILE` and `freeze SESSION` take at most one of `--socket` and
 `--socket-name`. With neither, they read `LIBTMUX_SOCKET_PATH`, then
 `LIBTMUX_SOCKET`, and otherwise leave the choice to tmux: the server `TMUX`
-names inside tmux, and the default socket elsewhere. Loading is detached by
-default; an existing session name fails unless reuse is explicit. Interactive `--attach` requires a terminal
-and remains outside automated attachment evidence.
+names inside tmux, and the default socket elsewhere. A `LIBTMUX_SOCKET` that
+holds a slash is refused, and a relative `LIBTMUX_SOCKET_PATH` resolves against
+the working directory. Loading is detached by default; an existing session name
+fails unless reuse is explicit. Interactive `--attach` requires a terminal and
+remains outside automated attachment evidence.
 
 Human progress goes to stderr. `--output json` writes one final result;
 `--output ndjson` writes ordered progress and one terminal record. Nonzero

@@ -543,7 +543,8 @@ Arguments and individual environment entries are limited to a conservative
 entries fail before submission instead of being silently omitted by tmux.
 Inherited `TMUX` and `TMUX_PANE` are removed, unless `server` names no socket:
 then tmux finds the server through them, as it does for any client that is given
-neither `-S` nor `-L`.
+neither `-S` nor `-L`. A command that names no target then acts on the pane
+`TMUX_PANE` names.
 """
 function run_command(
     server::Server,
