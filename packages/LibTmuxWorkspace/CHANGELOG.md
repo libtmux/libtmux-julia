@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+#### Take the server from a variable or tmux
+
+`libtmux-workspace load` and `freeze` no longer need `--socket` or
+`--socket-name`. With neither, they read `LIBTMUX_SOCKET_PATH`, then
+`LIBTMUX_SOCKET`, and otherwise leave the choice to tmux: the server `TMUX`
+names inside tmux, and the default socket elsewhere. A socket option leaves both
+variables unread, and the CLI still refuses two socket options. (#64)
+
 ## 0.1.1-alpha.1 - 2026-10-24
 
 #### Plan workspaces with fewer allocations

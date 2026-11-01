@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+#### `Server` passes tmux no socket by default
+
+`Server()` no longer needs `socket_path` or `socket_name`. With neither, it
+reads `LIBTMUX_SOCKET_PATH` (tmux's `-S`), then `LIBTMUX_SOCKET` (`-L`), and
+with neither set it passes tmux no socket, so tmux picks the server: the one
+`TMUX` names inside tmux, otherwise its default socket. A socket named in the
+call leaves both variables unread, a blank variable counts as unset, and naming
+both `socket_path` and `socket_name` still raises. A command whose server names
+no socket keeps `TMUX` and `TMUX_PANE` in its environment so tmux can follow
+them, and a named socket still drops both. `from_env` is unchanged and remains
+how to ask for the `TMUX` socket. Code that relied on `Server()` raising now
+reaches the server tmux picks. (#64)
+
 #### Tests run in a private tmux sandbox
 
 Every test runner, the doc-example checker, the benchmark drivers and each
