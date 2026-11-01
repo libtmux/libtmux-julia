@@ -816,6 +816,14 @@ end
     end
 end
 
+# The consumer check runs exported test scripts, which have no dev directory to
+# load the helper from, so the checker runs them inside the sandbox it enters.
+@testset "the consumer launcher check runs each script inside the sandbox" begin
+    source = read(joinpath(dirname(@__DIR__), "dev", "check-consumers.jl"), String)
+    body = match(r"(?ms)^function check_launchers\(.*?^end$", source)
+    @test body !== nothing && occursin("sandboxed_script(", body.match)
+end
+
 @testset "the doc-example checker enters the sandbox before it starts tmux" begin
     checker = joinpath(dirname(SANDBOX_HELPER), "check-doc-examples.jl")
     mktempdir(ENV["TMUX_TMPDIR"]; prefix="c-") do directory
