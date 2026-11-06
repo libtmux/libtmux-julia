@@ -92,47 +92,54 @@ const DOC_SNIPPETS = Dict(
     ),
     ("README.md", 4) => (
         kind=:executable,
+        gate=:context,
+        fingerprint="84dded560af8202985bc7eb1d5215588a8041d8fd8278394a345288539678b40",
+        source="",
+        note="A pane changed after it was read, read again through its reference",
+    ),
+    ("README.md", 5) => (
+        kind=:executable,
         gate=:doctest,
         fingerprint="1b740f15b2f14da824abb5342557f35ef0eeac27d394a5c9749d30af5fb5e338",
         source="",
         note="Server descriptions without contacting tmux",
     ),
-    ("README.md", 5) => (
+    ("README.md", 6) => (
         kind=:executable,
         gate=:context,
         fingerprint="feead0621ecb479829522f955d6b4eaeb915ee9c91d7b1ba7662ae7248eee750",
         source="",
         note="Typed text read back from a control output stream",
     ),
-    ("README.md", 6) => (
+    ("README.md", 7) => (
         kind=:illustrative,
         gate=:none,
         fingerprint="b7c232ddbb360e1009ae325bcc6b10b2e32bb6d3b19f7938dd0dc696188b6f98",
         source="",
         note="Screen wait after keys sent inside a watch block",
     ),
-    ("README.md", 7) => (
+    ("README.md", 8) => (
         kind=:executable,
         gate=:context,
         fingerprint="1dbd141b976758284585323df9dd3ed05627170006f2daf4d8ce3b12267b1320",
         source="",
         note="Task-based captures and scoped control cleanup",
     ),
-    ("README.md", 8) => (
+    ("README.md", 9) => (
         kind=:executable,
         gate=:doctest,
         fingerprint="ac18abfbc26dc39ce9b7295bc9da9e1c2d03f6a69f41ccdc4eaaf2aa8a6ddaab",
         source="",
         note="Pure criterion encoding without a live daemon",
     ),
-    ("README.md", 9) => (
+    ("README.md", 10) => (
         kind=:executable,
         gate=:doctest,
         fingerprint="f2df9f11edd575824c8619e63e96bfdf40d8f0d1f160d367ddd3fd9e8cbcdf99",
         source="",
         note="JSON 1.9 criteria codec round trip",
     ),
-    ("README.md", 10) => (
+    ("README.md", 11) => (
         kind=:executable,
         gate=:context,
         fingerprint="92a37440be5fd9547cfb6cd7f9b17f6854653454994504df69e486d7aad6e10a",
@@ -667,19 +674,20 @@ function run_contextual_snippets(entries)
                 execute(("README.md", 2))
                 ids = execute(("README.md", 3))
                 @assert ids == [only(filter(p -> p.active, LibTmux.panes(captured))).id]
+                execute(("README.md", 4))
                 if control
-                    execute(("README.md", 5))
+                    execute(("README.md", 6))
                     echoed = Base.invokelatest(getproperty, workspace, :echoed)
                     @assert echoed == "hello from Julia"
-                    screens = execute(("README.md", 7))
+                    screens = execute(("README.md", 8))
                     @assert length(screens) == 2 &&
                             all(screen -> isempty(strip(screen)), screens)
                 else
                     println(
-                        "SKIPPED README.md fences 5, 7: control acquisition needs tmux 3.7",
+                        "SKIPPED README.md fences 6, 8: control acquisition needs tmux 3.7",
                     )
                 end
-                execute(("README.md", 10))
+                execute(("README.md", 11))
                 columns = Base.invokelatest(getproperty, workspace, :columns)
                 @assert columns.current_command == ["cat", "cat"]
                 @assert columns.id == [pane.id for pane in LibTmux.panes(captured)]
@@ -744,7 +752,7 @@ function run_contextual_snippets(entries)
     @assert !ispath(endpoint[])
     @assert executed == Set(
         key for
-        key in keys(selected) if control || !(key in (("README.md", 5), ("README.md", 7)))
+        key in keys(selected) if control || !(key in (("README.md", 6), ("README.md", 8)))
     )
     for key in sort!(collect(executed))
         problem =

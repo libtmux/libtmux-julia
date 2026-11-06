@@ -156,6 +156,34 @@ links one window into two sessions and queries both views.
 [Tables projections][repo-docs-projections-md]. At the Julia prompt,
 `?PaneWhere` and `?capture_pane` show API help.
 
+### [`snapshot`][snapshot]: read an object again
+
+A pane you hold is what tmux said when it was read. Julia has no per-object
+`refresh`; take another [`snapshot`][snapshot] and index it with the pane's
+`ref`. Here [`set_title`][set_title] changes the pane after it was read:
+
+```julia
+using LibTmux
+
+with_server() do server
+    new_session(server; name="demo", command=["/bin/cat"])
+    held = only(panes(snapshot(server)))
+    set_title(server, held.ref, "editor")
+    held = snapshot(server)[held.ref]
+
+    set_title(server, held.ref, "build")
+    fresh = snapshot(server)[held.ref]
+    println(held.title, " ", fresh.title)
+end
+```
+
+```text
+editor build
+```
+
+The same `ref` indexes a session or a window. The first snapshot keeps what it
+captured.
+
 ## Choose which server to use
 
 ### [`Server`][server]: name the socket, or leave it to tmux
@@ -537,6 +565,7 @@ Core, MCP and workspace packages use the [MIT license][repo-license].
 [windows]: https://libtmux.org/en/julia/latest/reference/libtmux-windows/
 [windowlinks]: https://libtmux.org/en/julia/latest/reference/libtmux-windowlinks/
 [paneoccurrences]: https://libtmux.org/en/julia/latest/reference/libtmux-paneoccurrences/
+[set_title]: https://libtmux.org/en/julia/latest/reference/libtmux-set_title/
 [send_keys]: https://libtmux.org/en/julia/latest/reference/libtmux-send_keys/
 [observe_output]: https://libtmux.org/en/julia/latest/reference/libtmux-observe_output/
 [observation_cursor]: https://libtmux.org/en/julia/latest/reference/libtmux-observation_cursor/
