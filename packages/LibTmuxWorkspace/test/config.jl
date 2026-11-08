@@ -282,3 +282,89 @@ function test_config_plans_contain_ordered_inert_effects()
 end
 isdefined(@__MODULE__, :TEST_CACHE_DEFINITIONS_ONLY) ||
     test_config_plans_contain_ordered_inert_effects()
+
+const TMUXP_EXAMPLES = joinpath(@__DIR__, "fixtures", "tmuxp")
+
+# tmuxp's examples the loader reads.
+const TMUXP_LOADED = [
+    "2-pane-synchronized.yaml",
+    "2-pane-vertical.yaml",
+    "3-pane.yaml",
+    "4-pane.yaml",
+    "blank-panes.yaml",
+    "env-variables.yaml",
+    "focus-window-and-panes.yaml",
+    "main-pane-height-percentage.yaml",
+    "main-pane-height.yaml",
+    "pane-shell.yaml",
+    "session-environment.yaml",
+    "shorthands.yaml",
+    "start-directory.yaml",
+    "suppress-history.yaml",
+    "window-index.yaml",
+]
+
+# tmuxp's examples the loader refuses, with the code, path and message of the
+# error each one raises. A change in the loader fails the case until the entry
+# is updated or removed.
+const TMUXP_REFUSED = Dict(
+    "minimal.yaml" => (
+        :required,
+        "\$.windows[1].window_name",
+        "workspace required at \$.windows[1].window_name: required key is missing",
+    ),
+    "options.yaml" => (
+        :required,
+        "\$.windows[1].window_name",
+        "workspace required at \$.windows[1].window_name: required key is missing",
+    ),
+    "plugin-system.yaml" => (
+        :unsupported,
+        "\$.plugins",
+        "workspace unsupported at \$.plugins: this tmuxp feature is not supported by workspace schema 1",
+    ),
+    "skip-send-pane-level.yaml" => (
+        :required,
+        "\$.windows[1].window_name",
+        "workspace required at \$.windows[1].window_name: required key is missing",
+    ),
+    "skip-send.yaml" => (
+        :required,
+        "\$.windows[1].window_name",
+        "workspace required at \$.windows[1].window_name: required key is missing",
+    ),
+    "sleep-pane-level.yaml" => (
+        :required,
+        "\$.windows[1].window_name",
+        "workspace required at \$.windows[1].window_name: required key is missing",
+    ),
+    "sleep-virtualenv.yaml" => (
+        :required,
+        "\$.windows[1].window_name",
+        "workspace required at \$.windows[1].window_name: required key is missing",
+    ),
+    "sleep.yaml" => (
+        :required,
+        "\$.windows[1].window_name",
+        "workspace required at \$.windows[1].window_name: required key is missing",
+    ),
+)
+
+function test_config_tmuxp_example_catalog()
+    isdefined(@__MODULE__, :TEST_CACHE_ENTRIES) && (TEST_CACHE_ENTRIES[] += 1)
+    @testset "tmuxp example catalog" begin
+        found = sort(filter(endswith(".yaml"), readdir(TMUXP_EXAMPLES)))
+        @test found == sort([TMUXP_LOADED; collect(keys(TMUXP_REFUSED))])
+        @test length(found) >= 20
+        for name in TMUXP_LOADED
+            path = joinpath(TMUXP_EXAMPLES, name)
+            @test validate(read_config(path)) isa WorkspaceConfig
+        end
+        for (name, (code, where, message)) in TMUXP_REFUSED
+            path = joinpath(TMUXP_EXAMPLES, name)
+            error = config_error(() -> validate(read_config(path)), code, where)
+            error isa WorkspaceConfigError && @test sprint(showerror, error) == message
+        end
+    end
+end
+isdefined(@__MODULE__, :TEST_CACHE_DEFINITIONS_ONLY) || test_config_tmuxp_example_catalog()
