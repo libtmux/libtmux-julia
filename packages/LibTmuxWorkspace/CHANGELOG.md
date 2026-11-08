@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+#### Test tmuxp's example catalog
+
+The unit tests read and validate tmuxp's example files, kept with its license
+under `test/fixtures/tmuxp/`. The files the loader accepts show on the docs site
+as workspace presets, and each file it refuses fails with the error the test
+records.
+
 ## 0.1.1 - 2026-11-01
 
 #### Take the server from a variable or tmux
