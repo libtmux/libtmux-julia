@@ -58,7 +58,7 @@ jobs:
   # The shared identity uses github.sha, the tested PR merge commit. Only
   # same-repository PRs publish; fork PRs run the build without publishing.
   build:
-    uses: libtmux/docs/.github/workflows/port-docs.yml@30af469ec547f55bd6121fdd7bcd1259928f81b0
+    uses: libtmux/docs/.github/workflows/port-docs.yml@cfa8a14960f4b68c182c687672086f19840b1fc9
     with:
       port: julia
       tag-prefix: ''
@@ -79,7 +79,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: libtmux/docs/.github/workflows/reusable-deploy.yml@30af469ec547f55bd6121fdd7bcd1259928f81b0
+    uses: libtmux/docs/.github/workflows/reusable-deploy.yml@cfa8a14960f4b68c182c687672086f19840b1fc9
     with:
       # Unprefixed by locale: reusable-deploy prepends <locale>/ itself when
       # `port` is set, so this becomes en/julia/<version>.
