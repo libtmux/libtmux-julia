@@ -106,6 +106,8 @@ server. [`sessions`][sessions], [`windows`][windows] and [`panes`][panes] list
 what it captured. Continue with `snap` from the quick start:
 
 ```julia
+using LibTmux
+
 for pane in panes(snap)
     println(string(pane.id), ": ", pane.current_command)
 end
@@ -279,7 +281,7 @@ its block are not counted as already on the screen:
 using LibTmux
 
 with_server() do server
-    new_session(server; name="shell")
+    new_session(server; name="shell", command=["/bin/sh"])
     pane = only(panes(snapshot(server))).ref
     watch_screen(server, pane) do screen
         send_keys(server, pane, "printf 'ready-%s\\n' now", "Enter")

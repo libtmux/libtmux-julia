@@ -79,7 +79,7 @@ const DOC_SNIPPETS = Dict(
     ("README.md", 2) => (
         kind=:executable,
         gate=:context,
-        fingerprint="d8433e3f259892555763ffd3417be80b021dfe986fa4895e495b6030fa8b5cfd",
+        fingerprint="e7f4bff7cba6384152ee7fd574a19181b2cad5d536822a7fd1f980b616720638",
         source="",
         note="Retained snapshot listed pane by pane",
     ),
@@ -112,9 +112,9 @@ const DOC_SNIPPETS = Dict(
         note="Typed text read back from a control output stream",
     ),
     ("README.md", 7) => (
-        kind=:illustrative,
-        gate=:none,
-        fingerprint="b7c232ddbb360e1009ae325bcc6b10b2e32bb6d3b19f7938dd0dc696188b6f98",
+        kind=:executable,
+        gate=:context,
+        fingerprint="3bc13cc4dd341884e55985bdbfa7b8b979a3d53fc0a6e0a70e67a0c963e3c0ae",
         source="",
         note="Screen wait after keys sent inside a watch block",
     ),
@@ -196,9 +196,9 @@ const DOC_SNIPPETS = Dict(
         note="",
     ),
     ("docs/src/observations.md", 2) => (
-        kind=:illustrative,
-        gate=:none,
-        fingerprint="d3d3b3aee02dd65e538bdafb8b4a8bb070a49233db5e27e77ae3fc7366f9afd9",
+        kind=:executable,
+        gate=:context,
+        fingerprint="061520268653a4ed5d9570e1919066a9eccc693bb1ca9214bf11eef721ebdcb5",
         source="",
         note="Screen wait after keys sent inside a watch block",
     ),
@@ -268,7 +268,7 @@ const DOC_SNIPPETS = Dict(
     ("packages/LibTmuxWorkspace/README.md", 5) => (
         kind=:executable,
         gate=:context,
-        fingerprint="2a670dd8c9495a6d7fd9dee34355825d34952dc38e7f584ebdc05e7cd6e9e742",
+        fingerprint="946a3b8973a07252ed28206f59dd482971fd8726b51041eb6a8f36ea37bb20c5",
         source="",
         note="Applied session frozen into a workspace document",
     ),
@@ -675,6 +675,10 @@ function run_contextual_snippets(entries)
                 ids = execute(("README.md", 3))
                 @assert ids == [only(filter(p -> p.active, LibTmux.panes(captured))).id]
                 execute(("README.md", 4))
+                waited = execute(("README.md", 7))
+                @assert occursin("ready-now", waited)
+                guide = execute(("docs/src/observations.md", 2))
+                @assert occursin("ready-now", guide.text)
                 if control
                     execute(("README.md", 6))
                     echoed = Base.invokelatest(getproperty, workspace, :echoed)

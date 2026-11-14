@@ -301,6 +301,8 @@ names, window indices and layouts, pane directories and focus. The `freeze`
 command writes one as YAML. In Julia, after [`apply`][apply]:
 
 ```julia
+using LibTmuxWorkspace
+
 document = freeze(server, result.session)
 println(document.data["session_name"], ": ",
         join((window["window_name"] for window in document.data["windows"]), ", "))

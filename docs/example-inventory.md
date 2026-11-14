@@ -12,7 +12,7 @@ and program links. It does not establish runtime correctness.
 | [README.md](../README.md) (4) | executable | owned-context runner | A pane changed after it was read, read again through its reference |
 | [README.md](../README.md) (5) | executable | snippet doctests | Server descriptions without contacting tmux |
 | [README.md](../README.md) (6) | executable | owned-context runner | Typed text read back from a control output stream |
-| [README.md](../README.md) (7) | illustrative | exact snippet not executed | Screen wait after keys sent inside a watch block |
+| [README.md](../README.md) (7) | executable | owned-context runner | Screen wait after keys sent inside a watch block |
 | [README.md](../README.md) (8) | executable | owned-context runner | Task-based captures and scoped control cleanup |
 | [README.md](../README.md) (9) | executable | snippet doctests | Pure criterion encoding without a live daemon |
 | [README.md](../README.md) (10) | executable | snippet doctests | JSON 1.9 criteria codec round trip |
@@ -24,7 +24,7 @@ and program links. It does not establish runtime correctness.
 | [docs/src/api-queries.md](../docs/src/api-queries.md) (1) | executable | snippet doctests | Pure native criterion composition and wire round trip |
 | [docs/src/index.md](../docs/src/index.md) (1) | derived | external example runner | [examples/owned_capture.jl](../examples/owned_capture.jl) |
 | [docs/src/observations.md](../docs/src/observations.md) (1) | derived | external example runner | [examples/output_stream.jl](../examples/output_stream.jl) |
-| [docs/src/observations.md](../docs/src/observations.md) (2) | illustrative | exact snippet not executed | Screen wait after keys sent inside a watch block |
+| [docs/src/observations.md](../docs/src/observations.md) (2) | executable | owned-context runner | Screen wait after keys sent inside a watch block |
 | [docs/src/observations.md](../docs/src/observations.md) (3) | derived | external example runner | [examples/command_completion.jl](../examples/command_completion.jl) |
 | [docs/src/ownership.md](../docs/src/ownership.md) (1) | derived | external example runner | [examples/control_cancel.jl](../examples/control_cancel.jl) |
 | [docs/src/queries.md](../docs/src/queries.md) (1) | derived | external example runner | [examples/shared_windows.jl](../examples/shared_windows.jl) |
