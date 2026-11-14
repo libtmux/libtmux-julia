@@ -262,6 +262,10 @@ println("top pane: ", top_height, " rows; the bottom pane printed ready-now")
 top pane: 6 rows; the bottom pane printed ready-now
 ```
 
+More: [`kill_pane`][kill_pane], [`kill_window`][kill_window] and
+[`kill_session`][kill_session] remove what you made. [`set_option`][set_option]
+and [`set_hook`][set_hook] change tmux options and hooks.
+
 ## Type into a pane and read what it prints
 
 ### [`send_keys`][send_keys]: type into a pane
@@ -644,6 +648,11 @@ Core, MCP and workspace packages use the [MIT license][repo-license].
 [split_window]: https://libtmux.org/en/julia/latest/reference/libtmux-split_window/
 [resize_pane]: https://libtmux.org/en/julia/latest/reference/libtmux-resize_pane/
 [resize_window]: https://libtmux.org/en/julia/latest/reference/libtmux-resize_window/
+[kill_pane]: https://libtmux.org/en/julia/latest/reference/libtmux-kill_pane/
+[kill_window]: https://libtmux.org/en/julia/latest/reference/libtmux-kill_window/
+[kill_session]: https://libtmux.org/en/julia/latest/reference/libtmux-kill_session/
+[set_option]: https://libtmux.org/en/julia/latest/reference/libtmux-set_option/
+[set_hook]: https://libtmux.org/en/julia/latest/reference/libtmux-set_hook/
 [snapshot]: https://libtmux.org/en/julia/latest/reference/libtmux-snapshot-1gv6/
 [capture_pane]: https://libtmux.org/en/julia/latest/reference/libtmux-capture_pane/
 [capture_bytes]: https://libtmux.org/en/julia/latest/reference/libtmux-capture_bytes/
