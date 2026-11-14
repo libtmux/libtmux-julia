@@ -25,6 +25,51 @@ and keep identifiers in backticks.
 Keep examples runnable with explicit prerequisites. Verify commands against
 the current source. State what passed, failed, or was skipped.
 
+## README shape
+
+A README reads at a glance, like a sign from the highway. The Go port's README
+is the model: tasks as sections, the API linked under each heading.
+
+- **Header.** A logo block, a centered title and a badge row: CI, docs on
+  libtmux.org and license. Add a registry badge only once the package is
+  published, and never a badge or link for a page that does not return 200.
+- **Sections are tasks.** Each `##` heading names what the reader wants to do,
+  in the reader's words, such as "Find sessions, windows, and panes".
+- **Headings are the API.** Each `###` heading puts the API name in backticks
+  as a link to its libtmux.org reference page, then a colon and its job in
+  plain words.
+- **Under a heading.** A line or two linking sibling APIs, the tested example,
+  what it prints, at most one short note, and a `More:` link to the guide.
+- **Short blocks.** No paragraph over three lines. A list of facts is a bullet
+  list. The README check rejects a prose block over 240 characters.
+- **No feature inventory.** Sections and examples show what exists; a list of
+  "implemented" items does not.
+- **Floors, not pins.** Requirements are floors a reader can act on, such as
+  "tmux 3.3a or newer". Leave out toolchain patch versions you happened to
+  use, CI matrix narration and kernel trivia; link the page that holds them.
+- **Cut the assumed.** Do not say that examples are tested, how docs are built,
+  what checks cover, or add "evidence" and "contract" boilerplate.
+- **Packages.** Keep the package table. Under it, give each package a heading
+  that links its directory on GitHub, a one-line description, then a link line
+  for the API reference and the changelog.
+- **Leaves out, support.** "What it leaves out" and "Support and status" are
+  short bullets that open with a bold phrase.
+- **Imports first.** An example starts with its `using` or `import` lines, so a
+  reader can paste it into a file and run it. The first example of each
+  section shows them; later ones may continue from it.
+- **Own server, library cleanup.** An example starts its own private tmux
+  server through the library, such as `with_server`, and cleans up through the
+  library. It never needs `tmux new-session` before it or `tmux kill-server`
+  after it. Shell steps stay only where the library has no API for the step.
+- **Run in CI.** Every displayed example comes from a file CI runs: a
+  doctest, a fence the contextual runner executes, or an example program. Add
+  a new fence to the snippet table in `dev/check-doc-examples.jl` and to the
+  runner; do not leave one illustrative.
+- **Headline features.** The root README shows each headline feature the port
+  has, under an API-linked heading with a tested example: queries and filters,
+  command chaining and batches, and control mode. It has no query planner, so
+  it shows none; add that section when the API gains one.
+
 ## Markdown
 
 Use CommonMark. Wrap repository prose at 80 columns, except tables and long
