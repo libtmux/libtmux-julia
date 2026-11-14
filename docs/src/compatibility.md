@@ -6,10 +6,14 @@ optional capabilities below list; the rest of the library keeps working on
 3.3a.
 
 Linux, including WSL, is the supported platform. macOS and psmux are not
-tested. Pull requests run the oldest and the newest supported tmux; a release
-tag runs every supported release in between. The
+tested. The
 [CI result for a commit](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
-shows what ran.
+shows what ran. Tested tmux releases:
+
+- **Supported:** 3.3a, 3.4, 3.5a, 3.6b, 3.7, 3.7a, 3.7b, 3.7c and 3.8. A release
+  tag runs them all; a pull request runs the oldest and the newest.
+- **Refused:** 3.0a, 3.1c, 3.2a and 3.3 stay as rejection cells. The library
+  must refuse each one and change nothing.
 
 ## Version refusal
 
