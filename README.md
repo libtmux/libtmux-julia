@@ -32,6 +32,7 @@ and, through the MCP package, agents that share a terminal.
 **Contents** — [Quick start](#quick-start) ·
 [Find things](#find-sessions-windows-and-panes) ·
 [Choose a server](#choose-which-server-to-use) ·
+[Split and resize](#split-and-resize-panes) ·
 [Type and read](#type-into-a-pane-and-read-what-it-prints) ·
 [Batch](#send-several-commands-at-once) ·
 [Control connection](#reuse-a-control-connection) ·
@@ -230,6 +231,36 @@ Server(socket_path="/tmp/tmux-1000/default", tmux="tmux")
 
 A `Server` is an immutable value with nothing to close. It borrows the daemon
 it names. [`open_server`][open_server] starts a private daemon that you close.
+
+## Split and resize panes
+
+### [`split_window`][split_window] and [`resize_pane`][resize_pane]: lay out a window
+
+[`split_window`][split_window] returns the new pane, [`resize_pane`][resize_pane]
+sets a pane's size in cells and [`resize_window`][resize_window] a window's.
+[`send_keys`][send_keys] types into a pane and [`capture_pane`][capture_pane]
+reads it back:
+
+```julia
+using LibTmux
+
+top_height, bottom_screen = with_server() do server
+    new_session(server; name="layout", command=["/bin/sh"])
+    top = only(panes(snapshot(server))).ref
+    bottom = split_window(server, top; direction=:below, command=["/bin/sh"])
+    resize_pane(server, top; height=6)
+    send_keys(server, bottom, "printf 'ready-%s\\n' now", "Enter")
+    wait_for_text(server, bottom, "ready-now"; baseline=true)
+    snapshot(server)[top].height, capture_pane(server, bottom)
+end
+
+@assert occursin("ready-now", bottom_screen)
+println("top pane: ", top_height, " rows; the bottom pane printed ready-now")
+```
+
+```text
+top pane: 6 rows; the bottom pane printed ready-now
+```
 
 ## Type into a pane and read what it prints
 
@@ -611,6 +642,8 @@ Core, MCP and workspace packages use the [MIT license][repo-license].
 [with_server]: https://libtmux.org/en/julia/latest/reference/libtmux-with_server/
 [new_session]: https://libtmux.org/en/julia/latest/reference/libtmux-new_session/
 [split_window]: https://libtmux.org/en/julia/latest/reference/libtmux-split_window/
+[resize_pane]: https://libtmux.org/en/julia/latest/reference/libtmux-resize_pane/
+[resize_window]: https://libtmux.org/en/julia/latest/reference/libtmux-resize_window/
 [snapshot]: https://libtmux.org/en/julia/latest/reference/libtmux-snapshot-1gv6/
 [capture_pane]: https://libtmux.org/en/julia/latest/reference/libtmux-capture_pane/
 [capture_bytes]: https://libtmux.org/en/julia/latest/reference/libtmux-capture_bytes/
