@@ -60,8 +60,8 @@ $ julia \
     -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision = "v0.1.1"; Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
-Use Julia 1.13.1 or newer and tmux 3.3a or newer. Have `tmux` on your `PATH`,
-then open Julia in that project:
+It needs Julia 1.13.1 or newer, and tmux 3.3a or newer on your `PATH`. Open
+Julia in that project:
 
 ```console
 $ julia --project=.
@@ -150,8 +150,8 @@ session's context for a window that belongs to several.
 Runnable: [`examples/shared_windows.jl`][repo-examples-shared_windows-jl]
 links one window into two sessions and queries both views.
 
-[Queries and relations][repo-docs-src-queries-md] ·
-[Filterable fields][repo-docs-generated-criteria-md] ·
+More: [queries and relations][repo-docs-src-queries-md] ·
+[filterable fields][repo-docs-generated-criteria-md] ·
 [JSON criteria][repo-docs-criteria-wire-md] ·
 [Tables projections][repo-docs-projections-md]. At the Julia prompt,
 `?PaneWhere` and `?capture_pane` show API help.
@@ -189,25 +189,22 @@ captured.
 ### [`Server`][server]: name the socket, or leave it to tmux
 
 [`Server`][server] describes a tmux endpoint without contacting it. Name at
-most one of `socket_name` (tmux's `-L`) or `socket_path` (`-S`).
+most one of `socket_name` (tmux's `-L`) or `socket_path` (`-S`). With neither,
+it picks in this order:
 
-With neither, `Server` reads `LIBTMUX_SOCKET_PATH`, then `LIBTMUX_SOCKET`. A
-socket named in the call leaves both unread.
+- `LIBTMUX_SOCKET_PATH`: a socket path. A relative path resolves against the
+  working directory when the `Server` is built.
+- `LIBTMUX_SOCKET`: a socket name. A value with a slash is refused.
+- No socket: tmux picks the server. That is the one `TMUX` names inside tmux,
+  and its `default` socket elsewhere.
 
-`LIBTMUX_SOCKET` names a socket, so a value with a slash is refused; put a path
-in `LIBTMUX_SOCKET_PATH`. A relative path resolves against the working directory
-when the `Server` is built.
+A socket named in the call leaves both variables unread, and the choice is
+frozen when the `Server` is built.
 
-When neither variable is set, `Server` passes tmux no socket, and tmux picks
-the server itself: the one `TMUX` names inside tmux, and its `default` socket
-elsewhere.
-
-Its commands then keep `TMUX` and `TMUX_PANE`, so a raw
-[`run_command`][run_command] with no target acts on the caller's own pane.
-
-The `env` keyword supplies only the two variables. It is not the environment a
-tmux command gets, which is the `env` of [`run_command`][run_command]. The
-choice is frozen when the `Server` is built.
+With no socket, commands keep `TMUX` and `TMUX_PANE`, so a raw
+[`run_command`][run_command] with no target acts on the caller's own pane. The
+`env` keyword feeds only the two variables; a command's own environment is the
+`env` of [`run_command`][run_command].
 
 [`from_env`][from_env] asks for the `TMUX` socket as a path, and selects the
 `default` socket outside tmux:
@@ -365,11 +362,10 @@ $ julia \
     examples/shared_windows.jl
 ```
 
-The [MCP guide][repo-packages-libtmuxmcp] and
-[workspace guide][repo-packages-libtmuxworkspace] include their own installation
-and launcher commands. The
-[workspace example][ws-examples-owned_load-jl] loads a
-configuration and checks its layout, focus and cleanup.
+The [MCP][repo-packages-libtmuxmcp] and
+[workspace][repo-packages-libtmuxworkspace] READMEs carry their own install
+commands. The [workspace example][ws-examples-owned_load-jl] loads a
+configuration, checks it and cleans up.
 
 ## Packages
 
@@ -403,8 +399,8 @@ julia> encode_where(wide)["entity"]
 
 ### [JSON and Tables extensions](https://github.com/libtmux/libtmux-julia/tree/master/ext): optional integrations
 
-Load JSON 1.9+ to move criteria through JSON text, or Tables 1.14+ to read
-projected rows as a table. The core imports neither.
+Load JSON to move criteria through JSON text, or Tables to read projected
+rows as a table. The core imports neither.
 
 [Portable criteria][repo-docs-criteria-wire-md] ·
 [Tables projections][repo-docs-projections-md]
@@ -501,20 +497,18 @@ The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
 
 ## Support and status
 
-- **Initial release.** The packages are unregistered and their APIs may change. Pkg
-  records the requested revision and package tree in your `Manifest.toml`.
-- **Standard library only.** The core imports only Julia standard libraries.
-  The JSON and Tables integrations are optional extensions.
-- **Julia 1.13.1 or newer and tmux 3.3a or newer.** Operations refuse an older
-  or unreadable tmux release before they have any effect.
+- **Early.** The packages are unregistered and their APIs may change. Pin a
+  tag; `Manifest.toml` records the revision.
+- **Standard library only.** The core imports nothing else; the JSON and
+  Tables integrations are optional extensions.
+- **Julia 1.13.1 or newer and tmux 3.3a or newer.** An older or unreadable tmux
+  is refused before any effect.
   [Compatibility][repo-docs-src-compatibility-md] lists features that need a
   newer one.
-- **Linux, including WSL.** CI runs Linux only. macOS and psmux are excluded
-  from CI; native Windows tmux is outside scope.
-- **Evidence.** The capability manifest is
-  [`capabilities.json`][repo-capabilities-json]; the
-  [CI results](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
-  record what is verified.
+- **Linux, including WSL.** macOS and psmux are not tested; native Windows
+  tmux is out of scope.
+- **Features by release.** [`capabilities.json`][repo-capabilities-json] lists
+  each optional feature and the tmux release it needs.
 
 ## Documentation
 
