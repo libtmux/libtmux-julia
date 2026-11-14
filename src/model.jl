@@ -85,6 +85,73 @@ Identify one tmux session on the daemon generation it was captured from.
 [`new_session`](@ref) returns one, and a `SessionSnapshot` carries its own as
 `.ref`. Operations check a reference against the running daemon before acting
 and raise `StaleReference` or `CrossServerReference` when it no longer matches.
+
+# What is on here
+
+A tmux session does a great many things, so this package has a great many
+functions that take a `SessionRef`. In Julia they sit beside the type rather
+than on it: each takes a [`Server`](@ref) first, and most also have a method
+for a [`ControlConnection`](@ref). They fall into a few groups:
+
+**Finding the session.** A `Server` has no lookup by name. Creating a session
+returns its reference, and a captured `SessionSnapshot` carries its own as
+`.ref`. To pick one from a snapshot, give the matching function a criterion;
+it raises [`NoMatchError`](@ref) or [`MultipleMatchesError`](@ref) instead of
+choosing for you.
+
+- Return a reference: [`new_session`](@ref)
+- Capture: [`snapshot`](@ref)
+- Criterion: [`SessionWhere`](@ref)
+- Match exactly one: [`onlymatch`](@ref)
+
+**Looking inside a session.** Go down from a captured session to its windows.
+Listing what a snapshot holds does not contact tmux again.
+
+- Windows of a session, down: [`windows`](@ref)
+- Snapshot a record came from: [`snapshotof`](@ref)
+
+**Creating a window.** Create a detached window in the session. An explicit
+nonnegative `index` refuses a collision; omit it to use tmux's next available
+index. The call returns the new window's [`WindowRef`](@ref).
+
+- Create: [`new_window`](@ref)
+
+**Renaming and removing.** Renaming takes an exact reference, expands no format
+text, and still follows tmux's name normalization. An empty name raises
+`ArgumentError`. Removing returns the [`CommandResult`](@ref), and a failure
+after submission is never retried.
+
+- Rename: [`rename_session`](@ref)
+- Remove: [`kill_session`](@ref)
+
+**Placing windows and clients.** Linking and moving a window name a destination
+session and an explicit index; an occupied index errors unless `replace=true`.
+Switching points an attached client at the session.
+
+- Link or move a window in: [`link_window`](@ref), [`move_window`](@ref)
+- Point a client at it: [`switch_client`](@ref)
+
+**Options, hooks and environment.** A `SessionRef` is a scope for options and
+hooks. It is also a scope for the environment, which `:global` shares.
+Unsetting an entry deletes it, and removing marks a variable for removal from
+new processes.
+
+- Options: [`get_option`](@ref), [`set_option`](@ref), [`unset_option`](@ref),
+  [`list_options`](@ref)
+- Hooks: [`get_hook`](@ref), [`set_hook`](@ref), [`unset_hook`](@ref),
+  [`list_hooks`](@ref)
+- Read and set the environment: [`get_environment`](@ref),
+  [`set_environment`](@ref), [`list_environment`](@ref)
+- Delete an entry: [`unset_environment`](@ref)
+- Remove from new processes: [`remove_environment`](@ref)
+
+**Formats and control.** Reading formats at a session selects its active window
+and pane. A control connection attaches to one session, and the output and
+format-subscription functions need that connection.
+
+- Read typed fields: [`read_formats`](@ref)
+- Expand a raw expression: [`render_format`](@ref)
+- Attach to the session: [`open_control`](@ref)
 """ SessionRef
 
 const WindowRef = EntityRef{WindowID}
@@ -96,6 +163,71 @@ whichever sessions link it; [`WindowLinkRef`](@ref) names one session's link.
 [`new_window`](@ref) returns one, and a `WindowSnapshot` carries its own as
 `.ref`. Operations check a reference against the running daemon before acting
 and raise `StaleReference` or `CrossServerReference` when it no longer matches.
+
+# What is on here
+
+A `WindowRef` names the physical window, not where a session places it, so the
+placement functions take a [`WindowLinkRef`](@ref). In Julia the functions sit
+beside the type rather than on it: each takes a [`Server`](@ref) first, and most
+also have a method for a [`ControlConnection`](@ref). They fall into a few
+groups:
+
+**Finding the window.** Creating a window returns its reference, and a captured
+`WindowSnapshot` carries its own as `.ref`. To pick one from a snapshot, give
+the matching function a criterion; it raises [`NoMatchError`](@ref) or
+[`MultipleMatchesError`](@ref) instead of choosing for you.
+
+- Return a reference: [`new_window`](@ref)
+- Capture: [`snapshot`](@ref)
+- Criterion: [`WindowWhere`](@ref)
+- Match exactly one: [`onlymatch`](@ref)
+- Window of a pane or window link, up: [`window`](@ref)
+
+**Looking inside a window.** Go down from a captured window to its panes.
+Listing what a snapshot holds does not contact tmux again.
+
+- Panes of a window, down: [`panes`](@ref)
+
+**Arranging panes.** A layout is a named layout, an unambiguous alias or a
+serialized layout. Mirrored layouts need tmux 3.5 or later and JSON layouts
+tmux 3.8 or later, or the call raises `UnsupportedCapability`. Cycling can
+resize panes, and rotating changes their positions. Resizing takes absolute cell dimensions, at
+least one, and selects tmux's manual window-size policy.
+
+- Set a layout: [`select_layout`](@ref)
+- Cycle layouts: [`cycle_layout`](@ref)
+- Rotate panes: [`rotate_panes`](@ref)
+- Resize: [`resize_window`](@ref)
+
+**Placing in sessions.** One session's placement of a window is a
+`WindowLinkRef`. Linking keeps existing links and unlinking the last one is
+protected unless `allow_destroy=true`.
+
+- Link or move: [`link_window`](@ref), [`move_window`](@ref)
+- Remove a link: [`unlink_window`](@ref)
+- Select or swap: [`select_window`](@ref), [`swap_window`](@ref)
+
+**Renaming, respawning and removing.** Renaming expands no format text and
+still follows tmux's name normalization. Respawning restarts the window's
+original command, or an explicit one, and protects running processes unless
+`kill_running=true`. It reduces the window to one pane, so other pane
+references become stale. Removing returns the [`CommandResult`](@ref).
+
+- Rename: [`rename_window`](@ref)
+- Respawn: [`respawn_window`](@ref)
+- Remove: [`kill_window`](@ref)
+
+**Options, hooks and formats.** A `WindowRef` is a scope for options and hooks.
+Reading formats at a window selects its active pane, and a control connection
+can subscribe to one of its format fields.
+
+- Options: [`get_option`](@ref), [`set_option`](@ref), [`unset_option`](@ref),
+  [`list_options`](@ref)
+- Hooks: [`get_hook`](@ref), [`set_hook`](@ref), [`unset_hook`](@ref),
+  [`list_hooks`](@ref)
+- Read typed fields: [`read_formats`](@ref)
+- Expand a raw expression: [`render_format`](@ref)
+- Subscribe: [`subscribe_format`](@ref)
 """ WindowRef
 
 const PaneRef = EntityRef{PaneID}
@@ -106,6 +238,77 @@ Identify one physical pane on the daemon generation it was captured from.
 [`split_window`](@ref) returns one, and a `PaneSnapshot` carries its own as
 `.ref`. Operations check a reference against the running daemon before acting
 and raise `StaleReference` or `CrossServerReference` when it no longer matches.
+
+# What is on here
+
+In Julia the functions that act on a pane sit beside the type rather than on it:
+each takes a [`Server`](@ref) first, and most also have a method for a
+[`ControlConnection`](@ref). They fall into a few groups:
+
+**Finding the pane.** Splitting returns the new pane's reference, and a
+captured `PaneSnapshot` carries its own as `.ref`. To pick one from a snapshot,
+give the matching function a criterion; it raises [`NoMatchError`](@ref) or
+[`MultipleMatchesError`](@ref) instead of choosing for you.
+
+- Return a reference: [`split_window`](@ref)
+- Capture: [`snapshot`](@ref)
+- Criterion: [`PaneWhere`](@ref)
+- Match exactly one: [`onlymatch`](@ref)
+- Window of a pane, up: [`window`](@ref)
+
+**Splitting and arranging.** A split goes `:below` by default, or `:right`,
+`:left` or `:above`, and takes a positive cell count as `size`. Moving a pane
+keeps its ID, and the old window can disappear when its final pane moves.
+Swapping keeps IDs and running processes. Resizing takes absolute cell
+dimensions, at least one, and tmux may constrain them to fit adjacent panes.
+
+- Split: [`split_window`](@ref)
+- Move beside another pane: [`move_pane`](@ref)
+- Move into a new window: [`break_pane`](@ref)
+- Swap: [`swap_pane`](@ref)
+- Resize or zoom: [`resize_pane`](@ref), [`set_zoom`](@ref)
+- Focus: [`select_pane`](@ref)
+
+**Sending input.** Named tokens such as `Enter` and `C-c` use tmux's key lookup,
+other tokens are text, and `literal=true` turns the lookup off. No Enter is
+added. Large text and binary data belong in a paste, which also adds no Enter.
+
+- Send keys: [`send_keys`](@ref)
+- Paste: [`paste_text`](@ref), [`paste_bytes`](@ref)
+
+**Reading output.** A capture is tmux's screen representation, not the
+program's original byte stream. Text decodes as strict UTF-8 and raises
+`CaptureDecodeError` on malformed bytes. Waiting for text polls the visible
+screen and opens no control client. Observing raw output needs a control
+connection and reports only future bytes.
+
+- Screen as text: [`capture_pane`](@ref)
+- Screen as bytes: [`capture_bytes`](@ref)
+- Wait for text: [`wait_for_text`](@ref), [`watch_screen`](@ref)
+- Raw future output: [`observe_output`](@ref)
+
+**Changing things.** Clearing history keeps the visible screen and the process.
+Respawning restarts the original command, or an explicit one, and protects
+running processes unless `kill_running=true`. A pipe runs a shell command on the
+tmux host, and an existing pipe is protected unless `replace=true`. Removing
+returns the [`CommandResult`](@ref).
+
+- Clear scrollback: [`clear_history`](@ref)
+- Set the title: [`set_title`](@ref)
+- Pipe output: [`pipe_pane`](@ref)
+- Respawn: [`respawn_pane`](@ref)
+- Remove: [`kill_pane`](@ref)
+
+**Options, hooks and formats.** A `PaneRef` is a scope for options and hooks,
+and a format target.
+
+- Options: [`get_option`](@ref), [`set_option`](@ref), [`unset_option`](@ref),
+  [`list_options`](@ref)
+- Hooks: [`get_hook`](@ref), [`set_hook`](@ref), [`unset_hook`](@ref),
+  [`list_hooks`](@ref)
+- Read typed fields: [`read_formats`](@ref)
+- Expand a raw expression: [`render_format`](@ref)
+- Subscribe: [`subscribe_format`](@ref)
 """ PaneRef
 
 const ClientRef = EntityRef{ClientID}
