@@ -93,58 +93,36 @@ $ bin/libtmux-workspace validate workspace.yaml
 valid
 ```
 
-`load` and `freeze` choose a tmux server the way [`Server`][server] does:
-`--socket` or `--socket-name`, else `LIBTMUX_SOCKET_PATH`, else `LIBTMUX_SOCKET`,
-else tmux's own choice.
-
-A `LIBTMUX_SOCKET` that holds a slash is refused with exit status 2, so put a
-path in `LIBTMUX_SOCKET_PATH`. A relative path resolves against the working
-directory.
-
-For this demonstration, name an unused socket so that nothing reaches your own
-server. The commands use `work`; use another name throughout if a daemon already
-has that name. Start the example's server:
+Load it into a private tmux server and freeze it back, from Julia.
+[`with_server`][with_server] removes the server when the block returns. Open
+Julia in the directory that holds `workspace.yaml`:
 
 ```console
-$ tmux -L work new-session -d -s scratch
+$ julia --project=.
 ```
 
-Load the workspace into it. Progress goes to stderr, and a successful load
-prints one line:
+```julia
+using LibTmux, LibTmuxWorkspace
 
-```console
-$ bin/libtmux-workspace load workspace.yaml \
-    --socket-name work \
-    --env PROJECT=demo \
-    --rollback-created
+with_server() do server
+    prepared = plan(expand(validate(read_config("workspace.yaml"));
+                           env=Dict("PROJECT" => "demo")))
+    result = apply(server, prepared; rollback=:created)
+    editor = only(windows(snapshot(server)))
+    println(result.status, ": ", editor.name, ", ", length(panes(editor)), " panes")
+    document = freeze(server, result.session)
+    println("frozen: ", document.data["session_name"])
+end
 ```
 
 ```text
-loaded
+complete: editor, 2 panes
+frozen: demo
 ```
 
-`--rollback-created` removes what `load` created if it fails partway. Check
-the result with tmux:
-
-```console
-$ tmux -L work list-windows -t demo -F '#{window_name}: #{window_panes} panes'
-```
-
-```text
-editor: 2 panes
-```
-
-Freeze the session back into a workspace file:
-
-```console
-$ bin/libtmux-workspace freeze demo --socket-name work > frozen.yaml
-```
-
-Stop only the server created for this demonstration:
-
-```console
-$ tmux -L work kill-server
-```
+`rollback=:created` removes what the load created if it fails partway. The
+`load` and `freeze` commands do the same against a server you name; see
+[Use the command line](#use-the-command-line).
 
 ## Write a workspace file
 
@@ -316,7 +294,26 @@ Write `document.data` with your JSON or YAML encoder. Commands, options,
 environment and history are not captured, and shared windows become
 independent windows when reloaded.
 
-The file that the quick start froze validates:
+The `freeze` command writes the same document as YAML. This is what it writes
+for the session above, with paths shortened; the layout is whatever your tmux
+reports. It validates like any other file:
+
+<!-- file: frozen.yaml -->
+
+```yaml
+session_name: "demo"
+schema_version: 1
+windows:
+  - window_name: "editor"
+    focus: true
+    window_index: 0
+    layout: "09fa,80x24,0,0{39x24,0,0,1,40x24,40,0,2}"
+    panes:
+      - start_directory: "/work/demo"
+        focus: true
+      - start_directory: "/work/demo"
+        focus: false
+```
 
 ```console
 $ bin/libtmux-workspace validate frozen.yaml
@@ -349,16 +346,20 @@ Each command runs the operation of the same name: [`validate`][validate],
 | `load FILE` | Detached application; `--reuse` explicitly borrows the named session |
 | `freeze SESSION` | Supported reconstruction document for the exact named session |
 
-- `load` and `freeze` take at most one of `--socket` or `--socket-name`. With
-  neither, they read `LIBTMUX_SOCKET_PATH`, then `LIBTMUX_SOCKET`, and
-  otherwise tmux picks the server: the one `TMUX` names inside tmux, and the
+- `load` and `freeze` choose a server the way [`Server`][server] does. They
+  take at most one of `--socket` or `--socket-name`.
+- With neither, they read `LIBTMUX_SOCKET_PATH`, then `LIBTMUX_SOCKET`.
+  Otherwise tmux picks the server: the one `TMUX` names inside tmux, and the
   default socket elsewhere.
+- A `LIBTMUX_SOCKET` with a slash is refused with exit status 2. A relative
+  `LIBTMUX_SOCKET_PATH` resolves against the working directory.
 - Progress goes to stderr. `--output json` writes one final document, and
   `--output ndjson` writes progress records and one result.
 - `--no-readiness` skips the shell handshake. `--attach` attaches after a load
   and needs a terminal.
 
-This load uses an already-running server at an explicit socket:
+`--rollback-created` removes what a failed load created. This load uses an
+already-running server at an explicit socket:
 
 ```console
 $ libtmux-workspace load workspace.yaml \
@@ -510,6 +511,7 @@ lists the defaults and what `validate` copies.
 [MIT][ws-license].
 
 [libtmux]: https://libtmux.org/en/julia/latest/reference/libtmux/
+[with_server]: https://libtmux.org/en/julia/latest/reference/libtmux-with_server/
 [server]: https://libtmux.org/en/julia/latest/reference/libtmux-server/
 [validate]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-validate/
 [plan]: https://libtmux.org/en/julia/latest/workspace/reference/libtmuxworkspace-plan/

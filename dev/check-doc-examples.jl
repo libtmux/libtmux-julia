@@ -253,54 +253,61 @@ const DOC_SNIPPETS = Dict(
     ),
     ("packages/LibTmuxWorkspace/README.md", 1) => (
         kind=:executable,
+        gate=:context,
+        fingerprint="ab2ada071d0f64257c011afc715f8d5529aad6a1dfeeaaf3f96f0031226f8437",
+        source="",
+        note="Private server, workspace loaded and frozen",
+    ),
+    ("packages/LibTmuxWorkspace/README.md", 2) => (
+        kind=:executable,
         gate=:doctest,
         fingerprint="ca57abb7982931017f8f56d823101b8097adea66ba0e9c46653b1198f31c44cf",
         source="",
         note="Private copy of the shipped workspace configuration",
     ),
-    ("packages/LibTmuxWorkspace/README.md", 2) => (
+    ("packages/LibTmuxWorkspace/README.md", 3) => (
         kind=:executable,
         gate=:doctest,
         fingerprint="9397cd954650794bea40b0bf5894992d29b0ba1b35be6c0fcbb104bd91d61455",
         source="",
         note="Workspace text parsed, expanded and planned without tmux",
     ),
-    ("packages/LibTmuxWorkspace/README.md", 3) => (
+    ("packages/LibTmuxWorkspace/README.md", 4) => (
         kind=:executable,
         gate=:context,
         fingerprint="3474dbfa248b047f7481d6c2e94c3d66cfad718843f2b62a422c4238d4a24f01",
         source="",
         note="Owned server and private workspace.yaml",
     ),
-    ("packages/LibTmuxWorkspace/README.md", 4) => (
+    ("packages/LibTmuxWorkspace/README.md", 5) => (
         kind=:executable,
         gate=:context,
         fingerprint="e15ec45c03b8ab1136be78b4e08be848428589fbae024fc9baa5d2f40052675b",
         source="",
         note="Second apply of the same plan fails with a retained result",
     ),
-    ("packages/LibTmuxWorkspace/README.md", 5) => (
+    ("packages/LibTmuxWorkspace/README.md", 6) => (
         kind=:executable,
         gate=:context,
         fingerprint="946a3b8973a07252ed28206f59dd482971fd8726b51041eb6a8f36ea37bb20c5",
         source="",
         note="Applied session frozen into a workspace document",
     ),
-    ("packages/LibTmuxWorkspace/README.md", 6) => (
+    ("packages/LibTmuxWorkspace/README.md", 7) => (
         kind=:executable,
         gate=:context,
         fingerprint="d3e17d2d572c86a8fb3f643053dfc3e930bd5023b4a8e0504448ec4e7d2ba1ac",
         source="",
         note="Private installation directory; installed launchers have a separate runtime gate",
     ),
-    ("packages/LibTmuxWorkspace/README.md", 7) => (
+    ("packages/LibTmuxWorkspace/README.md", 8) => (
         kind=:executable,
         gate=:doctest,
         fingerprint="28035e8a9ce83a982032616d0de811035dfd3ac994ba3023bd5eb56b72c501d9",
         source="",
         note="Library entry point returns exit codes without a launcher",
     ),
-    ("packages/LibTmuxWorkspace/README.md", 8) => (
+    ("packages/LibTmuxWorkspace/README.md", 9) => (
         kind=:executable,
         gate=:doctest,
         fingerprint="9b49987da0e512fcf508ac6ac0f57160b10c396776c3f1c422e299f2318af452",
@@ -735,7 +742,7 @@ function run_contextual_snippets(entries)
             @assert !isempty(formats[3].value)
             mktempdir(; prefix="libtmux-julia-doc-context-") do directory
                 path = "packages/LibTmuxWorkspace/README.md"
-                configuration = only(
+                configuration = first(
                     document_fences(
                         read(joinpath(DOC_EXAMPLE_ROOT, path), String),
                         path;
@@ -744,7 +751,8 @@ function run_contextual_snippets(entries)
                 ).code
                 write(joinpath(directory, "workspace.yaml"), configuration)
                 cd(directory) do
-                    execute(("packages/LibTmuxWorkspace/README.md", 3))
+                    execute(("packages/LibTmuxWorkspace/README.md", 1))
+                    execute(("packages/LibTmuxWorkspace/README.md", 4))
                     result = Base.invokelatest(getproperty, workspace, :result)
                     @assert result.status === :complete
                     observed = LibTmux.snapshot(server)
@@ -753,16 +761,16 @@ function run_contextual_snippets(entries)
                         LibTmux.sessions(observed),
                     )
                     @assert length(LibTmux.panes(observed)) == 3
-                    execute(("packages/LibTmuxWorkspace/README.md", 4))
-                    @assert length(LibTmux.panes(LibTmux.snapshot(server))) == 3
                     execute(("packages/LibTmuxWorkspace/README.md", 5))
+                    @assert length(LibTmux.panes(LibTmux.snapshot(server))) == 3
+                    execute(("packages/LibTmuxWorkspace/README.md", 6))
                     document = Base.invokelatest(getproperty, workspace, :document)
                     @assert document.data["session_name"] == "example"
                     @assert [
                         window["window_name"] for window in document.data["windows"]
                     ] == ["editor"]
                     bind(:bin_directory, joinpath(directory, "bin"))
-                    launcher = execute(("packages/LibTmuxWorkspace/README.md", 6))
+                    launcher = execute(("packages/LibTmuxWorkspace/README.md", 7))
                     @assert isfile(launcher) && !islink(launcher)
                     @assert dirname(launcher) == joinpath(directory, "bin")
                 end

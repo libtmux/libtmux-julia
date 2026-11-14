@@ -34,14 +34,15 @@ and program links. It does not establish runtime correctness.
 | [docs/src/workspaces.md](../docs/src/workspaces.md) (1) | derived | external example runner | [packages/LibTmuxWorkspace/examples/owned_load.jl](../packages/LibTmuxWorkspace/examples/owned_load.jl) |
 | [packages/LibTmuxMCP/README.md](../packages/LibTmuxMCP/README.md) (1) | executable | snippet doctests | Default tool catalog from an application, without tmux |
 | [packages/LibTmuxMCP/README.md](../packages/LibTmuxMCP/README.md) (2) | executable | snippet doctests | Launcher entry point returns exit codes without tmux |
-| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (1) | executable | snippet doctests | Private copy of the shipped workspace configuration |
-| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (2) | executable | snippet doctests | Workspace text parsed, expanded and planned without tmux |
-| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (3) | executable | owned-context runner | Owned server and private workspace.yaml |
-| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (4) | executable | owned-context runner | Second apply of the same plan fails with a retained result |
-| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (5) | executable | owned-context runner | Applied session frozen into a workspace document |
-| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (6) | executable | owned-context runner | Private installation directory; installed launchers have a separate runtime gate |
-| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (7) | executable | snippet doctests | Library entry point returns exit codes without a launcher |
-| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (8) | executable | snippet doctests | Configuration error code and document path |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (1) | executable | owned-context runner | Private server, workspace loaded and frozen |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (2) | executable | snippet doctests | Private copy of the shipped workspace configuration |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (3) | executable | snippet doctests | Workspace text parsed, expanded and planned without tmux |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (4) | executable | owned-context runner | Owned server and private workspace.yaml |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (5) | executable | owned-context runner | Second apply of the same plan fails with a retained result |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (6) | executable | owned-context runner | Applied session frozen into a workspace document |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (7) | executable | owned-context runner | Private installation directory; installed launchers have a separate runtime gate |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (8) | executable | snippet doctests | Library entry point returns exit codes without a launcher |
+| [packages/LibTmuxWorkspace/README.md](../packages/LibTmuxWorkspace/README.md) (9) | executable | snippet doctests | Configuration error code and document path |
 | [src/formats.jl](../src/formats.jl) (1) | executable | owned-context runner | Owned server and exact pane reference |
 | [src/screen_wait.jl](../src/screen_wait.jl) (1) | illustrative | exact snippet not executed | Screen wait after keys sent inside a watch block |
 
