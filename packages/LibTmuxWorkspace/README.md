@@ -11,7 +11,9 @@
 
 # LibTmuxWorkspace
 
+[![Julia](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml/badge.svg)](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
 [![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/julia/latest/workspace/)
+[![license](https://img.shields.io/badge/license-MIT-blue)](https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxWorkspace/LICENSE)
 
 Load tmuxp-style YAML or JSON workspaces into tmux, and freeze a running
 session back into a file.
@@ -394,14 +396,13 @@ describe the installed launcher.
 ## Run the programs in this checkout
 
 The two programs need a checkout. From the repository root, enter this package
-directory and use the same shell for setup and examples:
+directory and keep one shell for the steps below:
 
 ```console
 $ cd packages/LibTmuxWorkspace
 ```
 
-Create an external consumer project. Dependency resolution and precompilation
-are setup, outside timed checks:
+Create a consumer project for the checkout:
 
 ```console
 $ workspace_stage=$(mktemp -d "${TMPDIR:-/tmp}/ltj-workspace.XXXXXX")
@@ -423,9 +424,8 @@ $ julia \
     examples/plan.jl
 ```
 
-[`examples/owned_load.jl`][ws-examples-owned_load-jl] creates an isolated
-server, loads two panes, freezes the supported subset, then removes its owned
-server. It uses only public core and workspace APIs:
+[`examples/owned_load.jl`][ws-examples-owned_load-jl] starts a private
+server, loads two panes, freezes them and removes the server:
 
 ```console
 $ julia \
@@ -487,15 +487,11 @@ lists the defaults and what `validate` copies.
 ## Support and status
 
 - **Experimental.** The packages are unregistered and their APIs may change.
-- **Dependencies.** The package depends on the public
-  [`LibTmux`][libtmux] package, JSON 1.9, YAML 0.4.17 and PrecompileTools. The
+- **Dependencies.** [`LibTmux`][libtmux], JSON, YAML and PrecompileTools. The
   core does not depend on this package.
-- **Precompilation.** It covers inert configuration and CLI reporting. It never
-  starts a process or contacts tmux.
 - **Julia 1.13.1 or newer and tmux 3.3a or newer.**
-- **Linux, including WSL.** CI runs Linux only. macOS and psmux are excluded
-  from CI.
-- **Attach.** The automated consumer tests have not exercised `--attach`.
+- **Linux, including WSL.** macOS and psmux are not tested.
+- **Attach.** `--attach` has no automated test.
 
 ## Documentation
 

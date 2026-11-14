@@ -1,11 +1,11 @@
 # Executable examples
 
-Run these programs from an environment containing LibTmux and a local tmux
-binary. Each creates a private server and verifies cleanup. They never use
-the default server. `LIBTMUX_TEST_TMUX` can select a specific tmux executable.
+Run these programs from an environment with LibTmux and a local tmux. Each
+starts a private server and removes it. None touches your default server.
+`LIBTMUX_TEST_TMUX` selects another tmux executable.
 
-The control cancellation, output stream and command completion programs need
-tmux 3.7 or newer. The other programs use the core's tmux 3.3a floor.
+`control_cancel.jl`, `output_stream.jl` and `command_completion.jl` need
+tmux 3.7 or newer. The others run on the core's tmux 3.3a floor.
 
 | Program | Demonstrates |
 | --- | --- |
@@ -24,5 +24,4 @@ $ julia \
     examples/owned_capture.jl
 ```
 
-The same command accepts the other program paths. Normal compilation is
-part of the outer example check; dependency preparation happens separately.
+Use any other program path from the table.

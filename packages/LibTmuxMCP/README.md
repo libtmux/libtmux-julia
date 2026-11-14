@@ -11,16 +11,17 @@
 
 # LibTmuxMCP
 
+[![Julia](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml/badge.svg)](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
 [![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/julia/latest/mcp/)
+[![license](https://img.shields.io/badge/license-MIT-blue)](https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/LICENSE)
 
 Serve one tmux server to MCP clients over stdio: list panes, capture a pane and
 send keys.
 
 </div>
 
-The package uses public [LibTmux][libtmux] APIs and a bounded adapter around
-ModelContextProtocol.jl. It borrows one tmux server: the one you name, or else
-the one tmux picks. Shutdown tears down only application-owned sessions.
+Built on [LibTmux][libtmux]. It borrows one tmux server: the one you name, or
+else the one tmux picks. Shutdown removes only sessions it created.
 
 **Contents** — [Quick start](#quick-start) ·
 [Point a client at a server](#point-a-client-at-a-server) ·
@@ -44,9 +45,8 @@ $ julia \
     -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision = "v0.1.1"; Pkg.add([Pkg.PackageSpec(url=repo, rev=revision), Pkg.PackageSpec(url=repo, rev=revision, subdir="packages/LibTmuxMCP")])'
 ```
 
-Install a launcher bound to that environment with
-[`install_cli`][install_cli]. Choose a writable destination; installation
-refuses to overwrite an existing launcher by default.
+[`install_cli`][install_cli] writes a launcher bound to that environment, in a
+directory you can write to. It refuses to overwrite an existing launcher.
 
 ```console
 $ julia \
@@ -84,25 +84,25 @@ messages to stdout. Diagnostics go to stderr.
 
 ### `--socket-name` and `--socket`: choose the tmux server
 
-Pass at most one socket option. `--socket-name mcp-demo` addresses an existing
-server started with `tmux -L mcp-demo`. `--socket` selects a socket path, which
-must resolve from the client's working directory. Passing both is an error.
+Pass at most one socket option; both is an error:
 
-With neither option, the launcher reads `LIBTMUX_SOCKET_PATH` (a socket path,
-tmux's `-S`), then `LIBTMUX_SOCKET` (a socket name, `-L`). A variable that is
-empty or only whitespace counts as unset. A socket option leaves both variables
-unread.
+- `--socket-name NAME`: a running server started with `tmux -L NAME`, such as
+  `--socket-name mcp-demo`.
+- `--socket PATH`: a socket path that resolves from the client's working
+  directory.
 
-A `LIBTMUX_SOCKET` that holds a slash is refused with exit status 2, so put a
-path in `LIBTMUX_SOCKET_PATH`. A relative path resolves against the launcher's
-working directory.
+With neither option, the launcher picks in this order:
 
-When neither is set, the launcher passes tmux no socket and tmux picks the
-server: the one `TMUX` names when the client runs inside tmux, and its `default`
-socket otherwise.
+- `LIBTMUX_SOCKET_PATH`: a socket path (tmux's `-S`). A relative path resolves
+  against the launcher's working directory.
+- `LIBTMUX_SOCKET`: a socket name (`-L`). A value with a slash is refused with
+  exit status 2.
+- No socket: tmux picks the server. That is the one `TMUX` names inside tmux,
+  and its `default` socket elsewhere. Name a socket when that is not the server
+  you want.
 
-A client started outside tmux therefore reaches the default server. Name a
-socket when that is not the server you want.
+An empty or whitespace-only variable counts as unset, and a socket option leaves
+both unread.
 
 ### The `mcpServers` shape: other clients
 
@@ -213,24 +213,20 @@ pastes longer text through an owned buffer.
 ### [`wait_for_text`][tool_wait_for_text]: wait for output
 
 [`wait_for_text`][tool_wait_for_text] waits for a literal string.
-On the control path, [`send_keys_and_wait`][tool_send_keys_and_wait] registers
-for output before sending keys and matches only subsequent output. Neither
-tool reports process exit.
+[`send_keys_and_wait`][tool_send_keys_and_wait] sends keys first. Neither
+reports process exit.
 
-On tmux 3.7 and newer both observe pane output through a control client. On
-older releases they poll the screen, joining wrapped rows, and report
-`source: "screen"`.
-
-A polled screen cannot tell new output from old, so
-[`send_keys_and_wait`][tool_send_keys_and_wait] there needs more occurrences of
-the text than the screen held before the keys.
-
-When the pane exits or the server stops during a wait, the call fails with code
-`pane_died` and an `output` field holding the text seen so far, on both paths.
-
-Set `timeoutSeconds` to shorten a wait's total budget. Setup, capture and
-waiting share that deadline. A wait inside a batch also shares the batch's
-remaining budget.
+- **Control path** (tmux 3.7 or newer): both observe pane output through a
+  control client. `send_keys_and_wait` registers before sending keys, so it
+  matches only later output.
+- **Polled path** (older tmux): both poll the screen, join wrapped rows and
+  report `source: "screen"`. The screen cannot tell new output from old, so
+  `send_keys_and_wait` needs more occurrences of the text than the screen held
+  before the keys.
+- **Pane or server ends:** the call fails with code `pane_died` and an
+  `output` field holding the text seen so far, on both paths.
+- **Deadline:** `timeoutSeconds` shortens the total budget, which setup,
+  capture, waiting and any enclosing batch share.
 
 ### [`run_operations`][tool_run_operations]: several calls, one request
 
@@ -246,17 +242,14 @@ $ claude mcp add tmux-batch -- \
     --tool run_operations
 ```
 
-If an item fails, earlier effects stay. The result reports its one-based
-`failedIndex` and sets `atomic: false`.
-[Batch results][mcp-docs-contracts-md-batches] covers truncated output.
-
-Tools can invoke configured tmux hooks or aliases, including listing and
-capture. Their catalog hints therefore declare possible mutation. Waits also
-attach and detach a control client, which can trigger hooks.
-
-`error.effects: none` means refusal before potentially effectful I/O. Once any
-stage admits that I/O, errors report `possible`. Earlier batch items, cleanup
-and truncation retain that history; cancellation never proves rollback.
+- If an item fails, earlier effects stay. The result reports its one-based
+  `failedIndex` and sets `atomic: false`.
+  [Batch results][mcp-docs-contracts-md-batches] covers truncated output.
+- Tools can run configured tmux hooks or aliases, even when listing or
+  capturing, so catalog hints declare possible mutation. A wait attaches and
+  detaches a control client, which can trigger hooks.
+- `error.effects: none` means refusal before any effectful I/O. After a stage
+  admits it, errors report `possible`; cancellation never proves rollback.
 
 ### [`create_session`][tool_create_session]: a session the server owns
 
@@ -346,15 +339,13 @@ ownership.
 
 ## Support and status
 
-- **Experimental.** The packages are unregistered. Registry publication is pending.
-- **Protocol.** Modern discovery uses `2026-07-28`. The legacy initialize
-  profile is `2025-11-25`.
+- **Experimental.** The packages are unregistered.
+- **Protocol.** MCP over stdio, in a current and a legacy revision. The
+  [contracts][mcp-docs-contracts-md] name both.
 - **Julia 1.13.1 or newer and tmux 3.3a or newer.**
-- **Older tmux is refused.** The initial check reports `unsupported_tmux` and
-  `effects: none`. A later refusal preserves earlier possible effects. Upgrade
-  tmux and restart the server, or pin a compatible libtmux release.
-- **Linux, including WSL.** CI runs Linux only. macOS and psmux are excluded
-  from CI.
+- **Older tmux is refused** with `unsupported_tmux` and `effects: none`.
+  Upgrade tmux and restart the server.
+- **Linux, including WSL.** macOS and psmux are not tested.
 
 ## Documentation
 
