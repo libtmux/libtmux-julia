@@ -1,39 +1,48 @@
 # Compatibility
 
 The minimums are Julia 1.13.1 and tmux 3.3a. Core, MCP and workspace packages
-share these requirements. A few operations need a newer tmux release and refuse
-on older ones, as the optional capabilities below list; the rest of the library
-keeps working on 3.3a.
+share them. A few operations need a newer tmux and refuse on older ones, as the
+optional capabilities below list; the rest of the library keeps working on
+3.3a.
 
-CI runs Linux only, using Julia 1.13.1. A push and a pull request check tmux
-3.3a and 3.8 at one thread, and 3.8 at four threads. A release tag, and a
-manual run that asks for the full scope, check tmux 3.3a, 3.4, 3.5a, 3.6b,
-3.7, 3.7a, 3.7b and 3.7c at one thread, 3.7c at four threads and 3.8 at one
-thread. macOS and psmux are excluded from CI and current support.
-
-The [CI result for a commit](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
-is the evidence for that commit.
+Linux, including WSL, is the supported platform. macOS and psmux are not
+tested. Pull requests run the oldest and the newest supported tmux; a release
+tag runs every supported release in between. The
+[CI result for a commit](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
+shows what ran.
 
 ## Version refusal
 
-The minimum tmux release for ordinary operations is 3.3a. The first
-subprocess command to an endpoint reads the connected daemon's release, not
-the client's `-V` report. Later commands to the same executable and endpoint
-skip that read and rely on a fence: every command runs behind a check on the
-release it was admitted for. A daemon below 3.3a, an unreadable release, or a
-daemon replaced after the version check raises [`UnsupportedTmuxVersion`](@ref)
-before the command has any effect. A fence mismatch, a vanished endpoint or a
-tmux 3.1 or older answer drops the remembered release, and the next read
-decides. Reading the release fires no `after-*` or `command-error` hook. An
-endpoint with no daemon is checked against the `-V` report of the executable
-that would start it, and `kill-server` on such an endpoint does nothing.
-Releases are compared with their patch letters, so 3.3 is below the floor;
-`next-X.Y` and `X.Y-rc` rank below `X.Y`, and a bare `master` or OpenBSD report
-names no release and is refused as unrecognized. A daemon or client of tmux 3.1
-or older has no `run-shell -C` and is refused as unsupported the same way. Each
-refusal says to upgrade tmux and restart the server, or pin the previous
-libtmux release. CI keeps 3.0a, 3.1c, 3.2a and 3.3 as rejection cells, each
-run behind a 3.3a client, that assert this refusal and that nothing changed.
+Ordinary operations need tmux 3.3a. The first subprocess command to an
+endpoint reads the connected daemon's release, not the client's `-V` report.
+Later commands to the same executable and endpoint skip that read and run
+behind a fence: each is checked against the release it was admitted for.
+
+[`UnsupportedTmuxVersion`](@ref) is raised before the command has any effect
+when:
+
+- the daemon is below 3.3a, or its release is unreadable;
+- the daemon was replaced after the version check;
+- the daemon or client is tmux 3.1 or older, which has no `run-shell -C`.
+
+Release comparison:
+
+- Patch letters count, so 3.3 is below the floor.
+- `next-X.Y` and `X.Y-rc` rank below `X.Y`.
+- A bare `master` or OpenBSD report names no release and is refused as
+  unrecognized.
+
+More behavior:
+
+- A fence mismatch, a vanished endpoint or a tmux 3.1 or older answer drops the
+  remembered release, and the next read decides.
+- Reading the release fires no `after-*` or `command-error` hook.
+- An endpoint with no daemon is checked against the `-V` report of the
+  executable that would start it, and `kill-server` on such an endpoint does
+  nothing.
+
+Each refusal says to upgrade tmux and restart the server, or pin the previous
+libtmux release.
 
 ## Optional capabilities
 

@@ -25,7 +25,7 @@ and client IDs retain their corresponding library types.
 
 ## Tables integration
 
-Loading Tables 1.14 or later activates the optional extension. The projection
+Loading Tables activates the optional extension. The projection
 implements its [row interface](https://tables.juliadata.org/stable/implementing-the-interface/)
 and supplies the declared schema even when no rows match.
 

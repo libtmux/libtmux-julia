@@ -1,9 +1,8 @@
 # Install from source
 
-The packages are unregistered. Install the `v0.1.1` tag
-in the Julia project that will use them. `Manifest.toml` records the
-requested revision and package tree hashes. The MCP and workspace companions
-are experimental; their guides record supported behavior and limitations.
+The packages are unregistered. Install the `v0.1.1` tag in the Julia project
+that will use them; `Manifest.toml` records the revision. The MCP and workspace
+companions are experimental.
 
 ## Core
 
@@ -19,10 +18,9 @@ $ julia \
         Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
 ```
 
-Have `tmux` on `PATH`. Julia 1.13.1+ and tmux 3.3a+ are the compatibility
-targets. Operations refuse an older or unreadable tmux release before they
-have any effect; [Compatibility](compatibility.md) records the exact tested
-cells.
+Have `tmux` on `PATH`. It needs Julia 1.13.1 or newer and tmux 3.3a or newer.
+An older or unreadable tmux is refused before any effect;
+[Compatibility](compatibility.md) lists what needs a newer one.
 
 ## MCP application
 
@@ -94,6 +92,4 @@ $ bin/libtmux-workspace --help
 [Load a workspace](workspaces.md) describes validation, planning, loading and
 freezing.
 
-Version `0.1.1` is an unregistered source release. The packages are
-not in the General registry; registration needs a plain version and a separate
-maintainer action.
+The packages are not in the General registry.
