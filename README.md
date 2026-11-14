@@ -33,6 +33,7 @@ and, through the MCP package, agents that share a terminal.
 [Find things](#find-sessions-windows-and-panes) ·
 [Choose a server](#choose-which-server-to-use) ·
 [Type and read](#type-into-a-pane-and-read-what-it-prints) ·
+[Batch](#send-several-commands-at-once) ·
 [Control connection](#reuse-a-control-connection) ·
 [Examples](#run-the-example-programs) · [Packages](#packages) ·
 [Leaves out](#what-it-leaves-out) · [Support](#support-and-status) ·
@@ -293,6 +294,62 @@ end
 A pane or server that ends first raises [`ScreenWaitEnded`][ScreenWaitEnded]
 with the last screen read. Text that scrolled off is not seen, and typed echo
 counts, so match on what a command prints.
+
+## Send several commands at once
+
+### [`run_group`][run_group]: several commands, one request
+
+[`run_group`][run_group] joins [`TmuxCommand`][tmuxcommand] values with tmux's
+`;` and sends them in one request. Its sibling [`run_batch`][run_batch] runs
+independent commands:
+
+```julia
+using LibTmux
+
+with_server() do server
+    new_session(server; name="demo", command=["/bin/cat"])
+    group = run_group(server, [
+        TmuxCommand("new-window", "-d", "-n", "logs"),
+        TmuxCommand("new-window", "-d", "-n", "build"),
+    ])
+    named = filter(window -> window.name in ("logs", "build"), windows(snapshot(server)))
+    println(length(group), " commands in one request; ", length(named), " new windows")
+end
+```
+
+```text
+2 commands in one request; 2 new windows
+```
+
+A group is not a transaction: the first error skips the rest, and earlier
+effects stay. A plain `Server` gets one aggregate reply, so each command's
+status is `:unknown`.
+
+### [`run_batch`][run_batch]: independent commands, results in order
+
+[`run_batch`][run_batch] keeps going after a failure and returns results in
+input order. Here the middle command names a session that does not exist:
+
+```julia
+using LibTmux
+
+with_server() do server
+    new_session(server; name="demo", command=["/bin/cat"])
+    batch = run_batch(server, [
+        TmuxCommand("new-window", "-d", "-n", "logs"),
+        TmuxCommand("new-window", "-t", "missing:", "-n", "lost"),
+        TmuxCommand("new-window", "-d", "-n", "build"),
+    ])
+    println(count(operation -> operation.acknowledged, batch), " of ", length(batch), " acknowledged")
+end
+```
+
+```text
+2 of 3 acknowledged
+```
+
+Execution order is unspecified. More:
+[batches, groups and cancellation][repo-docs-src-ownership-md].
 
 ## Reuse a control connection
 
@@ -575,6 +632,9 @@ Core, MCP and workspace packages use the [MIT license][repo-license].
 [decode_text]: https://libtmux.org/en/julia/latest/reference/libtmux-decode_text/
 [capture_baseline]: https://libtmux.org/en/julia/latest/reference/libtmux-capture_baseline/
 [open_control]: https://libtmux.org/en/julia/latest/reference/libtmux-open_control/
+[run_group]: https://libtmux.org/en/julia/latest/reference/libtmux-run_group/
+[run_batch]: https://libtmux.org/en/julia/latest/reference/libtmux-run_batch/
+[tmuxcommand]: https://libtmux.org/en/julia/latest/reference/libtmux-tmuxcommand/
 [wait_for_text]: https://libtmux.org/en/julia/latest/reference/libtmux-wait_for_text/
 [watch_screen]: https://libtmux.org/en/julia/latest/reference/libtmux-watch_screen/
 [ScreenWaitEnded]: https://libtmux.org/en/julia/latest/reference/libtmux-screenwaitended/

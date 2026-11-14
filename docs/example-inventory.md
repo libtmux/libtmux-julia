@@ -13,10 +13,12 @@ and program links. It does not establish runtime correctness.
 | [README.md](../README.md) (5) | executable | snippet doctests | Server descriptions without contacting tmux |
 | [README.md](../README.md) (6) | executable | owned-context runner | Typed text read back from a control output stream |
 | [README.md](../README.md) (7) | executable | owned-context runner | Screen wait after keys sent inside a watch block |
-| [README.md](../README.md) (8) | executable | owned-context runner | Task-based captures and scoped control cleanup |
-| [README.md](../README.md) (9) | executable | snippet doctests | Pure criterion encoding without a live daemon |
-| [README.md](../README.md) (10) | executable | snippet doctests | JSON 1.9 criteria codec round trip |
-| [README.md](../README.md) (11) | executable | owned-context runner | Retained snapshot projected through Tables 1.14 |
+| [README.md](../README.md) (8) | executable | owned-context runner | Several commands sent as one group |
+| [README.md](../README.md) (9) | executable | owned-context runner | Independent commands where one fails |
+| [README.md](../README.md) (10) | executable | owned-context runner | Task-based captures and scoped control cleanup |
+| [README.md](../README.md) (11) | executable | snippet doctests | Pure criterion encoding without a live daemon |
+| [README.md](../README.md) (12) | executable | snippet doctests | JSON 1.9 criteria codec round trip |
+| [README.md](../README.md) (13) | executable | owned-context runner | Retained snapshot projected through Tables 1.14 |
 | [docs/criteria-wire.md](../docs/criteria-wire.md) (1) | executable | snippet doctests | Pure criteria wire round trip |
 | [docs/criteria-wire.md](../docs/criteria-wire.md) (2) | executable | snippet doctests | JSON 1.9 criteria codec round trip |
 | [docs/projections.md](../docs/projections.md) (1) | executable | owned-context runner | Owned snapshot passed to pane_rows |
