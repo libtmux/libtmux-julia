@@ -58,7 +58,7 @@ end
 # command after the first session exists, and then becomes tmux.
 function wrapper_source(root, tmux, fault)
     template = raw"""
-#!/bin/sh
+@SHEBANG@
 root=@ROOT@
 tmux=@TMUX@
 fault=@FAULT@
@@ -109,6 +109,7 @@ exec "$tmux" "$@"
     shell_word(text) = "'" * replace(text, "'" => "'\\''") * "'"
     replace(
         lstrip(template),
+        "@SHEBANG@" => "#!" * "/bin/sh",
         "@ROOT@" => shell_word(root),
         "@TMUX@" => shell_word(tmux),
         "@FAULT@" => string(fault),
