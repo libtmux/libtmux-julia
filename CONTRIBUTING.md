@@ -27,6 +27,10 @@ tests require tmux on `PATH`; `LIBTMUX_TEST_TMUX` selects another executable.
 Keep temporary paths short enough for a Unix socket. Fixtures clear inherited
 tmux variables, own a unique socket, and never use the default server.
 
+To clear build output and caches, `just clean` removes ignored files and keeps
+`.env`, `just clean-dry` previews that, and `just nuke` also removes untracked
+files after a confirmation. The [justfile](justfile) holds the three recipes.
+
 ## Test sandbox
 
 A tmux client that names no socket follows an inherited `TMUX` to the server
