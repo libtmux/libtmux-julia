@@ -56,7 +56,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # What a run covers is decided here, from the table in dev/plan_matrix.py and
+  # What a run covers is decided here, from the table in scripts/plan-matrix and
   # the event, so no job below lists a tmux version. A push and a pull request
   # test the oldest and newest release; a v* tag, and a dispatch that asks, test
   # the whole table. A bad input fails here, before any runner builds anything.
@@ -70,6 +70,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: '1.13.1'
+          arch: x64
       - id: plan
         name: Plan the run
         env:
@@ -82,7 +86,8 @@ jobs:
           SUITE: ${{ inputs.suite }}
           TMATE: ${{ inputs.tmate }}
         run: >-
-          python3 dev/plan_matrix.py plan
+          julia --startup-file=no --project=.
+          scripts/plan-matrix/plan-matrix.jl plan
           --event "$EVENT"
           --ref "$REF"
           --scope "$SCOPE"
@@ -93,30 +98,12 @@ jobs:
           --tmate "$TMATE"
           --github-output "$GITHUB_OUTPUT"
           --summary "$GITHUB_STEP_SUMMARY"
-      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
-        with:
-          version: '1.13.1'
-          arch: x64
+      - name: Test the plan rules and their deliberate breaks
+        run: julia --startup-file=no --project=. scripts/plan-matrix/tests/runtests.jl
       - name: Prepare the release tag script
         run: julia --startup-file=no --project=scripts/check-release-tag -e 'using Pkg; Pkg.instantiate()'
       - name: Test the release tag script
         run: julia --startup-file=no --project=scripts/check-release-tag scripts/check-release-tag/tests/runtests.jl
-      - name: Prepare Python quality tools
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          version: '0.12.0'
-          enable-cache: false
-      - name: Acquire Python quality dependencies
-        run: |
-          uvx ruff@0.16.1 --version
-          uvx mypy@2.4.0 --version
-      - name: Check Python helpers offline
-        run: |
-          uvx --offline ruff@0.16.1 check
-          uvx --offline ruff@0.16.1 format --check
-          uvx --offline mypy@2.4.0
-          python3 benchmark/startup.py --self-test
-          python3 benchmark/mcp_client.py --self-test
       - name: Verify release tag metadata
         if: >-
           github.event_name == 'push' &&
@@ -139,10 +126,8 @@ jobs:
           --ref "$RELEASE_REF"
           --repository "$RELEASE_REPOSITORY"
           --output "$RUNNER_TEMP/libtmux-julia-release-preflight.toml"
-      - name: Check matrix ownership and result states
-        run: python3 dev/check-matrix.py self-test
-      - name: Check the matrix plan and its deliberate breaks
-        run: python3 dev/plan_matrix.py self-test
+      - name: Test the matrix runner
+        run: julia --startup-file=no --project=. scripts/check-matrix/tests/runtests.jl
 
   reject:
     needs: matrix
@@ -164,18 +149,22 @@ jobs:
         with:
           version: '1.13.1'
           arch: x64
-      - name: Prepare Linux build dependencies
-        run: |
-          ./dev/apt-get.sh update
-          ./dev/apt-get.sh install -y build-essential pkg-config libevent-dev libncurses-dev bison
-      - name: Prepare pinned tmux release
-        run: python3 dev/check-matrix.py build-tmux "$RUNNER_TEMP/libtmux-julia-reject" '${{ matrix.tmux }}'
-      - name: Prepare the current client
-        run: python3 dev/check-matrix.py build-tmux "$RUNNER_TEMP/libtmux-julia-reject" 3.3a
+      - name: Build the tmux release under test
+        id: tmux
+        uses: libtmux/.github/actions/build-tmux@30f81842b1e639ea4e25f93f1f2543504178e228
+        with:
+          ref: ${{ matrix.tmux }}
+          prefix: ${{ runner.temp }}/libtmux-julia-reject/tmux/${{ matrix.tmux }}
+      - name: Build the current client
+        id: client
+        uses: libtmux/.github/actions/build-tmux@30f81842b1e639ea4e25f93f1f2543504178e228
+        with:
+          ref: 3.3a
+          prefix: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.3a
       - name: Assert the release is refused without effect
         env:
-          LIBTMUX_TEST_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/${{ matrix.tmux }}/bin/tmux
-          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.3a/bin/tmux
+          LIBTMUX_TEST_TMUX: ${{ steps.tmux.outputs.binary }}
+          LIBTMUX_TEST_CLIENT_TMUX: ${{ steps.client.outputs.binary }}
           LIBTMUX_TEST_OLD_TMUX_BUILDS: ${{ matrix.real_old == 'true' && format('{0}/libtmux-julia-reject/tmux', runner.temp) || '' }}
           LIBTMUX_TEST_OLD_TMUX_RELEASES: ${{ matrix.real_old == 'true' && matrix.tmux || '' }}
         run: julia --startup-file=no --project=. --threads=1 test/runtests.jl ${{ matrix.suite }}
@@ -190,14 +179,14 @@ jobs:
           Pkg.precompile()'
       - name: Assert the workspace CLI refuses the release
         env:
-          LIBTMUX_TEST_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/${{ matrix.tmux }}/bin/tmux
-          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.3a/bin/tmux
+          LIBTMUX_TEST_TMUX: ${{ steps.tmux.outputs.binary }}
+          LIBTMUX_TEST_CLIENT_TMUX: ${{ steps.client.outputs.binary }}
           LIBTMUX_TEST_REQUIRE_OLD_DAEMON: '1'
         run: julia --startup-file=no --project="$RUNNER_TEMP/libtmux-julia-reject/packages" --threads=1 packages/LibTmuxWorkspace/test/runtests.jl old-daemon
       - name: Assert the MCP server refuses a replaced daemon
         if: matrix.real_old == 'true'
         env:
-          LIBTMUX_TEST_CLIENT_TMUX: ${{ runner.temp }}/libtmux-julia-reject/tmux/3.3a/bin/tmux
+          LIBTMUX_TEST_CLIENT_TMUX: ${{ steps.client.outputs.binary }}
           LIBTMUX_TEST_OLD_TMUX_BUILDS: ${{ runner.temp }}/libtmux-julia-reject/tmux
           LIBTMUX_TEST_OLD_TMUX_RELEASES: ${{ matrix.tmux }}
           LIBTMUX_TEST_REQUIRE_OLD_DAEMON: '1'
@@ -227,35 +216,19 @@ jobs:
           version: ${{ matrix.julia }}
           arch: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x64' }}
           show-versioninfo: true
-      - name: Check setup argument conversion offline
-        run: python3 dev/check-matrix.py self-test --julia julia
-      - name: Prepare Linux build dependencies
-        run: |
-          ./dev/apt-get.sh update
-          ./dev/apt-get.sh install -y build-essential pkg-config libevent-dev libncurses-dev bison
-      - name: Prepare pinned tmux release
-        if: matrix.kind == 'release'
+      # A release in the table is built from its pinned archive. A tag, branch or
+      # commit outside it is resolved to a commit and built from source, and the
+      # build is kept under that commit, never under the name.
+      - name: Build tmux
+        id: tmux
+        uses: libtmux/.github/actions/build-tmux@30f81842b1e639ea4e25f93f1f2543504178e228
+        with:
+          ref: ${{ matrix.tmux }}
+          prefix: ${{ runner.temp }}/libtmux-julia-tmux/${{ matrix.tmux }}
+      - name: Select the tmux binary
         env:
-          TMUX_VERSION: ${{ matrix.tmux }}
-        run: |
-          python3 dev/check-matrix.py build-tmux "$MATRIX_STAGE" "$TMUX_VERSION"
-          echo "TMUX_BINARY=$MATRIX_STAGE/tmux/$TMUX_VERSION/bin/tmux" >> "$GITHUB_ENV"
-      # A tag, branch or commit outside the table is built from source at the
-      # commit it names. The commit is resolved first, and the build is kept
-      # under it, never under the name.
-      - name: Resolve the tmux ref
-        id: resolve
-        if: matrix.kind == 'ref'
-        env:
-          TMUX_REF: ${{ matrix.tmux }}
-        run: python3 dev/check-matrix.py resolve-tmux "$TMUX_REF" | tee -a "$GITHUB_OUTPUT"
-      - name: Prepare tmux from the ref
-        if: matrix.kind == 'ref'
-        env:
-          TMUX_COMMIT: ${{ steps.resolve.outputs.commit }}
-        run: |
-          python3 dev/check-matrix.py build-tmux-ref "$MATRIX_STAGE" "$TMUX_COMMIT"
-          echo "TMUX_BINARY=$MATRIX_STAGE/tmux/ref-$TMUX_COMMIT/bin/tmux" >> "$GITHUB_ENV"
+          BINARY: ${{ steps.tmux.outputs.binary }}
+        run: echo "TMUX_BINARY=$BINARY" >> "$GITHUB_ENV"
       - name: Cache isolated Julia tool depot
         uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
         with:
@@ -268,7 +241,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "$MATRIX_STAGE/logs"
-          python3 dev/check-matrix.py prepare "$MATRIX_STAGE" \
+          julia --startup-file=no --project=. scripts/check-matrix/check-matrix.jl prepare "$MATRIX_STAGE" \
             --threads '${{ matrix.threads }}' \
             2>&1 | tee "$MATRIX_STAGE/logs/preparation.log"
       # A debugging session is for a dispatch, and the plan gives it to exactly
@@ -294,7 +267,7 @@ jobs:
           EXPECTED_OS: ${{ matrix.os }}
           EXPECTED_ARCH: ${{ matrix.arch }}
         run: >-
-          python3 dev/check-matrix.py run "$MATRIX_STAGE"
+          julia --startup-file=no --project=. scripts/check-matrix/check-matrix.jl run "$MATRIX_STAGE"
           --tmux "$TMUX_BINARY"
           --threads "$THREADS"
           --suite "$SUITE"
@@ -313,7 +286,7 @@ jobs:
       - name: Finalize sanitized evidence
         if: always()
         timeout-minutes: 1
-        run: python3 dev/check-matrix.py artifacts "$MATRIX_STAGE"
+        run: julia --startup-file=no --project=. scripts/check-matrix/check-matrix.jl artifacts "$MATRIX_STAGE"
       - name: Preserve cell evidence
         if: always()
         timeout-minutes: 1
@@ -343,11 +316,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: dev
+          sparse-checkout: |
+            scripts
+            Project.toml
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: '1.13.1'
+          arch: x64
       - name: Require every planned job
         env:
-          NEEDS: ${{ toJSON(needs) }}
-        run: python3 dev/plan_matrix.py gate
+          MATRIX_RESULT: ${{ needs.matrix.result }}
+          MATRIX_RUN_REJECTED: ${{ needs.matrix.outputs.run_rejected }}
+          REJECT_RESULT: ${{ needs.reject.result }}
+          CHECK_RESULT: ${{ needs.check.result }}
+        run: julia --startup-file=no --project=. scripts/plan-matrix/plan-matrix.jl gate
 
   tag-install:
     name: Verify public tag install

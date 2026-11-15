@@ -42,7 +42,7 @@ each includes on its first line. The doc-example checker, the benchmark
 drivers and `packages/LibTmuxWorkspace/dev/cli_latency.jl` include
 `dev/test-sandbox.jl` and call `TestSandbox.enter_or_refuse!()` before they
 start tmux. A new runner or probe that can start tmux does the same, or runs
-under `dev/check-matrix.py`, which gives every phase its own sandbox. A test
+under `scripts/check-matrix/check-matrix.jl`, which gives every phase its own sandbox. A test
 script that the matrix runs on its own, such as
 `packages/LibTmuxMCP/test/product.jl`, enters the sandbox itself, and
 `test/sandbox.jl` fails one that does not.
@@ -550,7 +550,7 @@ $ rm -rf -- "$consumer_stage"
 
 ## Quality and compatibility
 
-The Python 3.12+ matrix driver prepares exact tooling versions, exports
+The Julia matrix driver prepares exact tooling versions, exports
 immutable consumer packages, and records commands, whole-command times and
 failure states. Preparation can access the network; subsequent checks are
 offline. Source changes invalidate the prepared export.
@@ -568,20 +568,29 @@ $ matrix_stage=$(mktemp -d "${TMPDIR:-/tmp}/ltj-matrix.XXXXXX")
 ```
 
 ```console
-$ python3 dev/check-matrix.py prepare "$matrix_stage" \
+$ julia \
+    --startup-file=no \
+    --project=. \
+    scripts/check-matrix/check-matrix.jl prepare "$matrix_stage" \
     --threads 4
 ```
 
 Run the prepared unit and quality tiers separately while developing:
 
 ```console
-$ python3 dev/check-matrix.py run "$matrix_stage" \
+$ julia \
+    --startup-file=no \
+    --project=. \
+    scripts/check-matrix/check-matrix.jl run "$matrix_stage" \
     --threads 4 \
     --tier unit
 ```
 
 ```console
-$ python3 dev/check-matrix.py run "$matrix_stage" \
+$ julia \
+    --startup-file=no \
+    --project=. \
+    scripts/check-matrix/check-matrix.jl run "$matrix_stage" \
     --threads 4 \
     --tier quality
 ```
@@ -589,7 +598,10 @@ $ python3 dev/check-matrix.py run "$matrix_stage" \
 Run the complete prepared cell with an explicit executable and thread count:
 
 ```console
-$ python3 dev/check-matrix.py run "$matrix_stage" \
+$ julia \
+    --startup-file=no \
+    --project=. \
+    scripts/check-matrix/check-matrix.jl run "$matrix_stage" \
     --tmux tmux \
     --threads 4
 ```
@@ -610,7 +622,7 @@ Both must pass at the same source revision to complete a split cell. Use
 the option runs both.
 
 Pull requests run Linux checks on Julia 1.13.1 with the oldest and the newest
-tmux release in `dev/plan_matrix.py`, 3.3a and 3.8, at one thread, and 3.8 at
+tmux release in `scripts/plan-matrix/plan-matrix.jl`, 3.3a and 3.8, at one thread, and 3.8 at
 four threads. A `v*` tag and a manual run with `scope=full` check tmux 3.3a,
 3.4, 3.5a, 3.6b, 3.7, 3.7a, 3.7b and 3.7c at one thread, 3.7c at four threads
 and 3.8 at one thread. The floor, 3.7c and 3.8 configurations run required
@@ -624,11 +636,15 @@ every planned check passed.
 
 ### Running CI against any tmux
 
-`dev/plan_matrix.py` decides from the event and the dispatch inputs which jobs
+`scripts/plan-matrix/plan-matrix.jl` decides from the event and the dispatch inputs which jobs
 run, so `julia.yml` lists no tmux version. Print the plan for an event locally:
 
 ```console
-$ python3 dev/plan_matrix.py plan --event push
+$ julia \
+    --startup-file=no \
+    --project=. \
+    scripts/plan-matrix/plan-matrix.jl plan \
+    --event push
 ```
 
 A dispatch runs any branch against a tmux outside the table. The workflow file
@@ -648,8 +664,10 @@ $ gh workflow run julia.yml \
 needs `scope=custom`. A release in the table is built from its official
 tarball and checked against its pinned digest, and the check asserts the
 release it names. Any other ref is resolved to a commit and built from source,
-and its version is reported, not asserted. Reproduce a ref build locally with
-`python3 dev/check-matrix.py build-tmux-ref "$matrix_stage" 3.6c`. `julia`
+and its version is reported, not asserted. The shared
+[build-tmux action](https://github.com/libtmux/.github/tree/main/actions/build-tmux)
+builds each release and ref, and its README says how to run its helper locally.
+`julia`
 takes a version such as `1.12.4`, or a channel such as `lts`, and applies to
 every scope. With `scope=custom`, `threads` takes `1` or `4` and `suite` takes
 `runtime`, `delivery` or `both`.
@@ -695,10 +713,15 @@ Each artifact contains a readable summary, ranked timing CSV, original failure
 logs with local paths and known credentials removed, completion receipts and
 partial result records. File times overlap command times; do not add both.
 
-Print the exact planned version/platform cells:
+Print the exact planned version/platform cells of the whole table, as a release tag runs them:
 
 ```console
-$ python3 dev/check-matrix.py matrix
+$ julia \
+    --startup-file=no \
+    --project=. \
+    scripts/plan-matrix/plan-matrix.jl plan \
+    --event push \
+    --ref refs/tags/v0.1.1
 ```
 
 Planned cells begin as `NOT RUN`. Only recorded successful checks against

@@ -148,9 +148,7 @@ end
     @test support["tmux_control_minimum"] == LibTmux.CONTROL_MINIMUM_TMUX
     @test support["tmux_named_buffer_minimum"] == LibTmux.BUFFER_DELETE_MINIMUM_TMUX
     @test support["tmux_json_layout_minimum"] == LibTmux.JSON_LAYOUT_MINIMUM_TMUX
-    matrix = read(joinpath(root, "dev", "plan_matrix.py"), String)
-    lanes = match(r"^REJECTED_TMUX = \(([^)]*)\)"m, matrix)
-    @test lanes !== nothing
-    rejected = [m.captures[1] for m in eachmatch(r"\"([^\"]+)\"", lanes[1])]
-    @test support["verified_rejection_releases"] == rejected
+    isdefined(@__MODULE__, :PlanMatrix) ||
+        include(joinpath(root, "scripts", "plan-matrix", "plan-matrix.jl"))
+    @test support["verified_rejection_releases"] == collect(PlanMatrix.REJECTED_TMUX)
 end
