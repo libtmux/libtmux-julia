@@ -998,7 +998,9 @@ function run_readme(name, text, helps, cache; create=sandbox_create, seconds=5.0
         for (line, item) in items
             if item isa ReadmeFence
                 for (command, arguments) in readme_config_commands(box, item)
-                    key = join(arguments, '\0')
+                    # Each README has a sandbox of its own, and a launcher that starts
+                    # its server with --start-session must start it in that one.
+                    key = join([name; arguments], '\0')
                     key in cache || begin
                         mcp_handshake(box, command, arguments, helps["libtmux-mcp-text"])
                         push!(cache, key)
@@ -1015,7 +1017,7 @@ function run_readme(name, text, helps, cache; create=sandbox_create, seconds=5.0
                 launcher === nothing &&
                     error("$name:$line `$command` does not register a libtmux launcher")
                 mcp_command, arguments = readme_mcp_command(box, item)
-                key = join(arguments, '\0')
+                key = join([name; arguments], '\0')
                 key in cache || begin
                     mcp_handshake(box, mcp_command, arguments, helps["libtmux-mcp-text"])
                     push!(cache, key)
