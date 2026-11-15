@@ -666,8 +666,9 @@ const NO_TMUX_ENVIRONMENTS =
 
 function environment_files(root)
     files = String[]
-    directories =
-        [joinpath(root, name) for name in ("test", "examples", "benchmark", "dev")]
+    directories = [
+        joinpath(root, name) for name in ("test", "examples", "benchmark", "dev", "scripts")
+    ]
     for package in readdir(joinpath(root, "packages"); join=true), name in ("test", "dev")
         push!(directories, joinpath(package, name))
     end

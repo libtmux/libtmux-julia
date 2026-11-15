@@ -57,8 +57,8 @@ socket would reach the developer's default server. Splat
 `TestSandbox.child_entries()` into every such dictionary that can start tmux.
 An example cannot load the sandbox, so it passes `TMUX_TMPDIR` on from its
 caller. `test/sandbox.jl` scans the Julia files under `test`, `examples`,
-`benchmark`, `dev` and `packages` for a dictionary keyed by `"PATH"` that has
-neither.
+`benchmark`, `dev`, `scripts` and `packages` for a dictionary keyed by `"PATH"`
+that has neither.
 
 The runner exits with status 2 before any test when no directory is short
 enough for a socket path, which is 60 bytes here. Set `TMPDIR` to a shorter
