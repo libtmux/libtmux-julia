@@ -64,6 +64,30 @@
     end
 end
 
+@testset "kill_server ends a borrowed endpoint only on request" begin
+    with_tmux() do fixture
+        server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
+        LibTmux.new_session(server; name="doomed", command=["/bin/cat"])
+        @test length(sessions(snapshot(server))) == 1
+
+        # Without confirm=true nothing is sent, so the session survives.
+        @test_throws ArgumentError LibTmux.kill_server(server)
+        @test length(sessions(snapshot(server))) == 1
+
+        # An endpoint that names no socket would let tmux pick the caller's own
+        # server, so it is refused even when confirmed.
+        unnamed = Server(; env=Dict{String,String}(), tmux=fixture.tmux)
+        @test_throws ArgumentError LibTmux.kill_server(unnamed; confirm=true)
+        @test length(sessions(snapshot(server))) == 1
+
+        result = LibTmux.kill_server(server; confirm=true)
+        @test result isa CommandResult && result.exitcode == 0
+        @test_throws CommandError snapshot(server)
+        # Ending a server that is already gone changes nothing.
+        @test LibTmux.kill_server(server; confirm=true).exitcode == 0
+    end
+end
+
 @testset "creation reply evidence" begin
     mktempdir(; prefix="libtmux-julia-creation-") do directory
         socket = joinpath(directory, "s")

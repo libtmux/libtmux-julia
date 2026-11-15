@@ -3,7 +3,7 @@
 | Resource | Owner | Retirement |
 | --- | --- | --- |
 | Private daemon | [`OwnedServer`](@ref) | `close` or [`with_server`](@ref) |
-| Borrowed endpoint | Caller | LibTmux never destroys it implicitly |
+| Borrowed endpoint | Caller | LibTmux never destroys it implicitly; [`kill_server`](@ref) with `confirm=true` ends it on request |
 | Control clients | [`ControlConnection`](@ref) | `close` or `open_control` callback |
 | Cancellation callback | [`CancellationSubscription`](@ref) | `close` |
 | Capture/paste spool and temporary buffer | I/O operation | Success/failure cleanup |

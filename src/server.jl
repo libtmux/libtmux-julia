@@ -107,6 +107,7 @@ it creates something.
 
 - Create: [`new_session`](@ref), [`new_window`](@ref), [`split_window`](@ref)
 - Remove: [`kill_session`](@ref), [`kill_window`](@ref), [`kill_pane`](@ref)
+- End a borrowed server, only when told to: [`kill_server`](@ref)
 - Rename: [`rename_session`](@ref), [`rename_window`](@ref)
 - Resize: [`resize_window`](@ref), [`resize_pane`](@ref)
 - Respawn: [`respawn_window`](@ref), [`respawn_pane`](@ref)

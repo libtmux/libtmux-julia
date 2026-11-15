@@ -102,6 +102,19 @@ scripted_release(
     end
 end
 
+@testset "kill_server leaves the owner's close clean" begin
+    tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
+    owned = LibTmux.open_server(; tmux, env=lifecycle_environment())
+    directory = dirname(owned.server.socket_path)
+    new_session(owned.server; name="owned", command=["/bin/cat"])
+    # The refusal sends nothing, so the owned daemon keeps running.
+    @test_throws ArgumentError LibTmux.kill_server(owned.server)
+    @test isopen(owned)
+    @test LibTmux.kill_server(owned.server; confirm=true).exitcode == 0
+    @test close(owned) === nothing
+    @test !isopen(owned) && !ispath(directory)
+end
+
 @testset "owned startup failures" begin
     mktempdir(; prefix="ltj-life-") do parent
         withenv("TMPDIR" => parent) do

@@ -16,7 +16,8 @@ export UnsupportedCapability, UnsupportedTmuxVersion, MINIMUM_TMUX_VERSION
 export InvalidUTF8Error, TextDecoder, decode_text, decode!
 export new_session, new_window, split_window, select_layout
 export select_pane, select_window
-export kill_session, kill_window, kill_pane, CrossServerReference, StaleReference
+export kill_session, kill_window, kill_pane, kill_server
+export CrossServerReference, StaleReference
 export CreationResponseError, CaptureDecodeError, BufferID, BufferRef
 export capture_bytes, capture_pane, send_keys, load_buffer, save_buffer, delete_buffer
 export BufferInfo, list_buffers

@@ -342,6 +342,13 @@ const DOC_SNIPPETS = Dict(
         source="",
         note="Screen wait after keys sent inside a watch block",
     ),
+    ("src/operations.jl", 1) => (
+        kind=:executable,
+        gate=:context,
+        fingerprint="68b80e665c80aed40c492faf47a906ae7dfd10138d822fcd55560c2c02101410",
+        source="",
+        note="Borrowed endpoint ended on request, then the owner closes",
+    ),
     ("src/formats.jl", 1) => (
         kind=:executable,
         gate=:context,
@@ -745,6 +752,7 @@ function run_contextual_snippets(entries)
             columns = Base.invokelatest(() -> getproperty(workspace, :pane_columns)(snap))
             @assert columns.id == [pane.id]
             @assert columns.current_command == [pane.current_command]
+            execute(("src/operations.jl", 1))
             formats = execute(("src/formats.jl", 1))
             @assert length(formats) == 3
             @assert formats[1].value == pane.width && formats[2].value === true

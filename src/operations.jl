@@ -307,6 +307,52 @@ for (operation, command, Ref) in (
     """) $operation
 end
 
+"""
+    kill_server(server; confirm=false, timeout=5.0, cancel=nothing, strict=false)
+
+End the tmux daemon at `server`, with every session, window and pane in it, and
+return its `CommandResult`. Nothing is sent unless `confirm=true`: the call
+raises `ArgumentError` without it, because a borrowed endpoint is often the
+caller's own server and LibTmux never destroys one implicitly. An endpoint that
+names no socket is refused even when confirmed, because tmux would then choose
+the server `TMUX` names or the `default` socket; name the socket with
+`socket_path` or `socket_name`. The refusals send no command.
+
+An endpoint with no daemon has nothing to end, and the call returns an empty
+successful result. Only this call, never `close` or
+[`with_server`](@ref), sends `kill-server`. End a server you own with
+`close(owned)` instead, which also reaps the daemon and removes its directory.
+Failures after submission may have remote effects and are never retried.
+
+# Examples
+
+```julia
+using LibTmux
+
+with_server() do server
+    borrowed = Server(; socket_path=server.socket_path)
+    new_session(borrowed; name="work", command=["/bin/cat"])
+    kill_server(borrowed; confirm=true)
+end
+```
+"""
+function kill_server(server::Server; confirm::Bool=false, kwargs...)
+    confirm || throw(
+        ArgumentError(
+            "kill_server ends every session on this endpoint; pass confirm=true to end a borrowed server, or close an OwnedServer",
+        ),
+    )
+    server.socket_path === nothing &&
+        server.socket_name === nothing &&
+        throw(
+            ArgumentError(
+                "kill_server refuses an endpoint that names no socket, because tmux would pick the caller's own server; set socket_path or socket_name",
+            ),
+        )
+    context = _operation_context(server; kwargs...)
+    _operation_command(context, "kill-server")
+end
+
 const _NAMED_LAYOUTS = (
     "even-horizontal",
     "even-vertical",
