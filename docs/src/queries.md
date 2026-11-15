@@ -62,7 +62,7 @@ Lua consumers can author the Julia-owned wire profile directly.
 
 ```@raw html
 <p>The <a href="../source/dev/wire-interop/lua.md.html">Lua producer record</a>
-defines its tested common meanings and refusal boundaries. Lua-native wire
+describes its common meanings and refusal boundaries. Lua-native wire
 envelopes remain separate.</p>
 ```
 

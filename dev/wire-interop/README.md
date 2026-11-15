@@ -4,10 +4,9 @@ The explicitly named Julia adapters translate a verified pane-scalar subset
 between two existing version-1 envelopes. The Julia-owned `encode_where`
 profile remains separate.
 
-Lua callers have a separately verified
-[producer workflow for Julia-owned criteria](lua.md). It authors the Julia
-profile directly and proves common native meanings; it does not translate
-the Lua library's own envelope. Use its separate preparation/check driver.
+Lua callers can author Julia-owned criteria directly; the
+[Lua producer record](lua.md) describes that profile. It does not translate the
+Lua library's own envelope.
 
 | API | Envelope |
 | --- | --- |
@@ -43,64 +42,18 @@ explicitly unsupported. TypeScript's additional authored scalar forms are
 outside this wire adapter. Do not infer general schema equivalence from the
 shared subset.
 
-## Scope of the executable proof
+## Fixtures
 
-[fixtures.toml](fixtures.toml) contains three captured pane rows, 16 valid
-criteria, and six invalid documents. Every available field has a concrete
-value. Absent, unavailable and uncaptured graph states are outside this proof.
+[fixtures.toml](fixtures.toml) holds three captured pane rows, 16 valid
+criteria and six invalid documents. Every available field has a concrete
+value. [test/sibling_wire.jl](../../test/sibling_wire.jl) reads it. For each
+valid criterion it decodes the TypeScript and Rust forms, checks the selected
+pane IDs, encodes them again and checks the IDs of the round trip. Each invalid
+document must raise `UnsupportedCriterion`. Absent, unavailable and uncaptured
+graph states are outside this subset. No tmux server is needed.
 
-The TypeScript runner calls its public decoder and encoder, then the actual
-`compileWhere` evaluator over scalar projection records. It does not exercise
-projection authentication, live handles, or tmux acquisition.
-
-The Rust runner validates each document as the production `FilterExpr<Pane>`.
-Public pane handles lack an inert constructor, so evaluation uses the same
-library's `Filterable` derive over fixture rows with matching scalar types.
-It does not claim execution over live Rust pane handles or optional-field
-coverage equivalence.
-
-The driver performs two rounds:
-
-1. Both pinned siblings parse, evaluate and canonicalize shared fixtures.
-2. Julia imports both canonical forms, checks the same ordered pane IDs,
-   cross-exports them, and both siblings parse and evaluate the exports.
-
-All three runtimes also reject the shared invalid fixtures. Julia unit tests
-separately cover limits, cycles, duplicates, operand ownership and unsupported
-meanings. No tmux server or reference-repository mutation is required.
-
-## Reproduce
-
-Prepare dependencies and runtimes first. The runner requires Python 3.11+,
-Bun, Rust/Cargo, Julia, and both sibling checkouts at the pinned clean revisions.
-Cargo preparation is offline and fails if required crates are not cached.
-It builds in a fresh external temporary directory; it never changes either
-reference checkout.
-
-```console
-$ wire_stage=$(python3 dev/wire-interop/check.py prepare \
-    --typescript ../libtmux-ts \
-    --rust ../libtmux-rs \
-    --julia julia | jq -r .stage)
-```
-
-Run the prepared check. It verifies sibling revisions and runner source files
-before execution and prints monotonic elapsed time.
-
-```console
-$ python3 dev/wire-interop/check.py check "$wire_stage"
-```
-
-Remove only the stage created by preparation when finished.
-
-```console
-$ rm -rf -- "$wire_stage"
-```
-
-Measured with Julia 1.13.0, Bun 1.4.2 and Cargo 1.98.0: separate offline Rust
-build preparation took 12.67 seconds. The final 16-valid/six-invalid check took
-1.404 seconds including Python process startup. These are local measurements,
-not runtime guarantees or a compatibility matrix.
+The subset follows the TypeScript and Rust sources pinned below. This
+repository runs neither library.
 
 ## Pinned primary sources
 

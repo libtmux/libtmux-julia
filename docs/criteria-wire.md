@@ -150,19 +150,17 @@ The supported intersection is pane scalar equality, membership,
 case-sensitive text, and nonempty Boolean composition. Relations, null
 values, case folding, and numeric ordering are refused. Read the exact field
 and scalar restrictions in the [interoperability record](../dev/wire-interop/README.md).
-Its pinned executables test both valid and invalid fixtures through two rounds
-of parsing, evaluation, and canonical re-encoding. Rust evaluates derived
-captured scalar rows after validating its actual pane grammar; this does not
+The unit tests decode valid and invalid fixtures, evaluate them over captured
+pane rows and encode the results again; no sibling library runs. This does not
 claim equivalent live snapshot acquisition across ports.
 
 ## Lua producers
 
 Lua callers can author this Julia-owned profile as inert data and encode it
 with an explicit consumer codec. The named `julia-owned-from-lua/v1` workflow
-has a [paired native differential check](../dev/wire-interop/lua.md) for
+is described in a [producer record](../dev/wire-interop/lua.md) for
 pane scalars, Boolean composition and selected physical/contextual
-relationships.
-It includes false, nullable absence, uncaptured data, empty containers,
+relationships, with false, nullable absence, uncaptured data, empty containers,
 numeric boundaries, duplicate keys and correlated links.
 
 The Lua port's `query.encode_json` uses a different envelope and is refused
