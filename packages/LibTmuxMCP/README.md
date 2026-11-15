@@ -61,12 +61,8 @@ Check available options without contacting tmux:
 $ bin/libtmux-mcp --help
 ```
 
-The server borrows a tmux server that is already running. Start one on its own
-socket:
-
-```console
-$ tmux -L agent new-session -d -s work
-```
+The server borrows a tmux server. `--start-session work` creates the session
+`work` first, which starts the server on its socket when none is running.
 
 Add the launcher to Claude Code. Use an absolute launcher path, so it resolves
 from the client's working directory. Until you enable more tools, the client
@@ -74,7 +70,7 @@ sees [`list_panes`][tool_list_panes], [`capture_pane`][tool_capture_pane]
 and [`send_keys`][tool_send_keys]:
 
 ```console
-$ claude mcp add tmux -- "$PWD/bin/libtmux-mcp" --socket-name agent
+$ claude mcp add tmux -- "$PWD/bin/libtmux-mcp" --socket-name agent --start-session work
 ```
 
 The launcher reads protocol messages from stdin and writes only protocol
@@ -86,8 +82,8 @@ messages to stdout. Diagnostics go to stderr.
 
 Pass at most one socket option; both is an error:
 
-- `--socket-name NAME`: a running server started with `tmux -L NAME`, such as
-  `--socket-name mcp-demo`.
+- `--socket-name NAME`: the server on the named socket, as with `tmux -L NAME`,
+  such as `--socket-name mcp-demo`.
 - `--socket PATH`: a socket path that resolves from the client's working
   directory.
 
@@ -103,6 +99,16 @@ With neither option, the launcher picks in this order:
 
 An empty or whitespace-only variable counts as unset, and a socket option leaves
 both unread.
+
+### `--start-session`: start the server
+
+`--start-session NAME` creates the session `NAME` before the launcher answers
+its first request:
+
+- With no server on the chosen socket, creating the session starts one.
+- An existing session of that name is borrowed as it is.
+- The server and the session keep running after the launcher exits, as after
+  `tmux new-session -d`.
 
 ### The `mcpServers` shape: other clients
 

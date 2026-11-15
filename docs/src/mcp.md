@@ -26,8 +26,10 @@ $ bin/libtmux-mcp --help
 ```
 
 In your MCP client, select this launcher and pass `--socket PATH` or
-`--socket-name NAME` for an existing server. A path must resolve from the
-client's working directory. With neither, the launcher picks in this order:
+`--socket-name NAME` for the server. A path must resolve from the client's
+working directory. Add `--start-session NAME` to create that session first,
+which starts the server when none answers; both outlive the launcher. With no
+socket option, the launcher picks in this order:
 
 - `LIBTMUX_SOCKET_PATH`; a relative path resolves against the working
   directory.

@@ -558,12 +558,8 @@ capture a pane and send keys.
 [Guide](https://libtmux.org/en/julia/latest/mcp/source-guide/) ·
 [Package README][repo-packages-libtmuxmcp]
 
-The server borrows a tmux server that is already running. Start one on its
-own socket:
-
-```console
-$ tmux -L agent new-session -d -s work
-```
+The server borrows a tmux server. `--start-session work` creates the session
+`work` first, which starts the server on its socket when none is running.
 
 After [`install_cli`][mcp_install_cli] creates `bin/libtmux-mcp`, add it to
 Claude Code. Until you enable more tools, the client sees
@@ -571,7 +567,7 @@ Claude Code. Until you enable more tools, the client sees
 [`send_keys`][tool_send_keys]:
 
 ```console
-$ claude mcp add tmux -- "$PWD/bin/libtmux-mcp" --socket-name agent
+$ claude mcp add tmux -- "$PWD/bin/libtmux-mcp" --socket-name agent --start-session work
 ```
 
 The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.

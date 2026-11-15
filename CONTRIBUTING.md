@@ -105,18 +105,17 @@ follow:
 $ set -a && . ./.env && set +a
 ```
 
-`libtmux-workspace load` starts the server it needs, but `libtmux-mcp` and
-`libtmux-workspace freeze` only borrow a running one and exit with an error when
-nothing listens on the socket. Start the server that the file names before you
-run them:
+`libtmux-workspace load` starts the server it needs, and so does
+`libtmux-mcp --start-session NAME`. `libtmux-workspace freeze` and `libtmux-mcp`
+without that option only borrow a running server and exit with an error when
+nothing listens on the socket. Give them one by loading a workspace first:
 
 ```console
-$ tmux -L libtmux-julia-dev -f /dev/null new-session -d
+$ libtmux-workspace load workspace.yaml
 ```
 
-Use `LIBTMUX_SOCKET_PATH` instead to name a socket file, and start its server
-with `-S` and the same path. When both variables are set the path wins. The test
-runners ignore the file: the sandbox removes every
+Use `LIBTMUX_SOCKET_PATH` instead to name a socket file. When both variables are
+set the path wins. The test runners ignore the file: the sandbox removes every
 `LIBTMUX_SOCKET*` variable before anything runs, and fixtures keep their own
 explicit sockets.
 
