@@ -3,6 +3,8 @@ Usage: libtmux-mcp [--socket PATH | --socket-name NAME] [options]
 
 Serve MCP over stdin/stdout; diagnostics go to stderr. The tmux server is
 borrowed. Only sessions created through enabled tools belong to this process.
+With --start-session, the server may be started here, and it and the session it
+holds then outlive this process.
 
 Without a socket option, LIBTMUX_SOCKET_PATH (-S), else LIBTMUX_SOCKET (-L),
 selects the server. With neither set, tmux picks it: the one TMUX names inside
@@ -14,6 +16,8 @@ tmux, otherwise its default socket. A socket option leaves both unread.
   --caller-pane ID      captured pane used when a tool omits its target
   --allow-pane ID       permit this pane; repeat to restrict the target set
   --tool NAME           enable a tool; repeat to replace the default catalog
+  --start-session NAME  first create the session NAME, which starts the server
+                        when none answers; an existing NAME is left as it is
   --allow-create        permit enabled creation tools to create owned sessions
   --timeout SECONDS     shared per-tool deadline, greater than 0 and at most 30
   --workers N           concurrent request workers (default: 4)
@@ -36,6 +40,7 @@ function _cli_options(arguments)
         "--socket-name",
         "--tmux",
         "--caller-pane",
+        "--start-session",
         "--timeout",
         "--workers",
         "--capacity",
@@ -91,6 +96,7 @@ function _cli_options(arguments)
     (;
         help=false,
         server,
+        start_session=get(values, "--start-session", nothing),
         caller,
         pane_ids,
         allowed_tools=isempty(tool_names) ? _ROUTINE_TOOLS : Tuple(tool_names),
@@ -101,7 +107,24 @@ function _cli_options(arguments)
     )
 end
 
+# `tmux new-session -d -s NAME` for the borrowed endpoint: it starts the daemon when
+# none answers, and an existing session of that name is the one to borrow.
+function _start_session(options)
+    name = options.start_session
+    name === nothing && return nothing
+    try
+        LibTmux.new_session(options.server; name, timeout=options.timeout)
+    catch error
+        error isa LibTmux.CommandError && occursin(
+            "duplicate session: $name",
+            LibTmux.decode_text(error.result.stderr; invalid=:replace),
+        ) || rethrow()
+    end
+    nothing
+end
+
 function _cli_application(options)
+    _start_session(options)
     captured = LibTmux.snapshot(options.server; timeout=options.timeout)
     function resolve(id)
         matches = filter(pane -> string(pane.ref.id) == id, LibTmux.panes(captured))
@@ -164,7 +187,10 @@ end
 
 Run `libtmux-mcp`. It takes at most one of `--socket` and `--socket-name`. With
 neither, the core's `Server` reads `LIBTMUX_SOCKET_PATH`, then `LIBTMUX_SOCKET`,
-and otherwise leaves the choice to tmux. Startup captures exact caller/allowed
+and otherwise leaves the choice to tmux. With `--start-session NAME`, startup first
+creates that session, which starts the daemon when none answers; the daemon and
+the session stay running after the launcher exits, and an existing session of
+that name is borrowed. Startup captures exact caller/allowed
 pane references. `--help` and invalid options perform no tmux I/O, and a
 variable that cannot be used is an option error. Returns 0 after clean EOF, 2
 for option errors, 130 for interruption and 1 for startup, protocol or cleanup

@@ -262,6 +262,33 @@ mcp_control_supported = LibTmux._version_at_least(
 )
 
 if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
+    @testset "MCP --start-session starts a server and borrows a running one" begin
+        tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
+        mktempdir(; prefix="libtmux-julia-mcp-start-") do directory
+            socket = joinpath(directory, "s")
+            server = Server(socket_path=socket, tmux=tmux)
+            arguments = ["--socket", socket, "--tmux", tmux, "--start-session", "work"]
+            try
+                # No daemon answers yet, so the launcher starts one with the session.
+                out, err = IOBuffer(), IOBuffer()
+                @test LibTmuxMCP.main(arguments; input=IOBuffer(), output=out, err) == 0
+                @test isempty(take!(out)) && isempty(take!(err))
+                @test [s.name for s in sessions(snapshot(server))] == ["work"]
+                # The session outlives the launcher, as after `tmux new-session -d`.
+                # A second launch finds it and neither fails nor adds another.
+                @test LibTmuxMCP.main(
+                    arguments;
+                    input=IOBuffer(),
+                    output=IOBuffer(),
+                    err=IOBuffer(),
+                ) == 0
+                @test [s.name for s in sessions(snapshot(server))] == ["work"]
+            finally
+                kill_server(server; confirm=true)
+            end
+        end
+    end
+
     @testset "MCP tools use exact authorized real-tmux targets" begin
         environment = Dict(
             "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),

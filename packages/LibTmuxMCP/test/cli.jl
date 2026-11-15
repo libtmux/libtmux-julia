@@ -19,7 +19,13 @@ without_sockets(f) =
     ])
     @test options.caller == "%2" && options.pane_ids == ["%2"]
     @test options.allowed_tools == ("capture_pane",)
+    @test LibTmuxMCP._cli_options(["--socket-name", "a", "--start-session", "work"]).start_session ==
+          "work"
+    @test LibTmuxMCP._cli_options(["--socket-name", "a"]).start_session === nothing
     for args in (
+        ["--socket", "a", "--start-session"],
+        ["--socket", "a", "--start-session", ""],
+        ["--socket", "a", "--start-session", "w", "--start-session", "x"],
         ["--socket", "a", "--socket-name", "b"],
         ["--socket", "a", "--caller-pane", "0"],
         ["--socket", "a", "--workers", "17"],
@@ -31,7 +37,8 @@ without_sockets(f) =
     out, err = IOBuffer(), IOBuffer()
     @test LibTmuxMCP.main(["--help"]; output=out, err) == 0
     help = String(take!(out))
-    @test occursin("--caller-pane", help) && isempty(take!(err))
+    @test occursin("--caller-pane", help) && occursin("--start-session", help)
+    @test isempty(take!(err))
     @test occursin("tmux 3.3a or newer", help) && occursin("unsupported_tmux", help)
     @test occursin("LIBTMUX_SOCKET_PATH", help) && occursin("LIBTMUX_SOCKET", help)
     conflict = ["--socket", "a", "--socket-name", "b"]
