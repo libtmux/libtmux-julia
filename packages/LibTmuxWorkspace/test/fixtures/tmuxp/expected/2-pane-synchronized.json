@@ -1,0 +1,14 @@
+{
+  "source": "tmuxp examples/2-pane-synchronized.yaml, as tmuxp documents it",
+  "session": {"name": "2-pane-synchronized", "start_directory": null, "environment": {}, "options": {}},
+  "windows": [
+    {
+      "name": "Two synchronized panes", "index": 0, "layout": null, "focus": true, "start_directory": null, "options": {},
+      "options_after": {"synchronize-panes": "on"},
+      "panes": [
+        {"focus": true, "start_directory": null, "environment": {}, "commands": ["ssh server1"]},
+        {"focus": false, "start_directory": null, "environment": {}, "commands": ["ssh server2"]}
+      ]
+    }
+  ]
+}

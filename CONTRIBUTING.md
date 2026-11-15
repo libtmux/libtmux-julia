@@ -275,6 +275,20 @@ Check the staged diff before committing:
 $ git diff --cached --check
 ```
 
+## tmuxp example catalog
+
+The workspace package loads tmuxp's example files from
+`packages/LibTmuxWorkspace/test/fixtures/tmuxp` as test inputs. The unit test
+`tmuxp_catalog.jl` compares the loaded model of each accepted file with a
+structure in `fixtures/tmuxp/expected`, written by hand from what tmuxp
+documents, and records the message of each file the loader refuses. Where the
+loader means something else, the test lists the difference with its reason and
+fails when the loader stops differing. `tmuxp_build.jl` builds each accepted file
+on a private tmux and compares the session, window and pane tree with the same
+structures. `fixtures/tmuxp/syntax-support.json` records which tmuxp keys and
+forms the loader supports, and the unit test checks every entry against it. No
+tmuxp or Python runs; a structure is never generated from tmuxp's output.
+
 ## Documentation API export
 
 The documentation environment also exports the API for the shared website.

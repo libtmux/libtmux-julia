@@ -1,0 +1,15 @@
+{
+  "source": "tmuxp examples/main-pane-height.yaml, as tmuxp documents it",
+  "session": {"name": "main-pane-height", "start_directory": "${HOME}", "environment": {}, "options": {}},
+  "windows": [
+    {
+      "name": "my window name", "index": 0, "layout": "main-horizontal", "focus": true, "start_directory": "${HOME}",
+      "options": {"main-pane-height": 30},
+      "panes": [
+        {"focus": true, "start_directory": "${HOME}", "environment": {}, "commands": ["top"]},
+        {"focus": false, "start_directory": "${HOME}", "environment": {}, "commands": ["echo \"hey\""]},
+        {"focus": false, "start_directory": "${HOME}", "environment": {}, "commands": ["echo \"moo\""]}
+      ]
+    }
+  ]
+}

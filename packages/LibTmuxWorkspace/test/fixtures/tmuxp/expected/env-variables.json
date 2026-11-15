@@ -1,0 +1,19 @@
+{
+  "source": "tmuxp examples/env-variables.yaml, as tmuxp documents it; the test sets PWD to /@PWD@, MY_ENV_VAR to /@MY_ENV_VAR@ and USER to @USER@",
+  "session": {"name": "session - @USER@ (/@MY_ENV_VAR@)", "start_directory": "/@PWD@/test", "environment": {}, "options": {}, "before_script": "/@MY_ENV_VAR@/test3.sh"},
+  "windows": [
+    {
+      "name": "editor", "index": 0, "layout": null, "focus": true, "start_directory": "/var/log", "options": {},
+      "panes": [
+        {"focus": true, "start_directory": "/var/log", "environment": {}, "commands": ["echo /@PWD@", "tail -F /var/log/syslog"]}
+      ]
+    },
+    {
+      "name": "logging for @USER@", "index": 1, "layout": null, "focus": false, "start_directory": "/@PWD@/test",
+      "options": {"automatic-rename": "on"},
+      "panes": [
+        {"focus": true, "start_directory": "/@PWD@/test", "environment": {}, "commands": ["echo /@PWD@", "htop", "ls /@PWD@"]}
+      ]
+    }
+  ]
+}

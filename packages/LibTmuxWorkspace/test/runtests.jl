@@ -8,9 +8,9 @@ suite in ("unit", "integration", "cli", "old-daemon", "all") ||
     error("unknown workspace suite")
 files = String[]
 suite in ("unit", "all") &&
-    append!(files, ["config", "script", "readiness", "cli", "cli_signal"])
+    append!(files, ["config", "tmuxp_catalog", "script", "readiness", "cli", "cli_signal"])
 suite in ("integration", "all") &&
-    append!(files, ["apply", "apply_failure", "apply_cancel"])
+    append!(files, ["apply", "apply_failure", "apply_cancel", "tmuxp_build"])
 if suite in ("cli", "all")
     # Outer: launches installed CLI consumers, including their Julia startup.
     push!(files, "cli_integration")
