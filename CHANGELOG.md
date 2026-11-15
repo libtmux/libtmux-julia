@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+#### `kill_server` ends a server on request
+
+`kill_server(server; confirm=true)` ends the tmux daemon at `server` with every
+session in it and returns the `CommandResult`, so a caller no longer spells the
+raw `kill-server` command. It raises `ArgumentError` and sends nothing without
+`confirm=true`, and it refuses a `Server` that names no socket even when
+confirmed, because tmux would then pick the caller's own server. `close` and
+`with_server` still never send `kill-server`, and `close(owned)` remains the way
+to end a daemon `open_server` started. Ending a server with no daemon returns an
+empty successful result. (#94)
+
 ## 0.1.1 - 2026-11-01
 
 #### `Server` passes tmux no socket by default
