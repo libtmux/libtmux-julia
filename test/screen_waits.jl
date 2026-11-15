@@ -210,7 +210,7 @@ end
         screen_server() do server
             pane = screen_pane(server, "printf 'before-end\\n'; sleep 30")
             sleep(0.5)
-            after(() -> run_command(server, "kill-server"), 0.7)
+            after(() -> kill_server(server; confirm=true), 0.7)
             ended = outcome(() -> wait_for_text(server, pane, "never"; timeout=20))
             @test ended isa ScreenWaitEnded
             ended isa ScreenWaitEnded && @test ended.reason === :server_exited
@@ -239,7 +239,7 @@ end
                 @test timedwait(() -> isfile(pidfile), 20.0) === :ok
                 holder_pid = parse(Int, read(pidfile, String))
                 run(`kill -STOP $holder_pid`)
-                after(() -> run_command(server, "kill-server"), 0.7)
+                after(() -> kill_server(server; confirm=true), 0.7)
                 started = time()
                 ended = outcome(() -> wait_for_text(server, pane, "never"; timeout=20))
                 @test ended isa ScreenWaitEnded
@@ -451,7 +451,7 @@ end
     @testset "a pane from a replaced server is refused" begin
         screen_server() do server
             old = screen_pane(server, "printf 'OLDSERVER\\n'; sleep 30")
-            run_command(server, "kill-server")
+            kill_server(server; confirm=true)
             sleep(0.5)
             new_session(server; name="anchor2", command=["/bin/cat"])
             new = screen_pane(server, "printf 'NEWSERVER\\n'; sleep 30"; name="second")
@@ -467,7 +467,7 @@ end
             @test wait_for_text(server, new, "NEWSERVER"; baseline=true).source ===
                   :baseline
             # The fixture owns only the first daemon; stop the restarted one.
-            run_command(server, "kill-server")
+            kill_server(server; confirm=true)
         end
     end
 

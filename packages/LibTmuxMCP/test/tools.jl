@@ -907,7 +907,7 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                         if ending === :pane
                             kill_pane(server, caller)
                         else
-                            run_command(server, "kill-server")
+                            kill_server(server; confirm=true)
                             # A stopped client can keep the killed daemon alive,
                             # which then answers "server exited unexpectedly";
                             # a daemon that already left answers "no server

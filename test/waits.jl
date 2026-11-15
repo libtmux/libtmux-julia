@@ -271,7 +271,7 @@ end
                         if ending === :pane
                             kill_pane(server, pane)
                         elseif ending === :server || ending === :stopped
-                            run_command(server, "kill-server")
+                            kill_server(server; confirm=true)
                             ending === :stopped && @test occursin(
                                 r"server exited unexpectedly|no server running",
                                 try
