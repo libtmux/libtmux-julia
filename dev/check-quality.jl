@@ -14,7 +14,17 @@ const GENERATED_JULIA = Set(["src/criteria_generated.jl", "src/options_generated
 
 function source_files()
     files = String[]
-    for entry in ("src", "ext", "test", "examples", "dev", "packages", "docs", "benchmark")
+    for entry in (
+        "src",
+        "ext",
+        "test",
+        "examples",
+        "dev",
+        "packages",
+        "docs",
+        "benchmark",
+        "scripts",
+    )
         base = joinpath(QUALITY_ROOT, entry)
         isdir(base) || continue
         for (directory, directories, names) in walkdir(base)

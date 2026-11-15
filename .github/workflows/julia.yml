@@ -93,6 +93,14 @@ jobs:
           --tmate "$TMATE"
           --github-output "$GITHUB_OUTPUT"
           --summary "$GITHUB_STEP_SUMMARY"
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: '1.13.1'
+          arch: x64
+      - name: Prepare the release tag script
+        run: julia --startup-file=no --project=scripts/check-release-tag -e 'using Pkg; Pkg.instantiate()'
+      - name: Test the release tag script
+        run: julia --startup-file=no --project=scripts/check-release-tag scripts/check-release-tag/tests/runtests.jl
       - name: Prepare Python quality tools
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
@@ -107,7 +115,6 @@ jobs:
           uvx --offline ruff@0.16.1 check
           uvx --offline ruff@0.16.1 format --check
           uvx --offline mypy@2.4.0
-          python3 dev/check-release-tag.py self-test
           python3 benchmark/startup.py --self-test
           python3 benchmark/mcp_client.py --self-test
       - name: Verify release tag metadata
@@ -123,7 +130,8 @@ jobs:
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_EVENT: ${{ github.event_path }}
         run: >-
-          python3 dev/check-release-tag.py verify
+          julia --startup-file=no --project=scripts/check-release-tag
+          scripts/check-release-tag/check-release-tag.jl verify
           --checkout "$GITHUB_WORKSPACE"
           --event "$RELEASE_EVENT"
           --tag "$RELEASE_TAG"
@@ -366,6 +374,8 @@ jobs:
         with:
           version: '1.13.1'
           arch: x64
+      - name: Prepare the release tag script
+        run: julia --startup-file=no --project=scripts/check-release-tag -e 'using Pkg; Pkg.instantiate()'
       - name: Choose fresh tag-install stage
         run: echo "RELEASE_STAGE=$RUNNER_TEMP/libtmux-julia-release" >> "$GITHUB_ENV"
       - name: Prepare release tag record
@@ -373,7 +383,8 @@ jobs:
           RELEASE_EVENT: ${{ github.event_path }}
         run: |
           mkdir -p "$RELEASE_STAGE"
-          python3 dev/check-release-tag.py verify \
+          julia --startup-file=no --project=scripts/check-release-tag \
+            scripts/check-release-tag/check-release-tag.jl verify \
             --checkout "$GITHUB_WORKSPACE" \
             --event "$RELEASE_EVENT" \
             --tag "$RELEASE_TAG" \
@@ -392,7 +403,8 @@ jobs:
         env:
           RELEASE_EVENT: ${{ github.event_path }}
         run: >-
-          python3 dev/check-release-tag.py verify
+          julia --startup-file=no --project=scripts/check-release-tag
+          scripts/check-release-tag/check-release-tag.jl verify
           --checkout "$GITHUB_WORKSPACE"
           --event "$RELEASE_EVENT"
           --tag "$RELEASE_TAG"
