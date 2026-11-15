@@ -13,6 +13,15 @@ confirmed, because tmux would then pick the caller's own server. `close` and
 to end a daemon `open_server` started. Ending a server with no daemon returns an
 empty successful result. (#94)
 
+#### `libtmux-mcp --start-session` starts the server
+
+`libtmux-mcp --start-session NAME` creates the session `NAME` before startup
+captures panes. With no tmux server on the chosen socket, creating the session
+starts one, so the launcher no longer needs `tmux new-session -d` first. An
+existing session of that name is borrowed as it is. The server and the session
+keep running after the launcher exits, as after `tmux new-session -d`. Without
+the option the launcher still only borrows a running server. (#93)
+
 ## 0.1.1 - 2026-11-01
 
 #### `Server` passes tmux no socket by default
