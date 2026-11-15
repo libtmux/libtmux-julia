@@ -7,8 +7,12 @@ Main.TestSandbox.enter_or_refuse!()
 
 isdefined(@__MODULE__, :NamedTmux) ||
     include(joinpath(@__DIR__, "support", "named_tmux.jl"))
+isdefined(@__MODULE__, :StdioClient) ||
+    include(joinpath(@__DIR__, "support", "stdio_client.jl"))
+isdefined(@__MODULE__, :ProductClient) ||
+    include(joinpath(@__DIR__, "support", "product_client.jl"))
 
-# Outer: starts an installed Julia process and a real Python protocol client.
+# Outer: starts an installed Julia process and a raw stdio protocol client.
 @testset "installed MCP application uses public core and owns only its sessions" begin
     environment = Dict(
         "PATH"=>get(ENV, "PATH", "/usr/bin:/bin"),
@@ -24,19 +28,14 @@ isdefined(@__MODULE__, :NamedTmux) ||
                 get(ENV, "LIBTMUX_TEST_MINIMAL_CHILD", "0") == "1" ?
                 ["--compile=min", "-O0"] : String[]
             launcher = LibTmuxMCP.install_cli(directory; julia_flags)
-            client = joinpath(@__DIR__, "product_client.py")
             for profile in ("2026-07-28", "2025-11-25")
-                run(
-                    Cmd([
-                        "python3",
-                        client,
-                        launcher,
-                        "--socket",
-                        server.socket_path,
-                        server.tmux,
-                        string(pane.id),
-                        profile,
-                    ]),
+                ProductClient.product_client(
+                    launcher,
+                    "--socket",
+                    server.socket_path,
+                    server.tmux,
+                    string(pane.id),
+                    profile,
                 )
                 @test only(sessions(snapshot(server))).ref == borrowed
                 @test isempty(clients(snapshot(server)))
@@ -54,18 +53,13 @@ end
                 get(ENV, "LIBTMUX_TEST_MINIMAL_CHILD", "0") == "1" ?
                 ["--compile=min", "-O0"] : String[]
             launcher = LibTmuxMCP.install_cli(directory; julia_flags)
-            client = joinpath(@__DIR__, "product_client.py")
-            run(
-                Cmd([
-                    "python3",
-                    client,
-                    launcher,
-                    "--socket-name",
-                    fixture.socket_name,
-                    fixture.tmux,
-                    string(pane.id),
-                    "2026-07-28",
-                ]),
+            ProductClient.product_client(
+                launcher,
+                "--socket-name",
+                fixture.socket_name,
+                fixture.tmux,
+                string(pane.id),
+                "2026-07-28",
             )
             @test only(sessions(snapshot(fixture.server))).ref == borrowed
             @test isempty(clients(snapshot(fixture.server)))

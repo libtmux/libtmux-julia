@@ -62,7 +62,7 @@ stdio or real-tmux application checks.
 
 The owned stdio transport unwraps `IOContext` before interrupting libuv pipes;
 Julia's default stdout may use that wrapper. The
-[external stopped-reader regression](../test/stdio_backpressure.py) consumes
+[external stopped-reader regression](../test/stdio_backpressure.jl) consumes
 exactly one byte of a large response, stops reading, then closes stdin. It
 requires process retirement within 900 ms and verifies that the response did
 not drain. Framing tests separately cover wrapped input and output endpoints.
