@@ -515,7 +515,7 @@ $ julia \
     dev/check-consumers.jl examples "$consumer_stage"
 ```
 
-This outer check also requires Python 3.12+ and `ps`. It runs the exported
+This outer check also requires `ps`. It runs the exported
 programs unchanged through an audited tmux executable. Each owned example
 runs successfully and with a command failure injected after session creation.
 The checker independently verifies daemon/client retirement and socket-directory

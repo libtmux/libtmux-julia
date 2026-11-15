@@ -57,8 +57,12 @@ end
 # selectors from them and give them a socket directory of their own.
 @testset "the example cleanup checker hides every selector from an example" begin
     tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
-    checker = joinpath(dirname(@__DIR__), "dev", "check-example-cleanup.py")
-    python = Sys.which("python3")
+    checker = joinpath(
+        dirname(@__DIR__),
+        "scripts",
+        "check-example-cleanup",
+        "check-example-cleanup.jl",
+    )
     decoys = Dict(
         "TMUX" => "/decoy-secret/sock,1,0",
         "TMUX_PANE" => "%decoy-secret",
@@ -77,8 +81,7 @@ end
         " && ",
     )
     script = "$probe && test -z \"\${LIBTMUX_SOCKET_FUTURE+x}\" && test \"\$TMUX_TMPDIR\" = \"\$TMPDIR\""
-    @test python !== nothing
-    if python !== nothing
+    begin
         mktempdir(ENV["TMUX_TMPDIR"]; prefix="c-") do directory
             # The probe fails in the decoy environment, so a pass means the checker removed them.
             control = run(
@@ -94,7 +97,7 @@ end
                 pipeline(
                     ignorestatus(
                         setenv(
-                            `$python $checker --pure --tmux $tmux --cwd $directory -- /bin/sh -c $script`,
+                            `$(Base.julia_cmd()) --startup-file=no $checker --pure --tmux $tmux --cwd $directory -- /bin/sh -c $script`,
                             environment,
                         ),
                     );
