@@ -1,3 +1,7 @@
+isdefined(@__MODULE__, :AttachedClient) ||
+    include(joinpath(@__DIR__, "support", "attached_client.jl"))
+using .AttachedClient
+
 using Test, LibTmux
 
 # Outer: stream waits verify real output, timer retirement and target loss.
@@ -243,20 +247,10 @@ end
             )
             pane = only(filter(p -> p.ref != anchor, panes(snapshot(server)))).ref
             holder = nothing
-            holder_pid = nothing
             if ending === :stopped
-                pidfile = server.socket_path * ".client"
-                holder = run(
-                    pipeline(
-                        `python3 -I $(joinpath(@__DIR__, "..", "packages", "LibTmuxMCP", "test", "stopped_client.py")) $(server.tmux) $(server.socket_path) anchor $pidfile control`;
-                        stdout=devnull,
-                        stderr=devnull,
-                    );
-                    wait=false,
-                )
-                @test timedwait(() -> isfile(pidfile), 20.0) === :ok
-                holder_pid = parse(Int, read(pidfile, String))
-                run(`kill -STOP $holder_pid`)
+                holder =
+                    attach_client(server.tmux, server.socket_path, "anchor"; control=true)
+                stop!(holder)
             end
             outcome = try
                 open_control(server, created) do connection
@@ -311,9 +305,8 @@ end
             catch error
                 error
             finally
-                if holder_pid !== nothing
-                    run(ignorestatus(`kill -KILL $holder_pid`))
-                    kill(holder)
+                if holder !== nothing
+                    close(holder)
                 end
             end
             if ending === :dropped

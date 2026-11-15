@@ -1,3 +1,7 @@
+isdefined(@__MODULE__, :AttachedClient) ||
+    include(joinpath(@__DIR__, "support", "attached_client.jl"))
+using .AttachedClient
+
 isdefined(Main, :OwnedTmux) || include("support/owned_tmux.jl")
 
 release_of(server) = LibTmux._daemon_version(server, LibTmux._client_environment(ENV))
@@ -391,17 +395,8 @@ end
         release = release_of(server)
         new_session(server; name="clip", command=["/bin/cat"])
         if !LibTmux._version_at_least(release, LibTmux.CLIPBOARD_QUERY_MINIMUM_TMUX)
-            pidfile = fixture.socket * ".client"
-            holder = run(
-                pipeline(
-                    `python3 -I $(joinpath(@__DIR__, "attach_client.py")) $(fixture.tmux) $(fixture.socket) clip $pidfile`;
-                    stdout=devnull,
-                    stderr=devnull,
-                );
-                wait=false,
-            )
+            holder = attach_client(fixture.tmux, fixture.socket, "clip")
             try
-                @test timedwait(() -> isfile(pidfile), 20.0) === :ok
                 client = ""
                 deadline = time() + 10
                 while isempty(client) && time() < deadline
@@ -421,12 +416,12 @@ end
                     "-l",
                 )
                 # The client leaves before any terminal answer could arrive.
-                run(`kill -KILL $(parse(Int, read(pidfile, String)))`)
+                kill(holder.process, Base.SIGKILL)
                 sleep(1.0)
                 @test run_command(server, "display-message", "-p", "alive").stdout ==
                       codeunits("alive\n")
             finally
-                kill(holder)
+                close(holder)
             end
         end
     end

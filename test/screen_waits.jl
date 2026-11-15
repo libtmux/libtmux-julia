@@ -1,3 +1,7 @@
+isdefined(@__MODULE__, :AttachedClient) ||
+    include(joinpath(@__DIR__, "support", "attached_client.jl"))
+using .AttachedClient
+
 using Test, LibTmux
 
 # The screen wait polls `capture-pane`, so every case here runs on each
@@ -225,20 +229,14 @@ end
             mode =
                 LibTmux._version_at_least(release, LibTmux.CONTROL_MINIMUM_TMUX) ?
                 "control" : "pty"
-            pidfile = server.socket_path * ".client"
-            holder = run(
-                pipeline(
-                    `python3 -I $(joinpath(@__DIR__, "..", "packages", "LibTmuxMCP", "test", "stopped_client.py")) $(server.tmux) $(server.socket_path) anchor-held $pidfile $mode`;
-                    stdout=devnull,
-                    stderr=devnull,
-                );
-                wait=false,
+            holder = attach_client(
+                server.tmux,
+                server.socket_path,
+                "anchor-held";
+                control=mode == "control",
             )
-            holder_pid = nothing
             try
-                @test timedwait(() -> isfile(pidfile), 20.0) === :ok
-                holder_pid = parse(Int, read(pidfile, String))
-                run(`kill -STOP $holder_pid`)
+                stop!(holder)
                 after(() -> kill_server(server; confirm=true), 0.7)
                 started = time()
                 ended = outcome(() -> wait_for_text(server, pane, "never"; timeout=20))
@@ -246,8 +244,7 @@ end
                 ended isa ScreenWaitEnded && @test ended.reason === :server_exited
                 @test time() - started < 10
             finally
-                holder_pid === nothing || run(ignorestatus(`kill -KILL $holder_pid`))
-                kill(holder)
+                close(holder)
             end
             @test anchor isa PaneRef
         end

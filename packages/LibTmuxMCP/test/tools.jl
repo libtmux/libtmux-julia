@@ -1,4 +1,9 @@
 using Test, LibTmux, LibTmuxMCP
+isdefined(@__MODULE__, :AttachedClient) || Base.include(
+    @__MODULE__,
+    joinpath(@__DIR__, "..", "..", "..", "test", "support", "attached_client.jl"),
+)
+using .AttachedClient
 import ModelContextProtocol as ToolSDK
 
 tool_result(app, name, args=Dict(); kwargs...) =
@@ -884,25 +889,19 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                 new_session(server; name="anchor", command=["/bin/cat"])
                 anchor = only(panes(snapshot(server))).ref
                 holder = nothing
-                holder_pid = nothing
                 if stopped
                     release =
                         LibTmux._daemon_version(server, LibTmux._client_environment(ENV))
-                    mode =
-                        LibTmux._version_at_least(release, LibTmux.CONTROL_MINIMUM_TMUX) ?
-                        "control" : "pty"
-                    pidfile = server.socket_path * ".client"
-                    holder = run(
-                        pipeline(
-                            `python3 -I $(joinpath(@__DIR__, "stopped_client.py")) $(server.tmux) $(server.socket_path) anchor $pidfile $mode`;
-                            stdout=devnull,
-                            stderr=devnull,
-                        );
-                        wait=false,
+                    holder = attach_client(
+                        server.tmux,
+                        server.socket_path,
+                        "anchor";
+                        control=LibTmux._version_at_least(
+                            release,
+                            LibTmux.CONTROL_MINIMUM_TMUX,
+                        ),
                     )
-                    @test timedwait(() -> isfile(pidfile), 20.0) === :ok
-                    holder_pid = parse(Int, read(pidfile, String))
-                    run(`kill -STOP $holder_pid`)
+                    stop!(holder)
                 end
                 command = ["/bin/sh", "-c", "printf 'before-end\\n'; sleep 30"]
                 fresh_pane(name) = begin
@@ -979,9 +978,8 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                     end
                 finally
                     close(app)
-                    if holder_pid !== nothing
-                        run(ignorestatus(`kill -KILL $holder_pid`))
-                        kill(holder)
+                    if holder !== nothing
+                        close(holder)
                     end
                 end
             end
