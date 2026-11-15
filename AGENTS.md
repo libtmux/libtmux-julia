@@ -8,6 +8,8 @@ requested work.
 - Setup, checks, and pull requests: [CONTRIBUTING.md](CONTRIBUTING.md).
 - Documentation, user-facing text, comments, and commit messages:
   [WRITING.md](WRITING.md).
+- Support scripts: what may stay, their language, layout and checks:
+  [SCRIPTS.md](.github/SCRIPTS.md).
 
 Each guide is the single home for its subject.
 
