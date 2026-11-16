@@ -3,6 +3,7 @@ using JSON, SHA, Pkg, Random
 # A client that names no socket must not reach the developer's server.
 include(joinpath(@__DIR__, "..", "dev", "test-sandbox.jl"))
 TestSandbox.enter_or_refuse!()
+include(joinpath(@__DIR__, "..", "dev", "test-stand-ins.jl"))
 
 const MCP_BENCH_ROOT = dirname(@__DIR__)
 const MCP_BENCH_PROFILES =
@@ -49,7 +50,7 @@ end
 function mcp_self_test()
     marker = "mcp-synthetic-credential-sentinel"
     failure = try
-        run(setenv(Cmd(["/bin/sh", "-c", "exit 7"]), Dict("MCP_TEST_SECRET"=>marker)))
+        run(setenv(StandIns.julia_cmd("exit(7)"), Dict("MCP_TEST_SECRET"=>marker)))
         nothing
     catch error
         error
@@ -188,18 +189,21 @@ end
 
 function mcp_fixture(server, bytes)
     ready = "mcp-benchmark-ready"
-    command = [
-        "/bin/sh",
-        "-c",
-        "printf '%s\\n' \"\$1\"; \"\$2\" -N -S \"\$3\" wait-for -S \"\$4\"; exec /bin/cat",
-        "sh",
+    # Prints one line of `bytes` bytes, signals, then echoes what it is sent.
+    command = StandIns.julia_argv(
+        """
+        println(ARGS[1])
+        run(`\$(ARGS[2]) -N -S \$(ARGS[3]) wait-for -S \$(ARGS[4])`)
+        StandIns.exec("cat")
+        """,
         repeat("x", bytes),
         server.tmux,
         server.socket_path,
         ready,
-    ]
+    )
     session = new_session(server; name="benchmark-fixture", command)
-    run_command(server, "wait-for", ready; timeout=0.9)
+    # A Julia start is slower than the measured deadlines, so the setup wait is not one.
+    run_command(server, "wait-for", ready; timeout=30)
     pane = only(panes(snapshot(server))).ref
     app = Application(
         server;

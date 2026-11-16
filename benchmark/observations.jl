@@ -4,6 +4,7 @@ using JSON, SHA, Pkg, Random
 # A client that names no socket must not reach the developer's server.
 include(joinpath(@__DIR__, "..", "dev", "test-sandbox.jl"))
 TestSandbox.enter_or_refuse!()
+include(joinpath(@__DIR__, "..", "dev", "test-stand-ins.jl"))
 
 const OBSERVATION_ROOT = dirname(@__DIR__)
 
@@ -140,22 +141,26 @@ function observation_source_hashes()
 end
 
 function observation_fixture(server, timeout)
-    command(label) = [
-        "/bin/sh",
-        "-c",
-        "stty raw -echo || exit; \"\$1\" -N -S \"\$2\" wait-for -S \"\$3\"; exec /bin/cat",
-        "sh",
+    # A raw terminal that signals when ready, then echoes what it is sent.
+    command(label) = StandIns.julia_argv(
+        """
+        StandIns.raw_terminal()
+        run(`\$(ARGS[1]) -N -S \$(ARGS[2]) wait-for -S \$(ARGS[3])`)
+        StandIns.exec("cat")
+        """,
         server.tmux,
         server.socket_path,
         label,
-    ]
+    )
+    # A Julia start is slower than the measured deadline, so the setup waits are not it.
+    setup = max(timeout, 30)
     session = new_session(
         server;
         name="observation-benchmark",
         command=command("observation-raw-ready"),
         timeout,
     )
-    run_command(server, "wait-for", "observation-raw-ready"; timeout)
+    run_command(server, "wait-for", "observation-raw-ready"; timeout=setup)
     first_graph = snapshot(server; timeout)
     raw = only(panes(first_graph)).ref
     marker_window = new_window(
@@ -165,7 +170,7 @@ function observation_fixture(server, timeout)
         command=command("observation-marker-ready"),
         timeout,
     )
-    run_command(server, "wait-for", "observation-marker-ready"; timeout)
+    run_command(server, "wait-for", "observation-marker-ready"; timeout=setup)
     graph = snapshot(server; timeout)
     marker =
         only(panes(only(filter(window -> window.ref == marker_window, windows(graph))))).ref

@@ -4,6 +4,8 @@ using Sockets
 using LibTmuxMCP
 using LibTmuxWorkspace
 
+include(joinpath(@__DIR__, "test-stand-ins.jl"))
+
 const README_ROOT = dirname(@__DIR__)
 const README_FILES =
     ("README.md", "packages/LibTmuxWorkspace/README.md", "packages/LibTmuxMCP/README.md")
@@ -1162,10 +1164,7 @@ end
 
 # A tmux that stops the server on `-S socket` as kill-server does, or does nothing.
 function stand_in_tmux(directory, name; stops)
-    path = joinpath(directory, name)
-    write(path, stops ? "#!/bin/sh\nrm -f \"\$2\"\nexit 0\n" : "#!/bin/sh\nexit 0\n")
-    chmod(path, 0o755)
-    path
+    StandIns.install(joinpath(directory, name), stops ? "rm(ARGS[2]; force=true)" : "")
 end
 
 # A listener with a backlog of one, filled until a connect fails with EAGAIN, as

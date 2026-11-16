@@ -87,7 +87,15 @@ end
 
 function consumer_self_test()
     marker = "consumer-synthetic-credential-sentinel"
-    child = Cmd(["/bin/sh", "-c", "echo child-stdout; echo child-stderr >&2; exit 7"])
+    # A child that writes to both streams and fails with a known status.
+    child = Cmd([
+        Base.julia_cmd().exec...,
+        "--startup-file=no",
+        "--compile=min",
+        "-O0",
+        "-e",
+        "println(\"child-stdout\"); println(stderr, \"child-stderr\"); exit(7)",
+    ])
     program = """
     include($(repr(@__FILE__)))
     run_consumer_child("sentinel child", addenv($(repr(child)), "CONSUMER_TEST_EXTRA" => "safe"))
@@ -113,15 +121,15 @@ function consumer_self_test()
     failure = try
         run_consumer_child(
             "inspectable cause",
-            setenv(`/bin/sh -c "exit 7"`, Dict("CONSUMER_TEST_SECRET" => marker)),
+            setenv(`false`, Dict("CONSUMER_TEST_SECRET" => marker)),
         )
     catch error
         error
     end
     @assert failure isa ConsumerProcessError
     @assert failure.cause isa ProcessFailedException
-    @assert only(failure.cause.procs).exitcode == 7
-    @assert success(run_consumer_child("successful child", `/bin/sh -c "exit 0"`))
+    @assert only(failure.cause.procs).exitcode == 1
+    @assert success(run_consumer_child("successful child", `true`))
     sandbox_self_test()
     installation = Module(:ReleaseInstallChecks)
     Base.include(installation, joinpath(@__DIR__, "check-tag-install.jl"))
