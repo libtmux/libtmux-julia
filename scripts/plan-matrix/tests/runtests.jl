@@ -174,8 +174,8 @@ const BREAKS = [
     ),
     ("          TMATE: \${{ inputs.tmate }}\n", "", "receive the tmate input through env"),
     (
-        "        run: echo \"MATRIX_JOB_DEADLINE=",
-        "        run: echo \"MATRIX_JOB_DEADLINE_UNUSED=",
+        "      - name: Restart the work clock after the session\n        if: matrix.tmate == 'before-tests'\n        run: echo \"MATRIX_JOB_DEADLINE=",
+        "      - name: Restart the work clock after the session\n        if: matrix.tmate == 'before-tests'\n        run: echo \"MATRIX_JOB_DEADLINE_UNUSED=",
         "work clock must restart",
     ),
     (
