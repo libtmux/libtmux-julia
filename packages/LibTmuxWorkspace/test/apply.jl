@@ -17,16 +17,22 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
                 joinpath(fixture.directory, ".profile"),
                 "printf profile > " * shellword(script_output) * "\n",
             )
-            marker =
-                shellword(fixture.tmux) *
-                " -S " *
-                shellword(fixture.socket) *
-                " wait-for -S complete"
+            # Each program is one command, as the workspace file types it or runs it.
+            command(program, arguments...) =
+                join(shellword.(Main.StandIns.julia_argv(program, arguments...)), " ")
+            marker = command(
+                """
+                write(ARGS[1], ENV["VALUE"])
+                run(`\$(ARGS[2]) -S \$(ARGS[3]) wait-for -S complete`)
+                """,
+                output,
+                fixture.tmux,
+                fixture.socket,
+            )
             document = Dict(
                 "session_name" => "workspace",
                 "start_directory" => fixture.directory,
-                "before_script" =>
-                    "/bin/sh -c 'printf before > \"\$1\"' sh " * shellword(script_output),
+                "before_script" => command("write(ARGS[1], \"before\")", script_output),
                 "options" => Dict("default-shell" => "/bin/sh"),
                 "environment" =>
                     Dict("HOME" => fixture.directory, "VALUE" => "session"),
@@ -39,11 +45,7 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
                         "panes" => [
                             Dict(
                                 "environment" => Dict("VALUE" => "literal;#{pane_id}"),
-                                "shell_command" =>
-                                    "printf '%s' \"\$VALUE\" > " *
-                                    shellword(output) *
-                                    "; " *
-                                    marker,
+                                "shell_command" => marker,
                             ),
                             Dict("focus" => true),
                         ],
@@ -54,7 +56,7 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
             prepared = plan(expand(validate(document); base_directory=fixture.directory))
             events = []
             result = apply(server, prepared; on_event=e -> push!(events, e))
-            LibTmux.run_command(server, "wait-for", "complete"; timeout=0.9)
+            LibTmux.run_command(server, "wait-for", "complete"; timeout=30)
             @test result.status == :complete
             @test isempty(result.borrowed)
             @test read(output, String) == "literal;#{pane_id}"

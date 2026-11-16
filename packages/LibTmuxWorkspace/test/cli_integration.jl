@@ -189,14 +189,27 @@ end
                 ["--compile=min", "-O0"],
             ),
         )
-        fifo, script, pidfile =
-            (joinpath(fixture.directory, name) for name in ("blocked", "before", "pid"))
+        fifo, pidfile = (joinpath(fixture.directory, name) for name in ("blocked", "pid"))
         @test ccall(:mkfifo, Cint, (Cstring, Cuint), fifo, 0o600) == 0
-        write(
-            script,
-            "#!/bin/sh\nprintf '%s' \"\$\$\" > \"\$1\"\nprintf ready\nexec /bin/cat \"\$2\"\n",
-        )
-        chmod(script, 0o700)
+        # Records its pid, prints `ready`, then blocks opening the FIFO. This file
+        # also runs from an exported package, which has no dev directory to load
+        # helpers from.
+        script = [
+            joinpath(Sys.BINDIR, Base.julia_exename()),
+            "--startup-file=no",
+            "--compile=min",
+            "-O0",
+            "--handle-signals=no",
+            "-e",
+            """
+            write(ARGS[1], string(getpid()))
+            print("ready")
+            flush(stdout)
+            run(`cat \$(ARGS[2])`)
+            """,
+            pidfile,
+            fifo,
+        ]
         word = LibTmuxWorkspace._shell_word
         path = joinpath(fixture.directory, "interrupt.json")
         write(
@@ -204,7 +217,7 @@ end
             JSON.json(
                 Dict(
                     "session_name" => "interrupted",
-                    "before_script" => join(word.([script, pidfile, fifo]), " "),
+                    "before_script" => join(word.(script), " "),
                     "windows" => [Dict("window_name" => "unused")],
                 ),
             ),

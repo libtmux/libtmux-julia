@@ -9,11 +9,18 @@ function test_script_owned_before_script_execution()
         if isdefined(LibTmuxWorkspace, :run_before_script)
             mktempdir() do directory
                 marker = joinpath(directory, "unintended")
-                script = joinpath(directory, "argv")
-                write(script, "#!/bin/sh\nprintf '%s\\n' \"\$@\"\nprintf '\\377' >&2\n")
-                chmod(script, 0o700)
+                # Prints each argument on a line and writes one byte that is not UTF-8
+                # to stderr.
+                argv = join(
+                    LibTmuxWorkspace._shell_word.(
+                        Main.StandIns.julia_argv(
+                            "foreach(println, ARGS); write(stderr, 0xff)",
+                        ),
+                    ),
+                    " ",
+                )
                 result = run_before_script(
-                    "./argv '' 'a b' '; touch " * marker * "' \"\\\$VALUE\"";
+                    argv * " '' 'a b' '; touch " * marker * "' \"\\\$VALUE\"";
                     base_directory=directory,
                     env=Dict("PATH" => "/usr/bin:/bin"),
                 )
@@ -23,7 +30,7 @@ function test_script_owned_before_script_execution()
                 @test !ispath(marker)
                 @test ccall(:kill, Cint, (Cint, Cint), result.pid, 0) == -1
                 @test_throws WorkspaceConfigError run_before_script(
-                    "./argv 'unterminated";
+                    argv * " 'unterminated";
                     base_directory=directory,
                 )
                 failure = try
@@ -41,10 +48,13 @@ function test_script_owned_before_script_execution()
                 token = LibTmux.CancellationToken()
                 fifo = joinpath(directory, "blocked")
                 @test ccall(:mkfifo, Cint, (Cstring, Cuint), fifo, 0o600) == 0
-                write(script, "#!/bin/sh\nprintf ready\nexec /bin/cat \"\$1\"\n")
+                # Prints `ready`, then blocks opening the FIFO.
+                ready = joinpath(directory, "ready")
+                write(ready, "ready")
+                blocked = "cat '" * ready * "' '" * fifo * "'"
                 failure = try
                     run_before_script(
-                        "./argv '" * fifo * "'";
+                        blocked;
                         base_directory=directory,
                         cancel=token,
                         on_output=(stream, bytes) -> LibTmux.cancel!(token),
@@ -56,11 +66,7 @@ function test_script_owned_before_script_execution()
                 @test failure.result.stdout == codeunits("ready")
                 @test ccall(:kill, Cint, (Cint, Cint), failure.result.pid, 0) == -1
                 failure = try
-                    run_before_script(
-                        "./argv '" * fifo * "'";
-                        base_directory=directory,
-                        timeout=0.1,
-                    )
+                    run_before_script(blocked; base_directory=directory, timeout=0.1)
                 catch error
                     error
                 end
@@ -78,12 +84,9 @@ function test_script_expired_script_deadline_refuses_admission()
     @testset "expired script deadline refuses admission" begin
         mktempdir() do directory
             marker = joinpath(directory, "must-not-start")
-            script = joinpath(directory, "start")
-            write(script, "#!/bin/sh\n: > \"\$1\"\n")
-            chmod(script, 0o700)
             failure = try
                 run_before_script(
-                    "./start '" * marker * "'";
+                    "touch '" * marker * "'";
                     base_directory=directory,
                     timeout=1e-12,
                 )

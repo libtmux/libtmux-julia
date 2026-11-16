@@ -42,16 +42,10 @@ end
         output = _BlockedCLIOutput()
         owner = LibTmuxWorkspace._CLIOwnedOutput(output, IOBuffer(); timeout=0.2)
         script_ready = Base.Event()
-        command = join(
-            LibTmuxWorkspace._shell_word.([
-                "/bin/sh",
-                "-c",
-                "printf ready; exec /bin/cat \"\$1\"",
-                "sh",
-                fifo,
-            ]),
-            " ",
-        )
+        # Prints `ready`, then blocks opening the FIFO.
+        ready = joinpath(directory, "ready")
+        write(ready, "ready")
+        command = join(LibTmuxWorkspace._shell_word.(["cat", ready, fifo]), " ")
         worker = Threads.@spawn try
             run_before_script(
                 command;

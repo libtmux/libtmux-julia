@@ -11,6 +11,8 @@ isdefined(@__MODULE__, :with_workspace_server) || include("owned_server.jl")
         flag, wrapper = joinpath(fixture.directory, "fail-observation"),
         joinpath(fixture.directory, "tmux-fault")
         word = LibTmuxWorkspace._shell_word
+        # A POSIX shell script because a workspace apply starts it for every tmux
+        # call; .github/SCRIPTS.md records what a Julia start per call costs.
         write(
             wrapper,
             "#!/bin/sh\nfor arg do\n" *
@@ -91,21 +93,13 @@ end
         server = LibTmux.Server(socket_path=fixture.socket, tmux=fixture.tmux)
         borrowed = LibTmux.new_session(server; name="borrowed", command=["/bin/cat"])
         script = joinpath(fixture.directory, "tmux-old")
-        write(
+        Main.StandIns.install(
             script,
-            raw"""#!/bin/sh
-previous=
-for argument in "$@"; do
-    if [ "$previous" = -C ]; then
-        printf 'unknown command: %s3.2a\n' "${argument%\#\{version\}}" >&2
-        exit 1
-    fi
-    previous=$argument
-done
-exit 99
-""",
+            """
+            StandIns.answer_probe("3.2a")
+            exit(99)
+            """,
         )
-        chmod(script, 0o700)
         old = LibTmux.Server(socket_path=fixture.socket, tmux=script)
         document = Dict(
             "session_name" => "refused",
@@ -185,22 +179,13 @@ end
 @testset "the interactive attach client never starts a daemon" begin
     mktempdir(; prefix="ltj-attach-") do directory
         script = joinpath(directory, "tmux-attach")
-        write(
+        Main.StandIns.install(
             script,
-            raw"""#!/bin/sh
-previous=
-for argument in "$@"; do
-    if [ "$previous" = -C ]; then
-        printf 'unknown command: %s3.7c\n' "${argument%\#\{version\}}" >&2
-        exit 1
-    fi
-    previous=$argument
-done
-printf '%s\n' "$*" > "$0.attach"
-exit 0
-""",
+            """
+            StandIns.answer_probe("3.7c")
+            write(PROGRAM_FILE * ".attach", join(ARGS, " ") * "\\n")
+            """,
         )
-        chmod(script, 0o700)
         socket = joinpath(directory, "s")
         server = LibTmux.Server(socket_path=socket, tmux=script)
         target = (server=(socket_path=socket,), id="\$0")
