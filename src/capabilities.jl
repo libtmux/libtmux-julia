@@ -163,7 +163,7 @@ The result does not weaken the generation and release checks on operations.
 `timeout` bounds the query in seconds and must be positive and finite.
 `cancel` accepts a [`CancellationToken`](@ref). Both interrupt and join the
 owned client before returning. An absent daemon or malformed reply raises
-[`CommandError`](@ref); an unsupported release raises
+`CommandError`; an unsupported release raises
 [`UnsupportedTmuxVersion`](@ref). Cancellation and deadline errors retain the
 existing process engine's semantics. The client executable's version is never
 substituted for daemon evidence.

@@ -315,18 +315,21 @@ application.
 
 ### Inspect daemon support
 
-Call `get_capabilities` with an empty arguments object before choosing an
+Call [`get_capabilities`][tool_get_capabilities] with an empty arguments object before choosing an
 optional operation. It returns the responding daemon's `generation` and
-`version`, `features` with release requirements and `supported` decisions,
-and `workarounds` with `active` decisions. Each row names affected Julia APIs
-and tmux commands. The report queries the daemon without starting one or
-running its hooks.
+`version` without starting a daemon or running its hooks.
+
+`features` gives release requirements and `supported` decisions.
+`workarounds` gives `active` decisions. Each row names affected Julia APIs
+and tmux commands.
 
 `enabledTools` is application policy; support does not grant permission.
 Saved reports are historical observations, so operations retain their own
-checks. Discovery uses the normal call deadline, cancellation and result
-limit. A result too large for the configured limit returns `result_limit`
-without a partial capability map.
+checks.
+
+Discovery uses the normal call deadline, cancellation and result limit. A
+result too large for the configured limit returns `result_limit` without a
+partial capability map.
 
 ### [`main`][main]: the launcher from Julia
 

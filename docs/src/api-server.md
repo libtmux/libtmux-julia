@@ -25,7 +25,7 @@ the original connection. Both run without user hooks and leave operation
 checks unchanged; neither renews a saved reference. The returned immutable
 report remains readable after its daemon or connection closes.
 
-[The executable example](../../examples/capabilities.jl) compares both
+[The executable example](https://github.com/libtmux/libtmux-julia/blob/master/examples/capabilities.jl) compares both
 transports where control mode is supported and keeps its report after cleanup.
 
 ```@autodocs

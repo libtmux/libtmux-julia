@@ -107,10 +107,10 @@ Read the daemon's feature requirements and active workarounds. Inspect a
 decision with [`supports`][supports], [`capability`][capability] or
 [`workaround`][workaround]; unknown names raise `KeyError`.
 
-[The example](examples/capabilities.jl) compares subprocess and control
+[The example](https://github.com/libtmux/libtmux-julia/blob/master/examples/capabilities.jl) compares subprocess and control
 reports, then reads the immutable result after server cleanup.
 
-More: [server and capability reference](docs/src/api-server.md#inspect-daemon-support).
+More: [server and capability reference](https://github.com/libtmux/libtmux-julia/blob/master/docs/src/api-server.md#inspect-daemon-support).
 
 ## Find sessions, windows, and panes
 
