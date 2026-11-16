@@ -155,21 +155,11 @@ end
 #   which uses the directory tmuxp was started in. The loader has no ambient
 #   working directory, so it starts every undeclared directory in the workspace
 #   file's directory, and the same file means the same panes wherever it is loaded.
-# pane_word_is_blank: the copy of the expected file that libtmux-ruby wrote lists
-#   the word `pane` as a command. tmuxp's blank-panes example documents `pane` and
-#   `blank` as other spellings of an empty pane, and the loader follows that, so
-#   such a pane sends only the commands the session and window set.
 # dot_relative_directory: the example's text asks for the workspace file's
 #   directory with `./`. The loader resolves every relative window or pane
 #   directory, `./` included, against its parent's directory, so under a session
 #   start_directory of /var the window starts in /var.
 const DIFFERENCES = (
-    (
-        id=:pane_word_is_blank,
-        apply=(file, location, want) ->
-            last(location) == "commands" && !isempty(want) && last(want) == "pane" ?
-            want[1:(end-1)] : missing,
-    ),
     (
         id=:undeclared_directory,
         apply=(file, location, want) ->
@@ -193,9 +183,7 @@ function port_expected(name)
     function walk(value, location)
         if value isa AbstractDict
             Dict{String,Any}(key => walk(item, [location; key]) for (key, item) in value)
-        elseif value isa AbstractVector &&
-               !isempty(location) &&
-               last(location) != "commands"
+        elseif value isa AbstractVector
             [walk(item, [location; index]) for (index, item) in enumerate(value)]
         else
             for rule in DIFFERENCES

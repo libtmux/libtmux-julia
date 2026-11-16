@@ -12,9 +12,9 @@
     {
       "name": "second window", "index": 1, "layout": null, "focus": false, "start_directory": null, "options": {},
       "panes": [
-        {"focus": false, "start_directory": null, "environment": {}, "commands": ["cd /var/log", "pane"]},
+        {"focus": false, "start_directory": null, "environment": {}, "commands": ["cd /var/log"]},
         {"focus": true, "start_directory": null, "environment": {}, "commands": ["cd /var/log", "echo 'this pane should be focused, when window switched to first time'"]},
-        {"focus": false, "start_directory": null, "environment": {}, "commands": ["cd /var/log", "pane"]}
+        {"focus": false, "start_directory": null, "environment": {}, "commands": ["cd /var/log"]}
       ]
     }
   ]

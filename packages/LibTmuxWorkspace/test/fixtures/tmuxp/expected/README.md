@@ -6,15 +6,17 @@ produce or check them, and a structure is never generated from tmuxp's output.
 
 ## Source
 
-Nine files are copies of the structures libtmux-ruby wrote at
-[`fdc8bac`](https://github.com/libtmux/libtmux-ruby/tree/fdc8bac/test/fixtures/tmuxp/expected):
-`2-pane-vertical`, `3-pane`, `4-pane`, `focus-window-and-panes`,
-`main-pane-height`, `session-environment`, `shorthands`, `start-directory` and
-`window-index`. That copy is the reference the ports share, so these stay
-byte-identical to it. The other six, `2-pane-synchronized`, `blank-panes`,
-`env-variables`, `main-pane-height-percentage`, `pane-shell` and
-`suppress-history`, are files this loader accepts and libtmux-ruby refuses. They
-follow the same shape.
+Nine files are copies of the structures libtmux-ruby wrote:
+`2-pane-vertical`, `3-pane`, `4-pane`, `main-pane-height`, `session-environment`,
+`shorthands`, `start-directory` and `window-index` at
+[`fdc8bac`](https://github.com/libtmux/libtmux-ruby/tree/fdc8bac/test/fixtures/tmuxp/expected),
+and `focus-window-and-panes` at
+[`049fbfb`](https://github.com/libtmux/libtmux-ruby/blob/049fbfb/test/fixtures/tmuxp/expected/focus-window-and-panes.json),
+which lists no command for a lone `pane` or `blank`. That copy is the reference
+the ports share, so these stay byte-identical to it. The other six,
+`2-pane-synchronized`, `blank-panes`, `env-variables`,
+`main-pane-height-percentage`, `pane-shell` and `suppress-history`, are files
+this loader accepts and libtmux-ruby refuses. They follow the same shape.
 
 ## Shape
 
@@ -42,11 +44,10 @@ loader as the values of `PWD`, `MY_ENV_VAR` and `USER`.
 ## Where this loader differs
 
 `test/support/tmuxp_catalog.jl` lists each difference with its reason, applies it
-to the expected structure and fails when the loader stops differing. They are an
-undeclared `start_directory`, which is the workspace file's directory here,
-`./` in a window directory, which resolves against the session's directory, and
-the word `pane`, which libtmux-ruby's copy of `focus-window-and-panes` sends as a
-command and tmuxp documents as a blank pane.
+to the expected structure and fails when the loader stops differing. There are
+two: an undeclared `start_directory`, which is the workspace file's directory
+here, and `./` in a window directory, which resolves against the session's
+directory.
 
 ## Checks
 
