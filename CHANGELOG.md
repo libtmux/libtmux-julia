@@ -10,7 +10,9 @@ decisions and active workarounds from the library registry. `supports`,
 Reports retain the observed generation and release without starting a daemon,
 running hooks or changing the version cache. The control-connection overload
 validates its original daemon through that connection. Reports remain readable
-after cleanup and grant no operation permission. (#92)
+after cleanup and grant no operation permission. Discovery reserves tmux's
+unaliased native `list-commands` spelling and does not invoke configured
+`run-shell` or `if-shell` aliases. (#92)
 
 #### `kill_server` ends a server on request
 
