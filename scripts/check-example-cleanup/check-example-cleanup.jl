@@ -52,13 +52,13 @@ function identity_self_test()
     println("PASS process identity lookup")
 end
 
-# The audited stand-in for tmux. It is a POSIX shell script and not a Julia program
-# because the library gives its version probe 900 ms, which a Julia process cannot
-# promise on a loaded machine. It records the process, refuses strays, can fail one
-# command after the first session exists, and then becomes tmux.
+# The audited stand-in for tmux. It records the process, refuses strays, can fail one
+# command after the first session exists, and then becomes tmux. It is a POSIX shell
+# script because a Julia wrapper starts too slowly for the library's 900 ms version
+# probe; .github/SCRIPTS.md records the measurement.
 function wrapper_source(root, tmux, fault)
     template = raw"""
-@SHEBANG@
+#!/bin/sh
 root=@ROOT@
 tmux=@TMUX@
 fault=@FAULT@
@@ -109,7 +109,6 @@ exec "$tmux" "$@"
     shell_word(text) = "'" * replace(text, "'" => "'\\''") * "'"
     replace(
         lstrip(template),
-        "@SHEBANG@" => "#!" * "/bin/sh",
         "@ROOT@" => shell_word(root),
         "@TMUX@" => shell_word(tmux),
         "@FAULT@" => string(fault),
@@ -252,7 +251,7 @@ function negative_control(command::Cmd; tmux, cwd)
     println("PASS negative control rejects a real daemon and socket-directory leak")
 end
 
-summary(result) = join(("$name=$(getfield(result, name))" for name in keys(result)), " ")
+describe(result) = join(("$name=$(getfield(result, name))" for name in keys(result)), " ")
 
 function main(arguments=ARGS)
     "--identity-self-test" in arguments && return (identity_self_test(); 0)
@@ -277,19 +276,18 @@ function main(arguments=ARGS)
     pure = "--pure" in options
     command = Cmd(command)
     success = run_example(command; tmux, env=ENV, cwd)
-    bool(success.daemons) != pure ||
+    (success.daemons > 0) != pure ||
         error("example ownership differs from its declared runtime class")
-    println("PASS example success and independent cleanup ", summary(success))
+    println("PASS example success and independent cleanup ", describe(success))
     if success.daemons > 0
         failure = run_example(command; tmux, env=ENV, cwd, fault=true)
         println(
             "PASS example failure after session creation and independent cleanup ",
-            summary(failure),
+            describe(failure),
         )
     end
     0
 end
-bool(count) = count > 0
 
 end
 

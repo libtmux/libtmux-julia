@@ -43,3 +43,49 @@ for the library. Do not add shell or Python script files.
 - A capability Julia lacks comes from a test-only Julia dependency, not from a
   second language.
 - Test data that is not a comparison, such as workspace files a loader reads.
+
+## Exceptions
+
+A shell program stays only when this section names it and records what the
+Julia alternative costs, with the command that measured it. Delete the entry
+when the numbers stop holding.
+
+### check-example-cleanup: the audited tmux wrapper
+
+`scripts/check-example-cleanup/check-example-cleanup.jl` writes a POSIX shell
+script into its temporary directory at run time and gives it to an example as
+`LIBTMUX_TEST_TMUX`. Every tmux call the example makes starts the wrapper first.
+It records its process, refuses a socket outside the checker's directory and
+then runs `exec` on the real tmux. `open_server` allows its version probe 900 ms
+(`timeout=0.9`), and one run of `examples/owned_capture.jl` makes 101 client
+calls and starts one daemon.
+
+A Julia wrapper with the same steps (a shebang through `env -S`, a read of
+`/proc/self/stat`, one TOML record, `execv`) took far longer to run `tmux -V`
+than the shell wrapper. The runs were 30 to 40 each with `hyperfine -N` on a
+12-CPU WSL2 Linux machine with Julia 1.13.1 and tmux 3.8a. The first row ran
+beside other jobs, at a load average near 11. The other rows pinned the wrapper
+and 0, 1 or 3 added busy loops to one CPU with `taskset`. Each cell gives the
+median and the maximum:
+
+| Condition | Shell | Julia `--compile=min -O0` | Julia default flags |
+| --- | --- | --- | --- |
+| all CPUs available, shared host | 4 / 7 ms | 342 / 465 ms | 485 / 1137 ms |
+| one CPU, no added load | 6 / 11 ms | 632 / 1015 ms | 999 / 1246 ms |
+| one CPU, 1 busy loop | 15 / 28 ms | 643 / 1038 ms | 844 / 1238 ms |
+| one CPU, 3 busy loops | 20 / 43 ms | 1271 / 1532 ms | 1810 / 2103 ms |
+
+With `--compile=min -O0` the Julia wrapper stays under the 900 ms probe only
+when all CPUs are available. At 342 ms per call it adds about 35 seconds of
+process starts to one example run, against 0.4 seconds for the shell wrapper.
+Julia's own start is the floor, measured with one command:
+
+```console
+$ hyperfine \
+    -N \
+    --warmup 3 \
+    --runs 40 \
+    'julia --startup-file=no --history-file=no --compile=min -O0 -e 0'
+```
+
+It took a median of 391 ms, from 236 to 628 ms, on the shared host.

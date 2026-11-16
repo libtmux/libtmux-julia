@@ -27,8 +27,9 @@ program that opens a server and never closes it, and fails unless the audit
 catches it. `--identity-self-test` checks the process identity lookup.
 
 The wrapper is a POSIX shell script that the checker writes into its temporary
-directory, not a file of this repository. The library allows its version probe 900
-ms, and a Julia process cannot promise to start that fast on a loaded machine.
+directory, not a file of this repository. A Julia wrapper starts too slowly for
+the library's 900 ms version probe; the measurement is in the
+[exceptions](../../.github/SCRIPTS.md#exceptions) section of the script policy.
 
 The checker needs only the standard library. Run its tests with a tmux selected
 by `LIBTMUX_TEST_TMUX`; they start real servers:
