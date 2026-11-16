@@ -315,10 +315,10 @@ application.
 
 ### Inspect daemon support
 
-Call [`get_capabilities`][tool_get_capabilities] with an empty arguments
-object before choosing an optional operation. It returns the responding daemon's
-`generation` and
-`version` without starting a daemon or running its hooks.
+Call [`get_capabilities`][tool_get_capabilities] with `{}` before an optional
+operation. It returns the daemon's `generation` and `version` without starting
+a daemon or running hooks.
+
 Keep tmux's native `list-commands` bootstrap spelling unaliased; overriding
 it, including during discovery, can execute server-defined code.
 
