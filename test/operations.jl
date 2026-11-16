@@ -92,27 +92,25 @@ end
     mktempdir(; prefix="libtmux-julia-creation-") do directory
         socket = joinpath(directory, "s")
         executable = joinpath(directory, "tmux")
-        write(
+        # Arguments from the eighth on are the fenced command; the probe is `run-shell`.
+        Main.StandIns.install(
             executable,
-            raw"""#!/bin/sh
-if [ "$6" = run-shell ]; then
-    printf 'unknown command: %s3.7c\n' "${8%\#\{version\}}" >&2
-    exit 1
-fi
-shift 7
-printf '%s\n' "$5" >> "$0.calls"
-case "$5" in
-    display-message)
-        case "$7" in
-            -F) cat "$0.metadata" ;;
-            *) cat "$0.codec" ;;
-        esac ;;
-    new-session|new-window|split-window) cat "$0.reply" ;;
-    *) exit 93 ;;
-esac
-""",
+            raw"""
+            get(ARGS, 6, "") == "run-shell" && (
+                print(stderr, "unknown command: ", chopsuffix(ARGS[8], "#{version}"), "3.7c\n");
+                exit(1)
+            )
+            command = ARGS[8:end]
+            StandIns.record(PROGRAM_FILE * ".calls", get(command, 5, ""))
+            if get(command, 5, "") == "display-message"
+                write(stdout, read(PROGRAM_FILE * (get(command, 7, "") == "-F" ? ".metadata" : ".codec")))
+            elseif get(command, 5, "") in ("new-session", "new-window", "split-window")
+                write(stdout, read(PROGRAM_FILE * ".reply"))
+            else
+                exit(93)
+            end
+            """,
         )
-        chmod(executable, 0o700)
         write(executable * ".codec", "A\\\\B\\tC\\nD\n")
         write(executable * ".metadata", "100\t200\t3.7c\t$socket\n")
         server = Server(socket_path=socket, tmux=executable)
@@ -209,42 +207,42 @@ end
         @test created isa SessionRef
         if created isa SessionRef
             @test LibTmux.get_environment(server, created, "VALUE").value == "session"
-            script =
-                raw"""printf '%s' "$VALUE" > "$1"; "$2" -S "$3" wait-for -S "$4"; exec /bin/cat"""
-            argv = [
-                "/bin/sh",
-                "-c",
-                script,
-                "sh",
-                joinpath(fixture.directory, "window-env"),
+            # Records the pane's environment, then signals the channel.
+            recorder(output, channel) = Main.StandIns.julia_argv(
+                """
+                write(ARGS[1], ENV["VALUE"])
+                run(`\$(ARGS[2]) -S \$(ARGS[3]) wait-for -S \$(ARGS[4])`)
+                StandIns.exec("cat")
+                """,
+                output,
                 fixture.tmux,
                 fixture.socket,
-                "window-ready",
-            ]
+                channel,
+            )
+            window_env = joinpath(fixture.directory, "window-env")
             window_ref = LibTmux.new_window(
                 server,
                 created;
                 index=9,
                 environment=("VALUE" => "#{session_name};",),
-                command=argv,
+                command=recorder(window_env, "window-ready"),
             )
-            LibTmux.run_command(server, "wait-for", "window-ready"; timeout=0.9)
-            @test read(argv[5], String) == "#{session_name};"
+            LibTmux.run_command(server, "wait-for", "window-ready"; timeout=30)
+            @test read(window_env, String) == "#{session_name};"
             snap = snapshot(server)
             link = only(filter(l -> window(l).ref == window_ref, windowlinks(snap)))
             @test link.index == 9
             firstpane =
                 only(panes(only(filter(w -> w.ref == window_ref, windows(snap))))).ref
-            argv[5] = joinpath(fixture.directory, "pane-env")
-            argv[8] = "pane-ready"
+            pane_env = joinpath(fixture.directory, "pane-env")
             second = LibTmux.split_window(
                 server,
                 firstpane;
                 environment=Dict("VALUE" => "pane;"),
-                command=argv,
+                command=recorder(pane_env, "pane-ready"),
             )
-            LibTmux.run_command(server, "wait-for", "pane-ready"; timeout=0.9)
-            @test read(argv[5], String) == "pane;"
+            LibTmux.run_command(server, "wait-for", "pane-ready"; timeout=30)
+            @test read(pane_env, String) == "pane;"
             LibTmux.select_pane(server, second)
             LibTmux.select_window(server, WindowLinkRef(link))
             snap = snapshot(server)

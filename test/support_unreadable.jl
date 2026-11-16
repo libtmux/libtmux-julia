@@ -16,17 +16,14 @@ isdefined(@__MODULE__, :OwnedTmux) ||
         commands = [LibTmux.TmuxCommand("list-sessions")]
         for diagnostic in diagnostics
             rm(script * ".calls"; force=true)
-            write(
+            Main.StandIns.install(
                 script,
-                """#!/bin/sh
-printf '%s\\n' "\$*" >> "\$0.calls"
-cat >&2 <<'DIAGNOSTIC'
-$diagnostic
-DIAGNOSTIC
-exit 1
-""",
+                """
+                StandIns.record(PROGRAM_FILE * ".calls", join(ARGS, " "))
+                println(stderr, $(repr(diagnostic)))
+                exit(1)
+                """,
             )
-            chmod(script, 0o700)
             failure = try
                 run_command(old, "new-session", "-d", "-s", "refused")
             catch error
@@ -46,7 +43,7 @@ exit 1
 
         # A probe that fails for another reason is a command error that never
         # dispatched anything.
-        write(script, "#!/bin/sh\necho 'boom' >&2\nexit 1\n")
+        Main.StandIns.install(script, "println(stderr, \"boom\"); exit(1)")
         probe = try
             run_command(old, "new-session", "-d", "-s", "refused")
         catch error
@@ -64,16 +61,16 @@ end
     mktempdir(; prefix="ltj-held-") do directory
         script = joinpath(directory, "tmux-held")
         pidfile = joinpath(directory, "holder.pid")
-        write(
+        # The sleep keeps the client's pipes after the client exits.
+        Main.StandIns.install(
             script,
-            """#!/bin/sh
-echo 'usage: run-shell [-b] [-t target-pane] shell-command' >&2
-sleep 20 &
-echo \$! >> '$pidfile'
-exit 1
-""",
+            """
+            println(stderr, "usage: run-shell [-b] [-t target-pane] shell-command")
+            background = run(`sleep 20`; wait=false)
+            StandIns.record($(repr(pidfile)), string(getpid(background)))
+            exit(1)
+            """,
         )
-        chmod(script, 0o700)
         server = Server(socket_path=joinpath(directory, "s"), tmux=script)
         # Only Linux lists a process's descriptors under /proc.
         descriptors() = Sys.islinux() ? length(readdir("/proc/self/fd")) : 0
@@ -97,17 +94,10 @@ exit 1
         end
 
         # Output that arrives slowly, within the quiet interval, is kept whole.
-        write(
-            script,
-            """#!/bin/sh
-printf a
-sleep 0.1
-printf b
-sleep 0.1
-printf c
-""",
+        slow = Main.StandIns.julia_cmd(
+            "for letter in \"abc\"; print(letter); flush(stdout); sleep(0.1); end",
         )
-        result = LibTmux._run_process(`$script`)
+        result = LibTmux._run_process(slow)
         @test String(result.stdout) == "abc" && result.exitcode == 0
     end
 end

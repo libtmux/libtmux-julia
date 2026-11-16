@@ -12,10 +12,14 @@ function lifecycle_environment()
     )
 end
 
-# Scripted executables answer the release probe before their scripted failure.
-scripted_release(
-    release=LibTmux.MINIMUM_TMUX_VERSION,
-) = "#!/bin/sh\nif [ \"\$1\" = -V ]; then echo 'tmux $release'; exit 0; fi\n"
+# Scripted executables answer the release probe before their scripted behavior.
+scripted_tmux(path, program; release=LibTmux.MINIMUM_TMUX_VERSION) = Main.StandIns.install(
+    path,
+    """
+    first(ARGS, 1) == ["-V"] && (println("tmux $release"); exit(0))
+    $program
+    """,
+)
 
 @testset "owned server lifecycle" begin
     tmux = get(ENV, "LIBTMUX_TEST_TMUX", "tmux")
@@ -140,13 +144,10 @@ end
             contains_environment = occursin("owned-environment-marker", diagnostic)
             @test !contains_environment
             executable = joinpath(parent, "failing-tmux")
-            write(
-                executable,
-                scripted_release() * "printf 'startup diagnostic' >&2\nexit 7\n",
-            )
-            chmod(executable, 0o700)
+            scripted_tmux(executable, "print(stderr, \"startup diagnostic\"); exit(7)")
+            # The default deadline is shorter than a Julia start.
             failure = try
-                LibTmux.open_server(tmux=executable, env=lifecycle_environment())
+                LibTmux.open_server(tmux=executable, env=lifecycle_environment(), timeout=30)
             catch error
                 error
             end
@@ -155,9 +156,9 @@ end
             @test failure.result.stderr == codeunits("startup diagnostic")
             @test readdir(parent) == ["failing-tmux"]
 
-            write(executable, scripted_release() * "printf '%070000d' 0 >&2\nexit 7\n")
+            scripted_tmux(executable, "print(stderr, \"0\"^70000); exit(7)")
             failure = try
-                LibTmux.open_server(tmux=executable, env=lifecycle_environment())
+                LibTmux.open_server(tmux=executable, env=lifecycle_environment(), timeout=30)
             catch error
                 error
             end
@@ -172,12 +173,13 @@ end
     mktempdir(; prefix="ltj-life-") do parent
         withenv("TMPDIR" => parent) do
             executable, ready, hold = joinpath.(parent, ("waiting-tmux", "ready", "hold"))
-            write(
+            scripted_tmux(
                 executable,
-                scripted_release() *
-                "printf '%s\\n' \"\$\$\" >\"\$LIBTMUX_READY\"\nexec /bin/cat \"\$LIBTMUX_HOLD\"\n",
+                """
+                write(ENV["LIBTMUX_READY"], string(getpid()), "\\n")
+                StandIns.exec("cat", ENV["LIBTMUX_HOLD"])
+                """,
             )
-            chmod(executable, 0o700)
             run(`mkfifo $hold`)
             environment = merge(
                 lifecycle_environment(),
@@ -186,7 +188,7 @@ end
             token = CancellationToken()
             monitor = FileWatching.FolderMonitor(parent)
             operation = Threads.@spawn try
-                LibTmux.open_server(tmux=executable, env=environment, cancel=token)
+                LibTmux.open_server(tmux=executable, env=environment, cancel=token, timeout=30)
             catch error
                 error
             end
@@ -210,12 +212,14 @@ end
                       failure.result.termsignal == Base.SIGTERM
                 @test isempty(token.hooks)
                 @test sort(readdir(parent)) == ["hold", "ready", "waiting-tmux"]
+                # The budget outlasts the release probe, a Julia start, and ends while
+                # the daemon is held.
                 expired = try
-                    LibTmux.open_server(tmux=executable, env=environment, timeout=0.1)
+                    LibTmux.open_server(tmux=executable, env=environment, timeout=2)
                 catch error
                     error
                 end
-                @test expired isa DeadlineExceeded && expired.sent && expired.timeout == 0.1
+                @test expired isa DeadlineExceeded && expired.sent && expired.timeout == 2
                 @test expired.result !== nothing &&
                       expired.result.termsignal == Base.SIGTERM
                 @test sort(readdir(parent)) == ["hold", "ready", "waiting-tmux"]
