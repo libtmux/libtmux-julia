@@ -315,8 +315,9 @@ application.
 
 ### Inspect daemon support
 
-Call [`get_capabilities`][tool_get_capabilities] with an empty arguments object before choosing an
-optional operation. It returns the responding daemon's `generation` and
+Call [`get_capabilities`][tool_get_capabilities] with an empty arguments
+object before choosing an optional operation. It returns the responding daemon's
+`generation` and
 `version` without starting a daemon or running its hooks.
 
 `features` gives release requirements and `supported` decisions.
