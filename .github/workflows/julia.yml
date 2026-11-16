@@ -126,7 +126,7 @@ jobs:
           --ref "$RELEASE_REF"
           --repository "$RELEASE_REPOSITORY"
           --output "$RUNNER_TEMP/libtmux-julia-release-preflight.toml"
-      # The two benchmark drivers are the last Python helpers; see SCRIPTS.md.
+      # The MCP benchmark client is the last Python helper; see SCRIPTS.md.
       - name: Prepare Python quality tools
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
@@ -141,8 +141,13 @@ jobs:
           uvx --offline ruff@0.16.1 check
           uvx --offline ruff@0.16.1 format --check
           uvx --offline mypy@2.4.0
-          python3 benchmark/startup.py --self-test
           python3 benchmark/mcp_client.py --self-test
+      - name: Test the process helper
+        run: julia --startup-file=no scripts/owned-process/tests/runtests.jl
+      - name: Prepare the startup driver
+        run: julia --startup-file=no --project=scripts/bench-startup -e 'using Pkg; Pkg.instantiate()'
+      - name: Test the startup driver
+        run: julia --startup-file=no --project=scripts/bench-startup scripts/bench-startup/tests/runtests.jl
       - name: Test the matrix runner
         run: julia --startup-file=no --project=. scripts/check-matrix/tests/runtests.jl
 

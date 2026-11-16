@@ -26,15 +26,18 @@ Choose a fresh output file for every run; existing measurements are preserved.
 ## Fresh process and first use
 
 ```console
-$ python3 benchmark/startup.py \
-    --project benchmark \
+$ julia \
+    --startup-file=no \
+    --project=benchmark \
+    scripts/bench-startup/bench-startup.jl \
     --samples 3 \
     --profiles normal \
     --threads 1 \
     --output benchmark/results/startup.json
 ```
 
-The Python driver randomizes fresh Julia baseline and core samples. It records
+The [driver](../scripts/bench-startup/README.md) randomizes fresh Julia
+baseline and core samples. It records
 package import, first owned server, first subprocess/control operations and
 cleanup separately, using the library's default deadlines. JSON remains
 unloaded; report serialization happens after the core sample. Dependencies
@@ -89,7 +92,7 @@ do not attribute retained memory or memory growth to individual operations.
 
 The pre-report script and package-import timings exclude process startup and
 final report serialization; use
-`startup.py` for that boundary. `sizes=16` is a bounded smoke measurement.
+`bench-startup.jl` for that boundary. `sizes=16` is a bounded smoke measurement.
 No regression thresholds are inferred from one run. Driver-only semantic
 checks use `--compile=min -O0` with `benchmark/graph_scaling.jl --self-test`,
 following the contribution loops. They verify allocation counters, source

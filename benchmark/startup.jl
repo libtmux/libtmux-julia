@@ -7,6 +7,19 @@ isempty(ARGS) || STARTUP_SELF_TEST || error("usage: startup.jl [--self-test]")
 include(joinpath(@__DIR__, "..", "dev", "test-sandbox.jl"))
 TestSandbox.enter_or_refuse!()
 
+# Linux's ru_maxrss, which Sys.maxrss reports, also counts the address space this
+# process inherited from its spawner, so a spawner larger than the measurement hides
+# it. VmHWM counts this process's own address space.
+function startup_peak_rss()
+    try
+        for line in eachline("/proc/self/status")
+            startswith(line, "VmHWM:") && return 1024 * parse(Int, split(line)[2])
+        end
+    catch
+    end
+    Sys.maxrss()
+end
+
 function startup_emit(io, name, status, elapsed, rss)
     println(
         io,
@@ -40,7 +53,7 @@ Base.@noinline function startup_phase!(@nospecialize(action), records, name; io=
         rethrow()
     finally
         record["elapsed_ns"] = time_ns() - started
-        record["max_rss_bytes"] = Sys.maxrss()
+        record["max_rss_bytes"] = startup_peak_rss()
         record["from_script_entry_ns"] = time_ns() - STARTUP_ENTRY_NS
         startup_emit(
             io,
@@ -59,7 +72,8 @@ function startup_source_hashes()
             "Project.toml",
             "benchmark/Project.toml",
             "benchmark/startup.jl",
-            "benchmark/startup.py",
+            "scripts/bench-startup/bench-startup.jl",
+            "scripts/owned-process/owned-process.jl",
         )
     ]
     for entry in ("src", "ext")
@@ -84,10 +98,10 @@ if !STARTUP_SELF_TEST
                 "name"=>"sha_and_source_setup",
                 "status"=>"pass",
                 "elapsed_ns"=>elapsed,
-                "max_rss_bytes"=>Sys.maxrss(),
+                "max_rss_bytes"=>startup_peak_rss(),
             ),
         )
-        startup_emit(stdout, "sha_and_source_setup", "pass", elapsed, Sys.maxrss())
+        startup_emit(stdout, "sha_and_source_setup", "pass", elapsed, startup_peak_rss())
     end
     let started = time_ns(), status = "pass"
         try
@@ -101,12 +115,12 @@ if !STARTUP_SELF_TEST
             "name"=>"package_load",
             "status"=>status,
             "elapsed_ns"=>elapsed,
-            "max_rss_bytes"=>Sys.maxrss(),
+            "max_rss_bytes"=>startup_peak_rss(),
         )
         STARTUP_LOAD_FAILURE[] === nothing ||
             (record["error_type"] = string(typeof(STARTUP_LOAD_FAILURE[])))
         push!(STARTUP_IMPORTS, record)
-        startup_emit(stdout, "package_load", status, elapsed, Sys.maxrss())
+        startup_emit(stdout, "package_load", status, elapsed, startup_peak_rss())
     end
 end
 
@@ -216,7 +230,7 @@ function startup_main()
         "phases"=>Dict{String,Any}[],
         "phase_dispatch"=>"invokelatest includes action compilation and dispatch; excludes earlier harness compilation",
         "package_load_boundary"=>"LibTmux follows SHA/source setup; this harness imports TOML only after teardown and never JSON",
-        "fresh_process_boundary"=>"script timestamp follows interpreter startup; Python records whole process",
+        "fresh_process_boundary"=>"script timestamp follows interpreter startup; the driver records whole process",
     )
     if STARTUP_LOAD_FAILURE[] === nothing
         startup_workload!(report)
@@ -225,11 +239,17 @@ function startup_main()
         report["error_type"] = string(typeof(STARTUP_LOAD_FAILURE[]))
     end
     report["through_cleanup_ns"] = time_ns() - STARTUP_ENTRY_NS
-    report["before_reporting_max_rss_bytes"] = Sys.maxrss()
+    report["before_reporting_max_rss_bytes"] = startup_peak_rss()
     import_started = time_ns()
     @eval using TOML
     report["toml_import_ns"] = time_ns() - import_started
-    startup_emit(stdout, "reporting_import", "pass", report["toml_import_ns"], Sys.maxrss())
+    startup_emit(
+        stdout,
+        "reporting_import",
+        "pass",
+        report["toml_import_ns"],
+        startup_peak_rss(),
+    )
     encode_started = time_ns()
     body = Base.invokelatest(startup_encode, report)
     startup_emit(
@@ -237,7 +257,7 @@ function startup_main()
         "reporting_encode",
         "pass",
         time_ns() - encode_started,
-        Sys.maxrss(),
+        startup_peak_rss(),
     )
     println("LTJ_STARTUP_TOML_BEGIN")
     print(body)

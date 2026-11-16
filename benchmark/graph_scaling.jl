@@ -548,7 +548,7 @@ function graph_main(options, destination, imports, hashes)
         "load_average_start"=>Sys.loadavg(),
         "timing_boundary"=>"script entry; imports separate; first action via invokelatest; warm action via specialized direct call",
         "limitations"=>[
-            "Process startup precedes script entry; startup.py measures fresh-process startup",
+            "Process startup precedes script entry; bench-startup.jl measures fresh-process startup",
             "First calls occur after imports and prerequisites; later sizes reuse progressive compiler caches",
             "Measurement and report helpers are outside operation timings; whole script includes them",
             "First calls include invokelatest dispatch/return boxing; warm calls use a direct function barrier",
