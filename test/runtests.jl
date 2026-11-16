@@ -6,7 +6,6 @@ finish_test_imports()
 
 const UNIT_FILES = (
     "server",
-    "sandbox",
     "process",
     "cancellation",
     "text",
@@ -24,6 +23,7 @@ const UNIT_FILES = (
     "support_capabilities",
 )
 const INTEGRATION_FILES = (
+    "sandbox", # Slow: child Julia processes and whole-source safety scans.
     "fixture_contract",
     "sandbox_client",
     "sandbox_sweep",
