@@ -13,6 +13,8 @@ export WindowLink, PaneOccurrence, Selection, snapshot, snapshotof
 export sessions, windows, panes, clients, windowlinks, paneoccurrences, window, session
 export entitykey, occurrencekey, hascoverage, SnapshotCoverageError, InconsistentSnapshot
 export UnsupportedCapability, UnsupportedTmuxVersion, MINIMUM_TMUX_VERSION
+export CapabilityCommand, CapabilityStatus, WorkaroundStatus, CapabilityReport
+export capabilities, capability, supports, workaround
 export InvalidUTF8Error, TextDecoder, decode_text, decode!
 export new_session, new_window, split_window, select_layout
 export select_pane, select_window
@@ -81,6 +83,7 @@ include("control_configuration.jl")
 include("control_options.jl")
 include("control_buffers.jl")
 include("features.jl")
+include("capabilities.jl")
 include("criteria.jl")
 include("wire.jl")
 include("sibling_wire.jl")

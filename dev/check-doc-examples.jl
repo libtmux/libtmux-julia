@@ -359,6 +359,7 @@ const DOC_SNIPPETS = Dict(
 )
 
 const DOC_PROGRAMS = Dict(
+    "examples/capabilities.jl"=>"owned tmux: daemon and control feature decisions",
     "examples/owned_capture.jl"=>"owned tmux: create, capture and cleanup",
     "examples/shared_windows.jl"=>"owned tmux: shared links and captured predicates",
     "examples/control_cancel.jl"=>"owned tmux: cancellation and control cleanup",

@@ -33,6 +33,7 @@ const INTEGRATION_FILES = (
     "support_check",
     "support_unreadable",
     "features",
+    "capabilities",
     "integration",
     "acquisition",
     "operations",

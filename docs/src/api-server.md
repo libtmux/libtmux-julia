@@ -13,6 +13,28 @@ Private = false
 Order = [:module, :type, :function]
 ```
 
+## Inspect daemon support
+
+[`capabilities`](@ref) reports the responding daemon's release, supported
+features and active workarounds. Use [`supports`](@ref) to choose an optional
+operation, or inspect [`capability`](@ref) for its requirements and affected
+entry points. Unknown feature names raise `KeyError`.
+
+A server report observes its endpoint at that call. A control report validates
+the original connection. Both run without user hooks and leave operation
+checks unchanged; neither renews a saved reference. The returned immutable
+report remains readable after its daemon or connection closes.
+
+[The executable example](../../examples/capabilities.jl) compares both
+transports where control mode is supported and keeps its report after cleanup.
+
+```@autodocs
+Modules = [LibTmux]
+Pages = ["src/capabilities.jl"]
+Private = false
+Order = [:type, :function]
+```
+
 ## Commands and batches
 
 ### Cancellation and failures

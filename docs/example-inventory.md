@@ -56,6 +56,7 @@ from this inventory check.
 
 | Program | Behavior |
 | --- | --- |
+| [examples/capabilities.jl](../examples/capabilities.jl) | owned tmux: daemon and control feature decisions |
 | [examples/command_completion.jl](../examples/command_completion.jl) | owned tmux: authored completion marker and child exit status |
 | [examples/control_cancel.jl](../examples/control_cancel.jl) | owned tmux: cancellation and control cleanup |
 | [examples/output_stream.jl](../examples/output_stream.jl) | owned tmux: output observation and baseline |
