@@ -24,10 +24,12 @@ Core runtime and direct tests use Julia standard libraries. Optional JSON
 and Tables integrations have separate prepared test environments. Unit
 tests also require POSIX utilities such as `cat`, `sleep`, and `yes`.
 Integration tests require tmux on `PATH` and also use `dd`, `stty`, and `tail`;
-`LIBTMUX_TEST_TMUX` selects another executable. Tests start no shell program.
-A child that no utility can stand in for, such as a stand-in `tmux`, is a Julia
-program from [`dev/test-stand-ins.jl`](dev/test-stand-ins.jl). Each start is a
-Julia start, so a test that waits on one sets a deadline that allows for it.
+`LIBTMUX_TEST_TMUX` selects another executable. Tests start no shell program,
+apart from the scripted tmux clients that
+[SCRIPTS.md](.github/SCRIPTS.md#exceptions) records. A child that no utility
+can stand in for, such as a stand-in `tmux`, is a Julia program from
+[`dev/test-stand-ins.jl`](dev/test-stand-ins.jl). Each start is a Julia start,
+so a test that waits on one sets a deadline that allows for it.
 Keep temporary paths short enough for a Unix socket. Fixtures clear inherited
 tmux variables, own a unique socket, and never use the default server.
 

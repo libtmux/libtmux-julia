@@ -2,7 +2,9 @@ isdefined(@__MODULE__, :OwnedTmux) ||
     Base.include(@__MODULE__, joinpath(@__DIR__, "support", "owned_tmux.jl"))
 
 # A scripted client forwards to the real executable, optionally answering the
-# release probe or `-V` itself, and records every invocation.
+# release probe or `-V` itself, and records every invocation. It is a POSIX
+# shell script because every command of a case starts it; .github/SCRIPTS.md
+# records what a Julia start per call costs.
 function scripted_client(directory, real; name="tmux")
     script = joinpath(directory, name)
     write(

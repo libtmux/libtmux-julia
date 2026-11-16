@@ -7,7 +7,9 @@ isdefined(Main, :OwnedTmux) || include("support/owned_tmux.jl")
 release_of(server) = LibTmux._daemon_version(server, LibTmux._client_environment(ENV))
 
 # A scripted client that reports `release` and refuses everything else, so a
-# guard that dispatches anything after the release probe is visible.
+# guard that dispatches anything after the release probe is visible. It is a
+# POSIX shell script because each case starts it, and a Julia start per call
+# makes the file far slower; .github/SCRIPTS.md records the measurement.
 function release_client(directory, release; name="tmux")
     script = joinpath(directory, name)
     write(

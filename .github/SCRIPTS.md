@@ -43,6 +43,8 @@ for the library. Do not add shell or Python script files.
 - A capability Julia lacks comes from a test-only Julia dependency, not from a
   second language.
 - Test data that is not a comparison, such as workspace files a loader reads.
+- `dev/check-readme-commands.jl` runs each README console block through
+  `sh -c`, as a reader's shell would; the commands are the README's.
 
 ## Exceptions
 
@@ -89,3 +91,67 @@ $ hyperfine \
 ```
 
 It took a median of 391 ms, from 236 to 628 ms, on the shared host.
+
+### Scripted tmux clients in three tests
+
+Three tests write a POSIX shell script into a temporary directory and give it
+to the library as its tmux executable:
+
+- `release_client` in `test/features.jl` records its arguments, answers the
+  release probe and refuses every other command.
+- `scripted_client` in `test/support_check.jl` records its arguments, may
+  answer the release probe or `-V`, and then runs the real tmux with `exec`.
+- `tmux-fault` in `packages/LibTmuxWorkspace/test/apply_failure.jl` fails
+  `list-sessions` once a `new-window` has run, and otherwise runs the real tmux
+  with `exec`.
+
+Every tmux call that a case makes starts the script, so a Julia stand-in with
+the same steps pays one Julia start per call. The Julia stand-ins of
+`dev/test-stand-ins.jl` start with
+`--startup-file=no --history-file=no --compile=min -O0 --threads=1`. One call
+of the `release_client` program, as a shell script and as a Julia stand-in,
+took a median of 0.5 ms for the shell (0.49 to 0.59 ms) and 147.8 ms for Julia
+(139.7 to 158.4 ms), over 40 runs each after 3 warmups. They ran on a 12-CPU
+WSL2 Linux machine at a load average near 3, with Julia 1.13.1 and tmux 3.8a:
+
+```console
+$ hyperfine \
+    -N \
+    --warmup 3 \
+    --runs 40 \
+    --ignore-failure \
+    "$PWD/sh-client -N -C libtmux-version-#{version}" \
+    "$PWD/julia-client -N -C libtmux-version-#{version}"
+```
+
+Each row counts the stand-in starts in one run of the file, and gives the time
+of the whole run with the shell script and with the Julia stand-in. The
+`apply_failure.jl` row gives the file's time from the suite runner, and the
+others give the time of the whole command:
+
+| File | Starts | Shell | Julia stand-in |
+| --- | --- | --- | --- |
+| `test/features.jl` | 125 | 1.3 s | 21.7 s |
+| `test/support_check.jl` | 25 | 1.1 s | 10.6 s |
+| `apply_failure.jl` | 19 | 0.9 s | 5.9 s |
+
+The first two rows came from this command, with `features` replaced by
+`support_check` for the second:
+
+```console
+$ /usr/bin/time \
+    -f '%e s' \
+    julia \
+    --startup-file=no \
+    --threads=1 \
+    --compile=min \
+    -O0 \
+    --project=. \
+    test/runtests.jl features
+```
+
+The third came from the same flags with
+`packages/LibTmuxWorkspace/test/runtests.jl integration`, which prints the
+seconds of each file. Other tests that need a stand-in tmux or a pane program
+use the Julia stand-ins, because none of their files grew by more than a few
+seconds.
