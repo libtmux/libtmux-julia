@@ -130,7 +130,8 @@ function mcp_source_hashes()
         "Project.toml",
         "packages/LibTmuxMCP/Project.toml",
         "benchmark/mcp.jl",
-        "benchmark/mcp_client.py",
+        "scripts/bench-mcp-client/bench-mcp-client.jl",
+        "scripts/owned-process/owned-process.jl",
     )
         result[name] = bytes2hex(open(sha256, joinpath(MCP_BENCH_ROOT, name)))
     end
@@ -249,7 +250,7 @@ function mcp_main(arguments)
             "Cancellation has no protocol acknowledgement; cancel-to-exit includes the EOF join",
             "A pipe-capacity proof is required for backpressure; unavailable capacity is reported as partial",
             "Raw timings and byte counts include client JSON decoding; captured screen text is fixture data",
-            "Peak RSS comes from wait4 for the reaped child and its waited descendants, when available",
+            "Peak RSS comes from wait4 for the reaped child and its waited descendants, when available; a child inherits its spawner's resident set, so a value near spawner_max_rss_bytes, the peak of the client that spawned the launcher, may be the client's",
             "Compiler profiles are comparisons; this driver does not choose a default launcher profile",
             "Small sample counts describe these runs and do not establish population tail latency",
             "driver_body_ns excludes Julia import/startup; process-to-discovery includes the measured child startup",
@@ -303,8 +304,15 @@ function mcp_main(arguments)
                         )
                         push!(samples, sample)
                         command = Cmd([
-                            "python3",
-                            joinpath(@__DIR__, "mcp_client.py"),
+                            joinpath(Sys.BINDIR, Base.julia_exename()),
+                            "--startup-file=no",
+                            "--project=$(dirname(Base.active_project()))",
+                            joinpath(
+                                MCP_BENCH_ROOT,
+                                "scripts",
+                                "bench-mcp-client",
+                                "bench-mcp-client.jl",
+                            ),
                             "--launcher",
                             launchers[profile],
                             "--socket",

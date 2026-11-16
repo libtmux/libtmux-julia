@@ -15,10 +15,6 @@
 *.prof
 *.profraw
 *.profdata
-__pycache__/
-.mypy_cache/
-.ruff_cache/
-*.pyc
 *.log
 
 # Editors and desktops.

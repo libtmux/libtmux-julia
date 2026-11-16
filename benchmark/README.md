@@ -200,7 +200,8 @@ $ julia \
     output=benchmark/results/mcp.json
 ```
 
-The external protocol client measures fresh-process discovery, first/warm
+The [external protocol client](../scripts/bench-mcp-client/README.md) measures
+fresh-process discovery, first/warm
 tools, concurrent requests during a wait, cancellation/EOF and a stopped
 reader. Cancellation-to-exit is an upper bound on retirement, not a fabricated
 cancellation acknowledgement. Unsupported pipe-capacity instrumentation is
