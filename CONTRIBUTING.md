@@ -46,8 +46,8 @@ each includes on its first line. The doc-example checker, the benchmark
 drivers and `packages/LibTmuxWorkspace/dev/cli_latency.jl` include
 `dev/test-sandbox.jl` and call `TestSandbox.enter_or_refuse!()` before they
 start tmux. A new runner or probe that can start tmux does the same, or runs
-under `scripts/check-matrix/check-matrix.jl`, which gives every phase its own sandbox. A test
-script that the matrix runs on its own, such as
+under `scripts/check-matrix/check-matrix.jl`, which gives every phase its own
+sandbox. A test script that the matrix runs on its own, such as
 `packages/LibTmuxMCP/test/product.jl`, enters the sandbox itself, and
 `test/sandbox.jl` fails one that does not.
 
@@ -589,8 +589,8 @@ Both must pass at the same source revision to complete a split cell. Use
 the option runs both.
 
 Pull requests run Linux checks on Julia 1.13.1 with the oldest and the newest
-tmux release in `scripts/plan-matrix/plan-matrix.jl`, 3.3a and 3.8, at one thread, and 3.8 at
-four threads. A `v*` tag and a manual run with `scope=full` check tmux 3.3a,
+tmux release in `scripts/plan-matrix/plan-matrix.jl`, 3.3a and 3.8, at one
+thread, and 3.8 at four threads. A `v*` tag and a manual run with `scope=full` check tmux 3.3a,
 3.4, 3.5a, 3.6b, 3.7, 3.7a, 3.7b and 3.7c at one thread, 3.7c at four threads
 and 3.8 at one thread. The floor, 3.7c and 3.8 configurations run required
 runtime and delivery jobs; the others run the runtime job, because the
@@ -603,8 +603,9 @@ every planned check passed.
 
 ### Running CI against any tmux
 
-`scripts/plan-matrix/plan-matrix.jl` decides from the event and the dispatch inputs which jobs
-run, so `julia.yml` lists no tmux version. Print the plan for an event locally:
+`scripts/plan-matrix/plan-matrix.jl` decides from the event and the dispatch
+inputs which jobs run, so `julia.yml` lists no tmux version. Print the plan for
+an event locally:
 
 ```console
 $ julia \
@@ -634,10 +635,9 @@ release it names. Any other ref is resolved to a commit and built from source,
 and its version is reported, not asserted. The shared
 [build-tmux action](https://github.com/libtmux/.github/tree/main/actions/build-tmux)
 builds each release and ref, and its README says how to run its helper locally.
-`julia`
-takes a version such as `1.12.4`, or a channel such as `lts`, and applies to
-every scope. With `scope=custom`, `threads` takes `1` or `4` and `suite` takes
-`runtime`, `delivery` or `both`.
+`julia` takes a version such as `1.12.4`, or a channel such as `lts`, and
+applies to every scope. With `scope=custom`, `threads` takes `1` or `4` and
+`suite` takes `runtime`, `delivery` or `both`.
 
 To look at the runner, add `tmate`. The session opens for the person who
 started the run, who needs an SSH key on their GitHub profile, and it needs
@@ -680,7 +680,8 @@ Each artifact contains a readable summary, ranked timing CSV, original failure
 logs with local paths and known credentials removed, completion receipts and
 partial result records. File times overlap command times; do not add both.
 
-Print the exact planned version/platform cells of the whole table, as a release tag runs them:
+Print the exact planned version and platform cells of the whole table, as a
+release tag runs them:
 
 ```console
 $ julia \
