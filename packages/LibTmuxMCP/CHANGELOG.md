@@ -9,7 +9,8 @@ daemon's observed generation and version, feature requirements and support
 decisions, active workarounds, and the application's `enabledTools` policy.
 Support does not enable a tool. The call accepts no arguments, runs no hooks
 and retains the normal deadline, cancellation and result limits. An oversized
-report returns `result_limit` without a partial capability map. (#92)
+report returns `result_limit` without a partial capability map. Keep tmux's
+native `list-commands` spelling unaliased for discovery. (#92)
 
 ## 0.1.1 - 2026-11-01
 
