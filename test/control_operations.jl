@@ -69,8 +69,12 @@
                 mkdir(cwd)
                 path = joinpath(fixture.directory, "creation-bytes")
                 signal = control_signal(connection)
-                script =
-                    raw"""printf '%s\000' "$VALUE" "$PWD" "$1" > "$2"; "$3" -S "$4" wait-for -S "$5"; exec /bin/cat"""
+                # Records the pane's environment, directory and argument, then signals.
+                program = """
+                    write(ARGS[2], join([ENV["VALUE"], pwd(), ARGS[1], ""], '\\0'))
+                    run(`\$(ARGS[3]) -S \$(ARGS[4]) wait-for -S \$(ARGS[5])`)
+                    StandIns.exec("cat")
+                    """
                 argument = "argv;#{literal}\nend;"
                 value = "env;#{literal}\nend;"
                 created = new_window(
@@ -80,17 +84,14 @@
                     index=9,
                     start_directory=cwd,
                     environment=Dict("VALUE"=>value),
-                    command=[
-                        "/bin/sh",
-                        "-c",
-                        script,
-                        "sh",
+                    command=Main.StandIns.julia_argv(
+                        program,
                         argument,
                         path,
                         fixture.tmux,
                         fixture.socket,
                         signal.name,
-                    ],
+                    ),
                 )
                 wait(signal)
                 @test created isa WindowRef && created.server == connection.identity
@@ -116,21 +117,22 @@
 
                 signal = control_signal(connection)
                 path = joinpath(fixture.directory, "key-bytes")
-                script =
-                    raw"""IFS= read -r line; printf '%s' "$line" > "$1"; "$2" -S "$3" wait-for -S "$4"; exec /bin/cat"""
+                # Records the first line it is sent, then signals.
+                program = """
+                    write(ARGS[1], readline(stdin))
+                    run(`\$(ARGS[2]) -S \$(ARGS[3]) wait-for -S \$(ARGS[4])`)
+                    StandIns.exec("cat")
+                    """
                 receiver = split_window(
                     connection,
                     pane;
-                    command=[
-                        "/bin/sh",
-                        "-c",
-                        script,
-                        "sh",
+                    command=Main.StandIns.julia_argv(
+                        program,
                         path,
                         fixture.tmux,
                         fixture.socket,
                         signal.name,
-                    ],
+                    ),
                 )
                 text = "literal;#{value};雪;"
                 @test send_keys(connection, receiver, text; literal=true) isa ControlResult

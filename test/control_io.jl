@@ -16,11 +16,7 @@
             "#{pane_id}",
             "-t",
             string(only(panes(snap)).id),
-            "/bin/sh",
-            "-c",
-            "printf '%s' \"\$1\"; exec /bin/cat",
-            "sh",
-            payload,
+            Main.StandIns.julia_argv("print(ARGS[1]); StandIns.exec(\"cat\")", payload)...,
         )
         pane = PaneRef(session.server, chomp(decode_text(result.stdout)))
         deadline = time() + 10

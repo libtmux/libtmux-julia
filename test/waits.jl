@@ -140,20 +140,27 @@ using Test, LibTmux
                 end
                 for mode in (:matched, :cancelled, :predicate_error)
                     signal = "utf8-" * string(time_ns())
-                    child = [
-                        "/bin/sh",
-                        "-c",
-                        "IFS= read -r line; printf 'hit\\316'; \"\$1\" -N -S \"\$2\" wait-for \"\$3\"; printf '\\273done'; exec /bin/cat",
-                        "sh",
+                    # Prints the first byte of λ after a line arrives, and the second
+                    # once the test signals.
+                    child = Main.StandIns.julia_argv(
+                        """
+                        readline(stdin)
+                        write(stdout, b"hit\\xce")
+                        flush(stdout)
+                        run(`\$(ARGS[1]) -N -S \$(ARGS[2]) wait-for \$(ARGS[3])`)
+                        write(stdout, b"\\xbbdone")
+                        flush(stdout)
+                        StandIns.exec("cat")
+                        """,
                         server.tmux,
                         server.socket_path,
                         signal,
-                    ]
+                    )
                     utf8 = split_window(connection, pane; command=child)
                     observe_output(connection, utf8) do stream
                         send_keys(connection, utf8, "Enter")
                         if mode === :matched
-                            first = wait_for_text(stream, "hit"; timeout=0.9)
+                            first = wait_for_text(stream, "hit"; timeout=30)
                             @test first.pending_bytes == 1
                             @test_throws ArgumentError wait_for_quiet(
                                 stream;
@@ -165,7 +172,7 @@ using Test, LibTmux
                         else
                             token = CancellationToken()
                             interrupted = try
-                                wait_for(stream; timeout=0.9, cancel=token) do result
+                                wait_for(stream; timeout=30, cancel=token) do result
                                     occursin("hit", result.text) || return false
                                     @test result.pending_bytes == 1
                                     @test_throws ArgumentError wait_for_quiet(stream)
@@ -240,10 +247,13 @@ end
             # The anchor keeps the server alive when the target session ends.
             new_session(server; name="anchor", command=["/bin/cat"])
             anchor = only(panes(snapshot(server))).ref
+            # The pane shows a line and holds still.
+            shown = joinpath(dirname(server.socket_path), "before-end")
+            write(shown, "before-end\n")
             created = new_session(
                 server;
                 name="ending",
-                command=["/bin/sh", "-c", "printf 'before-end\\n'; sleep 30"],
+                command=["tail", "-n", "+1", "-f", shown],
             )
             pane = only(filter(p -> p.ref != anchor, panes(snapshot(server)))).ref
             holder = nothing

@@ -20,16 +20,17 @@ end
         session = new_session(
             server;
             name="observation-adversaries",
-            command=[
-                "/bin/sh",
-                "-c",
-                "stty raw -echo || exit; \"\$1\" -N -S \"\$2\" wait-for -S raw-ready; exec /bin/cat",
-                "sh",
+            command=Main.StandIns.julia_argv(
+                """
+                StandIns.raw_terminal()
+                run(`\$(ARGS[1]) -N -S \$(ARGS[2]) wait-for -S raw-ready`)
+                StandIns.exec("cat")
+                """,
                 fixture.tmux,
                 fixture.socket,
-            ],
+            ),
         )
-        run_command(server, "wait-for", "raw-ready"; timeout=0.9)
+        run_command(server, "wait-for", "raw-ready"; timeout=30)
         target = only(panes(snapshot(server))).ref
         destination_window =
             new_window(server, session; name="destination", command=["/bin/cat"])

@@ -297,36 +297,51 @@ function test_topology_pane_maintenance_preserves_process_and_explicit_link_iden
                     )
 
                     quote_shell(s) = "'" * replace(s, "'" => "'\\''") * "'"
-                    wait_command(channel; signal=false) = join(
-                        quote_shell.([
-                            fixture.tmux,
-                            "-S",
-                            fixture.socket,
-                            "wait-for",
-                            (signal ? ["-S", channel] : [channel])...,
-                        ]),
-                        " ",
-                    )
                     release, ready = "history-release-$mode", "history-ready-$mode"
                     output = repeat("history\r\n", 80)
-                    producer =
-                        wait_command(release) *
-                        "; printf '%s\\n' " *
-                        join(fill("history", 80), " ") *
-                        "; exec cat"
-                    history_window =
-                        new_window(transport, alpha; command=["/bin/sh", "-c", producer])
+                    # Prints its history once the test releases it, then holds still.
+                    history_window = new_window(
+                        transport,
+                        alpha;
+                        command=Main.StandIns.julia_argv(
+                            """
+                            run(`\$(ARGS[1]) -S \$(ARGS[2]) wait-for \$(ARGS[3])`)
+                            print("history\\n"^80)
+                            flush(stdout)
+                            StandIns.exec("cat")
+                            """,
+                            fixture.tmux,
+                            fixture.socket,
+                            release,
+                        ),
+                    )
                     history_pane =
                         PaneRef(alpha.server, readfield(history_window, "pane_id"))
                     file = joinpath(fixture.directory, "history-$mode")
+                    # tmux runs this one command through the shell; it keeps the first
+                    # bytes of the pane's output and then signals.
                     pipe_pane(
                         transport,
                         history_pane,
-                        "dd bs=1 count=$(ncodeunits(output)) of=$(quote_shell(file)) 2>/dev/null; " *
-                        wait_command(ready; signal=true),
+                        join(
+                            quote_shell.(
+                                Main.StandIns.julia_argv(
+                                    """
+                                    run(pipeline(`dd bs=1 count=\$(ARGS[1]) of=\$(ARGS[2])`; stderr=devnull))
+                                    run(`\$(ARGS[3]) -S \$(ARGS[4]) wait-for -S \$(ARGS[5])`)
+                                    """,
+                                    ncodeunits(output),
+                                    file,
+                                    fixture.tmux,
+                                    fixture.socket,
+                                    ready,
+                                ),
+                            ),
+                            " ",
+                        ),
                     )
                     run_command(server, "wait-for", "-S", release)
-                    run_command(server, "wait-for", ready; timeout=0.9)
+                    run_command(server, "wait-for", ready; timeout=30)
                     @test read(file) == codeunits(output)
                     @test parse(Int, readfield(history_pane, "history_size")) > 0
                     clear_history(transport, history_pane)

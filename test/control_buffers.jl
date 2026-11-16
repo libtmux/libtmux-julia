@@ -54,30 +54,34 @@
                     @test paste_bytes(connection, pane, UInt8[]) === nothing
                     @test connection.submitted == before
 
-                    quote_shell(s) = "'" * replace(s, "'"=>"'\\''") * "'"
-                    signal(channel) = join(
-                        quote_shell.([
-                            fixture.tmux,
-                            "-S",
-                            fixture.socket,
-                            "wait-for",
-                            "-S",
-                            channel,
-                        ]),
-                        " ",
-                    )
                     output = joinpath(fixture.directory, "pasted")
-                    raw = "stty raw -echo; $(signal("raw-ready")); dd bs=1 count=$(length(payload)+1) of=$(quote_shell(output)) 2>/dev/null; $(signal("raw-done")); exec cat"
-                    raw_window =
-                        new_window(connection, session; command=["/bin/sh", "-c", raw])
+                    # A raw terminal that keeps exactly the pasted bytes and the next key.
+                    raw_window = new_window(
+                        connection,
+                        session;
+                        command=Main.StandIns.julia_argv(
+                            """
+                            signal(channel) = run(`\$(ARGS[1]) -S \$(ARGS[2]) wait-for -S \$channel`)
+                            StandIns.raw_terminal()
+                            signal("raw-ready")
+                            run(pipeline(`dd bs=1 count=\$(ARGS[3]) of=\$(ARGS[4])`; stderr=devnull))
+                            signal("raw-done")
+                            StandIns.exec("cat")
+                            """,
+                            fixture.tmux,
+                            fixture.socket,
+                            length(payload) + 1,
+                            output,
+                        ),
+                    )
                     raw_pane = PaneRef(
                         connection.identity,
                         only(read_formats(connection, raw_window, FormatField("pane_id"))).value,
                     )
-                    run_command(server, "wait-for", "raw-ready"; timeout=0.9)
+                    run_command(server, "wait-for", "raw-ready"; timeout=30)
                     @test paste_bytes(connection, raw_pane, payload) isa ControlResult
                     send_keys(connection, raw_pane, "Z"; literal=true)
-                    run_command(server, "wait-for", "raw-done"; timeout=0.9)
+                    run_command(server, "wait-for", "raw-done"; timeout=30)
                     @test read(output) == vcat(payload, codeunits("Z"))
                     missing = PaneRef(connection.identity, "%999999")
                     @test_throws ControlCommandError paste_bytes(

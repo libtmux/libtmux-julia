@@ -473,28 +473,28 @@
                 directory = fixture.directory
                 real = Server(socket_path=fixture.socket, tmux=fixture.tmux)
                 session = new_session(real; name="opening", command=["cat"])
-                shim = joinpath(directory, "tmux")
-                write(
-                    shim,
-                    raw"""#!/bin/sh
-for argument in "$@"; do
-    if [ "$argument" = attach-session ]; then
-        if [ -n "${LTJ_CONTROL_OPEN_FIFO:-}" ]; then trap '' TERM; fi
-        printf '%s\n' "$$" > "$LTJ_CONTROL_OPEN_PID"
-        if [ -n "${LTJ_CONTROL_OPEN_FIFO:-}" ]; then exec /bin/cat "$LTJ_CONTROL_OPEN_FIFO"; fi
-        exec /bin/cat
-    fi
-done
-exec "$LTJ_CONTROL_OPEN_TMUX" "$@"
-""",
+                # The attach client records its pid and holds still; a held-open FIFO
+                # client also ignores SIGTERM. Anything else runs the real tmux.
+                shim = Main.StandIns.install(
+                    joinpath(directory, "tmux"),
+                    raw"""
+                    if "attach-session" in ARGS
+                        fifo = get(ENV, "LTJ_CONTROL_OPEN_FIFO", "")
+                        isempty(fifo) ||
+                            ccall(:signal, Ptr{Cvoid}, (Cint, Ptr{Cvoid}), 15, Ptr{Cvoid}(1))
+                        write(ENV["LTJ_CONTROL_OPEN_PID"], string(getpid()), "\n")
+                        StandIns.exec("cat", filter(!isempty, [fifo])...)
+                    end
+                    StandIns.forward(ENV["LTJ_CONTROL_OPEN_TMUX"])
+                    """,
                 )
-                chmod(shim, 0o700)
                 server = Server(; socket_path=fixture.socket, tmux=shim)
                 pidfile = joinpath(directory, "deadline-pid")
                 reached_attach = Ref(false)
                 function expire_at_attach(callback, _)
                     monitor = OwnedTmux.FolderMonitor(directory)
-                    watchdog, watchdog_task = LibTmux._owned_timer(0.9) do
+                    # Bounds a client that never attaches; a Julia start is slower than 0.9 s.
+                    watchdog, watchdog_task = LibTmux._owned_timer(30) do
                         close(monitor)
                     end
                     try
@@ -566,7 +566,7 @@ exec "$LTJ_CONTROL_OPEN_TMUX" "$@"
                     end
                     cancel!(token)
                 end
-                timer, timer_task = LibTmux._owned_timer(0.9) do
+                timer, timer_task = LibTmux._owned_timer(30) do
                     close(monitor)
                 end
                 try
@@ -579,7 +579,7 @@ exec "$LTJ_CONTROL_OPEN_TMUX" "$@"
                         @test_throws RequestCancelled open_control(
                             server,
                             session;
-                            timeout=0.9,
+                            timeout=30,
                             cancel=token,
                         )
                     end
