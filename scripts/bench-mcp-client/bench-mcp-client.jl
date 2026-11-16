@@ -674,7 +674,8 @@ function warm_up()
         receive!(client; progress="warm")
         # An echo has no result, so a checked request refuses it after the full round trip.
         refuses(() -> request!(client, "echo", "ping"; timeout=5)) || error("echo accepted")
-        refuses(() -> call!(client, "tool", "list_panes")) || error("echo accepted")
+        refuses(() -> call!(client, "tool", "list_panes")) ||
+            error("echo accepted as a tool reply")
         refuses(() -> checked_result(Dict("result" => Dict("isError" => true)))) ||
             error("tool error accepted")
         something(shrink_pipe(client.child.stdout), 0)

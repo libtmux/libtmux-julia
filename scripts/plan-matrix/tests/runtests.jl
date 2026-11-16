@@ -21,8 +21,7 @@ refused(match; kwargs...) =
 labels(result) = [(c["tmux"], c["threads"], c["suite"]) for c in result["cells"]]
 versions(jobs) = unique(c["tmux"] for c in jobs)
 
-# The full scope as it was before pushes moved to the edges. A release rests on it,
-# so it is pinned cell by cell.
+# The full scope, which a release rests on, pinned cell by cell.
 const FULL_SCOPE = [
     ("3.3a", 1, "runtime"),
     ("3.3a", 1, "delivery"),

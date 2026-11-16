@@ -40,7 +40,6 @@ struct UsageError <: Exception
 end
 Base.showerror(io::IO, error::UsageError) = print(io, error.message)
 
-# Signal names the report uses.
 const SIGINT = Base.SIGINT
 const SIGKILL = Base.SIGKILL
 
@@ -210,7 +209,7 @@ function source_hashes(root=ROOT)
             endswith(name, ".jl") && push!(files, joinpath(parent, name))
         end
     end
-    Dict(relpath(path, root) => bytes2hex(open(SHA.sha256, path)) for path in sort!(files))
+    Dict(relpath(path, root) => sha256_file(path) for path in sort!(files))
 end
 
 "Read the phase records and the TOML measurement out of a sample's stdout."
