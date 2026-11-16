@@ -191,9 +191,10 @@ end
         )
         fifo, pidfile = (joinpath(fixture.directory, name) for name in ("blocked", "pid"))
         @test ccall(:mkfifo, Cint, (Cstring, Cuint), fifo, 0o600) == 0
-        # Records its pid, prints `ready`, then blocks opening the FIFO. This file
-        # also runs from an exported package, which has no dev directory to load
-        # helpers from.
+        # Records its pid, prints `ready`, then blocks opening the FIFO. It starts
+        # no child, so its process group is the one process the test checks is
+        # gone. This file also runs from an exported package, which has no dev
+        # directory to load helpers from.
         script = [
             joinpath(Sys.BINDIR, Base.julia_exename()),
             "--startup-file=no",
@@ -205,7 +206,7 @@ end
             write(ARGS[1], string(getpid()))
             print("ready")
             flush(stdout)
-            run(`cat \$(ARGS[2])`)
+            close(open(ARGS[2]))
             """,
             pidfile,
             fifo,
