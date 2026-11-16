@@ -41,17 +41,9 @@ end
         end
         operation = Threads.@spawn try
             if kind === :cancellation
-                LibTmux._run_process(
-                    `sh -c "while :; do :; done"`;
-                    cancel=token,
-                    _cancel_subscribe=subscribe,
-                )
+                LibTmux._run_process(`sleep 30`; cancel=token, _cancel_subscribe=subscribe)
             else
-                LibTmux._run_process(
-                    `sh -c "while :; do :; done"`;
-                    timeout=0.03,
-                    _make_timer=timer_factory,
-                )
+                LibTmux._run_process(`sleep 30`; timeout=0.03, _make_timer=timer_factory)
             end
         catch error
             error

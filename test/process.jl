@@ -21,11 +21,18 @@ Base.copy(value::FrozenInputBytes) = value
     @test isempty(errors)
 end
 
+# A child that no system tool can stand in for is a short Julia program.
+child(program, arguments...) = Main.StandIns.julia_cmd(program, arguments...)
+
 @testset "bounded owned processes" begin
     @test isdefined(LibTmux, :_run_process)
     if isdefined(LibTmux, :_run_process)
         execute = LibTmux._run_process
-        bytes = execute(`sh -c "printf '\\000a\\377\\n'; printf err >&2; exit 7"`)
+        bytes = execute(
+            child(
+                "write(stdout, UInt8[0x00, 0x61, 0xff, 0x0a]); write(stderr, \"err\"); exit(7)",
+            ),
+        )
         @test bytes.stdout == UInt8[0x00, 0x61, 0xff, 0x0a]
         @test bytes.stderr == codeunits("err")
         @test bytes.exitcode == 7
@@ -43,20 +50,25 @@ end
         @test execute(`cat`; input=payload).stdout == payload
         @test execute(`cat`; input=FrozenInputBytes((0x00, 0xff))).stdout ==
               UInt8[0x00, 0xff]
-        pressure =
-            execute(`sh -c "head -c 131072 /dev/zero & head -c 131072 /dev/zero >&2; wait"`)
+        pressure = execute(
+            child(
+                "block = zeros(UInt8, 131072); " *
+                "@sync begin @async write(stdout, block); @async write(stderr, block) end",
+            ),
+        )
         @test pressure.stdout == zeros(UInt8, 131072)
         @test pressure.stderr == zeros(UInt8, 131072)
         @test_throws OutputLimitExceeded execute(`yes x`; max_output_bytes=128)
         @test_throws OutputLimitExceeded execute(
-            `sh -c "exec yes x >&2"`;
+            child("while true; write(stderr, \"x\\n\"); end");
             max_error_bytes=128,
         )
-        @test_throws DeadlineExceeded execute(`sh -c "while :; do :; done"`; timeout=0.03)
-        @test execute(`sh -c "kill -TERM \$\$"`).termsignal == 15
+        @test_throws DeadlineExceeded execute(`sleep 30`; timeout=0.03)
+        @test execute(child("ccall(:kill, Cint, (Cint, Cint), getpid(), 15); sleep(30)")).termsignal ==
+              15
         @test_throws TmuxNotFound execute(Cmd(["/nonexistent/libtmux-julia-executable"]))
+        # A file that is not executable is refused whatever it holds.
         mktemp() do executable, io
-            write(io, "#!/bin/sh\nexit 0\n")
             close(io)
             chmod(executable, 0o600)
             denied = try
@@ -114,9 +126,13 @@ end
         # This deadline bounds a broken error path; it is not an asserted latency.
         closed_stdin = try
             execute(
-                `sh -c "exec 0<&-; printf 'stdin closed\n' >&2; while :; do :; done"`;
+                child(
+                    # Julia keeps a second copy of stdin, which exec drops.
+                    "ccall(:close, Cint, (Cint,), 0); println(stderr, \"stdin closed\"); " *
+                    "StandIns.exec(\"sleep\", \"30\")",
+                );
                 input=fill(UInt8(1), 131072),
-                timeout=0.9,
+                timeout=30,
                 _make_timer=stdin_timer,
             )
         catch error
@@ -129,7 +145,7 @@ end
             @test closed_stdin.result.termsignal == Base.SIGKILL
         end
         rejected = try
-            execute(`sh -c "printf rejected >&2; exit 2"`; input=fill(UInt8(1), 131072))
+            execute(child("write(stderr, \"rejected\"); exit(2)"); input=fill(UInt8(1), 131072))
         catch error
             error
         end
@@ -173,13 +189,16 @@ end
 # A descendant that inherited the client's pipes can hold them open forever.
 @testset "an exited client's silent pipes are closed after a quiet interval" begin
     mktempdir(; prefix="ltj-drain-") do directory
-        script = joinpath(directory, "held")
         pidfile = joinpath(directory, "holder.pid")
-        write(script, "#!/bin/sh\necho kept\nsleep 20 &\necho \$! > '$pidfile'\n")
-        chmod(script, 0o700)
+        # The sleep keeps this child's pipes after the child itself exits.
+        holder = child(
+            "background = run(`sleep 20`; wait=false); " *
+            "write(ARGS[1], string(getpid(background))); println(\"kept\")",
+            pidfile,
+        )
         try
             started = time_ns()
-            result = LibTmux._run_process(`$script`)
+            result = LibTmux._run_process(holder)
             @test String(result.stdout) == "kept\n" && result.exitcode == 0
             @test (time_ns() - started) / 1e9 < 5
         finally
@@ -189,8 +208,8 @@ end
         end
 
         # Output that arrives slowly, within the quiet interval, is kept whole.
-        write(script, "#!/bin/sh\nprintf a\nsleep 0.1\nprintf b\nsleep 0.1\nprintf c\n")
-        result = LibTmux._run_process(`$script`)
+        slow = child("for letter in \"abc\"; print(letter); flush(stdout); sleep(0.1); end")
+        result = LibTmux._run_process(slow)
         @test String(result.stdout) == "abc" && result.exitcode == 0
     end
 end
