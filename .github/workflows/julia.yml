@@ -128,6 +128,8 @@ jobs:
           --output "$RUNNER_TEMP/libtmux-julia-release-preflight.toml"
       - name: Test the process helper
         run: julia --startup-file=no scripts/owned-process/tests/runtests.jl
+      - name: Test the docs preview cleanup
+        run: julia --startup-file=no scripts/docs-preview-cleanup/tests/runtests.jl
       - name: Prepare the startup driver
         run: julia --startup-file=no --project=scripts/bench-startup -e 'using Pkg; Pkg.instantiate()'
       - name: Test the startup driver

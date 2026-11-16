@@ -1,7 +1,8 @@
 name: docs-preview-cleanup
 
-# The default-branch workflow reads only the numeric PR from the event.
-# No pull request content is checked out or executed.
+# The default-branch workflow reads only the numeric PR from the event. It
+# checks out the cleanup script of the base branch and no pull request content,
+# so nothing a pull request adds runs with the cleanup role.
 on:
   pull_request_target:
     types: [closed]
@@ -20,6 +21,16 @@ jobs:
     runs-on: ubuntu-latest
     environment: docs-preview-cleanup
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts/docs-preview-cleanup
+          persist-credentials: false
+
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
+        with:
+          version: '1.13.1'
+          arch: x64
+
       # Closed events can be rerun after a PR reopens. Read current state
       # before assuming the cleanup role or deleting any object.
       - id: current
@@ -28,23 +39,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          echo 'should_cleanup=false' >> "$GITHUB_OUTPUT"
-          [[ "$PR" =~ ^[1-9][0-9]*$ ]] || {
-            echo 'pull request number must be numeric' >&2
-            exit 1
-          }
-          response=$(gh api --method GET "repos/$REPOSITORY/pulls/$PR")
-          jq -e --argjson number "$PR" '
-            type == "object" and .number == $number and
-            (.state == "open" or .state == "closed")
-          ' <<< "$response" > /dev/null || {
-            echo 'invalid current pull request response' >&2
-            exit 1
-          }
-          eligible=$(jq -r '.state == "closed"' <<< "$response")
-          echo "should_cleanup=$eligible" >> "$GITHUB_OUTPUT"
+        run: >-
+          julia --startup-file=no
+          scripts/docs-preview-cleanup/docs-preview-cleanup.jl
+          eligibility
+          --repository "$REPOSITORY"
+          --pr "$PR"
+          --github-output "$GITHUB_OUTPUT"
 
       - if: steps.current.outputs.should_cleanup == 'true'
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -57,10 +58,9 @@ jobs:
         env:
           BUCKET: ${{ secrets.LIBTMUX_DOCS_BUCKET }}
           PR: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          [[ "$PR" =~ ^[0-9]+$ ]] || {
-            echo 'pull request number must be numeric' >&2
-            exit 1
-          }
-          aws s3 rm "s3://$BUCKET/en/julia/pr-$PR/" --recursive
+        run: >-
+          julia --startup-file=no
+          scripts/docs-preview-cleanup/docs-preview-cleanup.jl
+          delete
+          --bucket "$BUCKET"
+          --pr "$PR"
