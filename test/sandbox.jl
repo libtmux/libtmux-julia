@@ -11,31 +11,23 @@ const SANDBOX_DECOYS = Dict(
 
 # A tmux that records its arguments and, for each selector, only whether it is set.
 function sandbox_fake_tmux(directory)
-    checks = join(
-        [
-            "if [ \"\${$name+set}\" ]; then echo '$name set'; else echo '$name unset'; fi"
-            for name in keys(SANDBOX_DECOYS)
-        ],
-        "\n",
-    )
-    path = joinpath(directory, "tmux")
-    write(
-        path,
+    Main.StandIns.install(
+        joinpath(directory, "tmux"),
         """
-        #!/bin/sh
-        {
-        printf 'argv:'
-        for argument in "\$@"; do printf ' [%s]' "\$argument"; done
-        printf '\\n'
-        $checks
-        if [ -n "\$TMUX_TMPDIR" ] && [ "\$TMUX_TMPDIR" = "\${$(Main.TestSandbox.MARKER)-}" ]; then
-            echo 'TMUX_TMPDIR is the sandbox'
-        fi
-        } >> "\$LIBTMUX_TEST_RECORD"
-        exit 0
+        out = IOBuffer()
+        print(out, "argv:")
+        foreach(argument -> print(out, " [", argument, "]"), ARGS)
+        println(out)
+        for name in $(repr(collect(keys(SANDBOX_DECOYS))))
+            println(out, name, haskey(ENV, name) ? " set" : " unset")
+        end
+        directory = get(ENV, "TMUX_TMPDIR", "")
+        isempty(directory) ||
+            directory != get(ENV, $(repr(Main.TestSandbox.MARKER)), "") ||
+            println(out, "TMUX_TMPDIR is the sandbox")
+        StandIns.record(ENV["LIBTMUX_TEST_RECORD"], chomp(String(take!(out))))
         """,
     )
-    chmod(path, 0o755)
     nothing
 end
 
@@ -79,33 +71,18 @@ end
 # either removes the socket it is asked to stop, as a server does when it exits,
 # or leaves it alone, as a server that survives kill-server does.
 function sandbox_stopping_tmux(directory; stops=true)
-    path = joinpath(directory, stops ? "stopper" : "bystander")
-    removal = stops ? raw"""
-        while [ $# -gt 0 ]; do
-            if [ "$1" = -S ]; then rm -f "$2"; exit 0; fi
-            shift
-        done
+    removal = stops ? """
+        socket = findfirst(==("-S"), ARGS)
+        socket === nothing || rm(ARGS[socket + 1]; force=true)
         """ : ""
-    write(
-        path,
+    Main.StandIns.install(
+        joinpath(directory, stops ? "stopper" : "bystander"),
         """
-        #!/bin/sh
-        {
-        printf 'argv:'
-        for argument in "\$@"; do
-            case "\$argument" in
-                /*) printf ' [path]' ;;
-                *) printf ' [%s]' "\$argument" ;;
-            esac
-        done
-        printf '\\n'
-        } >> "\$LIBTMUX_TEST_RECORD"
+        line = "argv:" * join([" [" * (startswith(a, "/") ? "path" : a) * "]" for a in ARGS])
+        StandIns.record(ENV["LIBTMUX_TEST_RECORD"], line)
         $removal
-        exit 0
         """,
     )
-    chmod(path, 0o755)
-    path
 end
 
 # Runs `program` in a child Julia whose environment holds the decoys and whose
@@ -310,7 +287,8 @@ end
     survivor = joinpath(directory, "survivor.sock")
     listener = listen(survivor)
     patience = sandbox.PATIENCE[]
-    sandbox.PATIENCE[] = 0.2
+    # The recording tmux is a Julia start, which kill-server must outlast.
+    sandbox.PATIENCE[] = 3.0
     try
         mktempdir(ENV["TMUX_TMPDIR"]; prefix="c-") do scratch
             tmux = sandbox_stopping_tmux(scratch; stops=false)
@@ -348,14 +326,13 @@ end
     sandbox.PATIENCE[] = 0.2
     try
         mktempdir(ENV["TMUX_TMPDIR"]; prefix="c-") do scratch
-            tmux = sandbox_stopping_tmux(scratch; stops=false)
+            # A tmux that does nothing: the server stays.
+            tmux = Sys.which("true")
             @test sandbox.answers(busy)
             @test !sandbox.answers(joinpath(directory, "missing.sock"))
-            withenv("LIBTMUX_TEST_RECORD" => joinpath(scratch, "record")) do
-                findings, kept = sandbox.sweep(directory; tmux)
-                @test kept == ["busy.sock"]
-                @test findings == ["a server still answers on busy.sock after kill-server"]
-            end
+            findings, kept = sandbox.sweep(directory; tmux)
+            @test kept == ["busy.sock"]
+            @test findings == ["a server still answers on busy.sock after kill-server"]
         end
     finally
         sandbox.PATIENCE[] = patience
@@ -542,7 +519,8 @@ end
             directory,
             survivor,
             SANDBOX_HELPER;
-            extra=("LIBTMUX_TEST_TMUX" => sandbox_stopping_tmux(directory; stops=false),),
+            # A tmux that does nothing: the server stays.
+            extra=("LIBTMUX_TEST_TMUX" => Sys.which("true"),),
         )
         kept = strip(result.out)
         @test result.status == 1
