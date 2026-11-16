@@ -324,7 +324,7 @@ const DOC_SNIPPETS = Dict(
     ("packages/LibTmuxMCP/README.md", 1) => (
         kind=:executable,
         gate=:doctest,
-        fingerprint="45c11c15a0b1d89790bcc00981c2b6e7530fe02018d8e6bd28061eb029ef8e28",
+        fingerprint="2a36f953907d494208dbfc306d9e74867f9e9969256fa10f4e7877317176bca7",
         source="",
         note="Default tool catalog from an application, without tmux",
     ),

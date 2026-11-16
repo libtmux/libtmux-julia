@@ -1,4 +1,5 @@
 const _TOOL_NAMES = (
+    "get_capabilities",
     "list_panes",
     "capture_pane",
     "send_keys",
@@ -11,8 +12,9 @@ const _TOOL_NAMES = (
     "wait_for_text",
     "send_keys_and_wait",
 )
-const _ROUTINE_TOOLS = ("list_panes", "capture_pane", "send_keys")
+const _ROUTINE_TOOLS = ("get_capabilities", "list_panes", "capture_pane", "send_keys")
 const _TOOL_ARGUMENTS = Dict(
+    "get_capabilities"=>((), ()),
     "wait_for_text"=>(("target", "text", "timeoutSeconds"), ("text",)),
     "send_keys_and_wait"=>(
         ("target", "text", "keys", "literal", "timeoutSeconds"),
@@ -57,7 +59,7 @@ struct _ToolContext
 end
 
 """
-    Application(server; caller=nothing, allowed_tools=("list_panes", "capture_pane", "send_keys"),
+    Application(server; caller=nothing, allowed_tools=("get_capabilities", "list_panes", "capture_pane", "send_keys"),
                 allowed_panes=nothing, allow_create=false, timeout=5.0,
                 max_capture_bytes=65536, max_result_bytes=1048576)
 
@@ -269,6 +271,7 @@ function _target_schema()
 end
 
 function _tool_schema(app, name)
+    name == "get_capabilities" && return _json_object(Dict{String,Any}())
     properties = Dict{String,Any}()
     required = String[]
     if name == "list_panes"
@@ -375,7 +378,9 @@ function _tool_output_schema(app, name)
     boolean = Dict("type"=>"boolean")
     integer = Dict("type"=>"integer")
     fields = Dict{String,Any}()
-    if name == "list_panes"
+    if name == "get_capabilities"
+        merge!(fields, _capability_output_fields())
+    elseif name == "list_panes"
         context = _json_object(
             Dict(
                 "sessionId"=>text,
@@ -640,6 +645,7 @@ function _plan_tool(app, name, input)
     fields, required = _TOOL_ARGUMENTS[name]
     _check_object(input, fields, required)
     args = Dict{String,Any}()
+    name == "get_capabilities" && return (; name, args)
     if name == "list_panes"
         _discovery_plan!(args, input)
     elseif name == "run_operations"
@@ -955,6 +961,7 @@ end
 
 function _execute_tool(app, plan, context)
     name, args = plan.name, plan.args
+    name == "get_capabilities" && return _get_capabilities(app, context)
     name == "list_panes" && return _list_panes(app, args, context)
     if name == "run_operations"
         results = Dict{String,Any}[]
@@ -1183,6 +1190,8 @@ end
         invocation.effects,
     )
     _tool_remaining(tool_context)
+    plan.name == "get_capabilities" &&
+        return _execute_tool(invocation.app, plan, tool_context)
     LibTmux._check_version(
         invocation.app.server,
         LibTmux._client_environment(ENV, invocation.app.server);
@@ -1222,6 +1231,7 @@ end
 "Return a fresh, pure SDK tool catalog containing only the application's enabled tools."
 function tools(app::Application)
     descriptions = Dict(
+        "get_capabilities"=>"Inspect the responding tmux daemon's release, feature requirements, support decisions and active workarounds. The report lists enabledTools separately: native support grants no tool permission. This bounded, cancellable read starts no daemon and runs no hooks. Call it before choosing an optional operation; reports are historical observations.",
         "wait_for_text"=>"Wait for a literal UTF-8 string. On tmux 3.7+, check a captured baseline or later raw output through a control client; older tmux polls the screen. Bounded and cancellable. Text is data, not exit-status evidence.",
         "send_keys_and_wait"=>"Send explicit keys and wait for literal text. On tmux 3.7+, register output before sending; older tmux polls for more screen occurrences than the initial count. No Enter is added. Concurrent output may also match; this is not command-exit proof.",
         "list_panes"=>"Discover unique physical panes using generation-bound session/window scopes, native inert criteria and scalar columns. Terminal fields are data. Continue nextPageToken only while discovery facets and query remain unchanged; observation_changed requires a fresh listing.",
@@ -1237,15 +1247,17 @@ function tools(app::Application)
     [
         SDK.MCPTool(
             name=name,
-            description=descriptions[name] *
-                        " Configured tmux hooks and aliases may have effects, including during observation.",
+            description=descriptions[name] * (
+                name == "get_capabilities" ? "" :
+                " Configured tmux hooks and aliases may have effects, including during observation."
+            ),
             input_schema=_tool_schema(app, name),
             output_schema=_tool_output_schema(app, name),
             task_support=:forbidden,
             annotations=Dict{String,Any}(
-                "readOnlyHint"=>false,
-                "destructiveHint"=>true,
-                "idempotentHint"=>false,
+                "readOnlyHint"=>name == "get_capabilities",
+                "destructiveHint"=>name != "get_capabilities",
+                "idempotentHint"=>name == "get_capabilities",
                 "openWorldHint"=>true,
             ),
             handler=(args, context) -> begin

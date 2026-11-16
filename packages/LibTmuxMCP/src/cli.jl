@@ -24,7 +24,7 @@ tmux, otherwise its default socket. A socket option leaves both unread.
   --capacity N          queued and running request limit, at most 16 (default: 16)
   --help                print this help without contacting tmux
 
-Default tools: list_panes, capture_pane, send_keys.
+Default tools: get_capabilities, list_panes, capture_pane, send_keys.
 Needs tmux 3.3a or newer; an older server is refused with `unsupported_tmux`.
 Pane IDs must be exact tmux IDs, such as %3. No ambient/current pane fallback.
 """
