@@ -3,6 +3,7 @@ using TOML
 
 include(joinpath(@__DIR__, "test-sandbox.jl"))
 TestSandbox.enter_or_refuse!()
+include(joinpath(@__DIR__, "test-stand-ins.jl"))
 
 const CI_TEST_ROOT = dirname(@__DIR__)
 const CI_TEST_FILE_FAILURES = CapturedException[]
