@@ -106,6 +106,7 @@ flow and checks that the server is gone afterwards.
 Read the daemon's feature requirements and active workarounds. Inspect a
 decision with [`supports`][supports], [`capability`][capability] or
 [`workaround`][workaround]; unknown names raise `KeyError`.
+Keep tmux's native `list-commands` spelling unaliased for discovery.
 
 [The example](https://github.com/libtmux/libtmux-julia/blob/master/examples/capabilities.jl) compares subprocess and control
 reports, then reads the immutable result after server cleanup.

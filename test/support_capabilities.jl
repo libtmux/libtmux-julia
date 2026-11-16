@@ -35,9 +35,9 @@ using LibTmux
 
     @testset "native reports reject ambiguous or malformed evidence" begin
         marker = "libtmux-capabilities-123-"
-        frame = "unknown command: " * marker * "123,456,3.8\n"
-        reply(text; code=1, signal=0, output=UInt8[]) =
-            CommandResult(output, collect(codeunits(text)), code, signal)
+        frame = marker * "123,456,3.8\n"
+        reply(text; code=0, signal=0, diagnostics=UInt8[]) =
+            CommandResult(collect(codeunits(text)), diagnostics, code, signal)
         @test LibTmux._capability_probe_report(reply(frame), marker).generation == "123:456"
         for result in (
             reply(frame * frame),
@@ -46,10 +46,10 @@ using LibTmux
             reply(replace(frame, "123,456"=>"0,456")),
             reply(replace(frame, "123,456"=>"123,99999999999999999999999999999")),
             reply(replace(frame, marker=>"other-")),
-            reply(frame; code=0),
+            reply(frame; code=1),
             reply(frame; signal=15),
-            reply(frame; output=UInt8[1]),
-            CommandResult(UInt8[], UInt8[0xff], 1, 0),
+            reply(frame; diagnostics=UInt8[1]),
+            CommandResult(UInt8[0xff], UInt8[], 0, 0),
         )
             @test_throws CommandError LibTmux._capability_probe_report(result, marker)
         end

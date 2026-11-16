@@ -44,6 +44,46 @@ using FileWatching
     end
 end
 
+@testset "capability discovery avoids unrelated command aliases" begin
+    with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) do server
+        session = new_session(server; name="aliases", command=["/bin/cat"])
+        original = capabilities(server)
+        control =
+            supports(original, "control-mode") ? open_control(server, session) : nothing
+        # Ordinary named operations use the aliases being tested in their preflight.
+        # A bounded native observer separates fixture setup from discovery effects.
+        native(args...) = LibTmux._version_process(
+            [server.tmux, "-N", "-u", "-S", server.socket_path, "--", args...],
+            LibTmux._client_environment(ENV, server);
+            timeout=0.9,
+            cancel=nothing,
+            started=time_ns(),
+        )
+        witnesses() = String(native("list-buffers", "-F", "#{buffer_name}").stdout)
+        try
+            for (index, alias) in (
+                (91, "run-shell=set-buffer -b cap-run-alias payload ; run"),
+                (92, "if-shell=set-buffer -b cap-if-alias payload ; if"),
+            )
+                @test native("set-option", "-s", "command-alias[$index]", alias).exitcode ==
+                      0
+            end
+            @test !occursin("cap-run-alias", witnesses())
+            @test !occursin("cap-if-alias", witnesses())
+            @test capabilities(server).generation == original.generation
+            @test !occursin("cap-run-alias", witnesses())
+            if control !== nothing
+                @test capabilities(control).generation == original.generation
+                @test !occursin("cap-if-alias", witnesses())
+            end
+        finally
+            native("set-option", "-su", "command-alias[91]")
+            native("set-option", "-su", "command-alias[92]")
+            control === nothing || close(control)
+        end
+    end
+end
+
 @testset "public capabilities describe the responding daemon" begin
     endpoint = Ref{Server}()
     with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) do server

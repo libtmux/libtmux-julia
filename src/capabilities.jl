@@ -137,19 +137,23 @@ function workaround(report::CapabilityReport, id::AbstractString)
     throw(KeyError(id))
 end
 
-function _capability_probe_report(result, marker)
-    result.exitcode == 1 && result.termsignal == 0 && isempty(result.stdout) ||
-        throw(CommandError(result, "capabilities"))
-    pattern = Regex(
-        "\\Aunknown command: " * marker * "([1-9][0-9]*),([1-9][0-9]*),([^\\r\\n]+)\\n\\z",
-    )
-    text = String(copy(result.stderr))
-    isvalid(text) || throw(CommandError(result, "capabilities"))
+function _capability_evidence(bytes, marker)
+    pattern = Regex("\\A" * marker * "([1-9][0-9]*),([1-9][0-9]*),([^\\r\\n]+)\\n\\z")
+    text = String(copy(bytes))
+    isvalid(text) || return nothing
     parsed = match(pattern, text)
     parsed !== nothing &&
     tryparse(Int, parsed[1]) !== nothing &&
-    tryparse(Int, parsed[2]) !== nothing || throw(CommandError(result, "capabilities"))
-    _capability_report(parsed[1] * ":" * parsed[2], parsed[3])
+    tryparse(Int, parsed[2]) !== nothing || return nothing
+    (generation=parsed[1] * ":" * parsed[2], version=String(parsed[3]))
+end
+
+function _capability_probe_report(result, marker)
+    result.exitcode == 0 && result.termsignal == 0 && isempty(result.stderr) ||
+        throw(CommandError(result, "capabilities"))
+    evidence = _capability_evidence(result.stdout, marker)
+    evidence === nothing && throw(CommandError(result, "capabilities"))
+    _capability_report(evidence.generation, evidence.version)
 end
 
 """
@@ -159,6 +163,9 @@ Query the responding daemon and return its [`CapabilityReport`](@ref).
 This read starts no daemon, runs no user hooks and changes no version cache.
 `Server` is an endpoint: replacement daemons are observed on subsequent calls.
 The result does not weaken the generation and release checks on operations.
+Keep the native `list-commands` bootstrap spelling unaliased. Redefining it,
+including during discovery, can execute server-defined code. Other command
+aliases, including `run-shell` and `if-shell`, are not invoked by this query.
 
 `timeout` bounds the query in seconds and must be positive and finite.
 `cancel` accepts a [`CancellationToken`](@ref). Both interrupt and join the
@@ -175,7 +182,14 @@ function capabilities(server::Server; timeout::Real=5.0, cancel=nothing)
     append!(argv, _selector(server))
     append!(
         argv,
-        ["-N", "--", "run-shell", "-C", marker * "#{pid},#{start_time},#{version}"],
+        [
+            "-N",
+            "--",
+            "list-commands",
+            "-F",
+            marker * "#{pid},#{start_time},#{version}",
+            "list-sessions",
+        ],
     )
     environment = merge(_client_environment(ENV, server), Dict("LC_ALL" => "C"))
     result = _version_process(
@@ -195,6 +209,8 @@ Validate the original connection's daemon generation and release, then return
 its [`CapabilityReport`](@ref). Uses the existing control client without a
 subprocess fallback or shared version cache. Endpoint changes cannot rebind
 the connection. This read runs no user hooks and grants no mutation authority.
+The native `list-commands` spelling must remain unaliased, as for the `Server`
+overload. The existing trusted control framing contract also applies.
 
 `timeout` is a positive finite request budget in seconds; `cancel` accepts a
 [`CancellationToken`](@ref). Cancellation follows the connection's request
@@ -207,16 +223,23 @@ function capabilities(connection::ControlConnection; timeout::Real=5.0, cancel=n
     version === nothing &&
         throw(UnsupportedTmuxVersion("", "connection release is unknown"))
     _require_supported(version)
-    pid, started = split(connection.identity.generation, ':'; limit=2)
-    predicate = "#{&&:#{==:#{pid},$pid},#{&&:#{==:#{start_time},$started},#{==:#{version},$version}}}"
+    marker = "libtmux-capabilities-" * replace(string(uuid4()), "-" => "") * "-"
     result = _control_request(
         connection,
-        ["if-shell", "-F", predicate, "", _version_marker()],
-        _ControlReplyPolicy(; diagnostics=true);
+        [
+            "list-commands",
+            "-F",
+            marker * "#{pid},#{start_time},#{version}",
+            "list-sessions",
+        ],
+        _ControlReplyPolicy(; prefix=marker, diagnostics=true);
         timeout=_snapshot_remaining(context.started, context.budget),
         cancel,
     )
-    !result.failed && isempty(result.stdout) ||
-        throw(ControlCommandError(result, "capabilities"))
-    _capability_report(connection.identity.generation, version)
+    evidence = _capability_evidence(result.stdout, marker)
+    !result.failed &&
+    evidence !== nothing &&
+    evidence.generation == connection.identity.generation &&
+    evidence.version == version || throw(ControlCommandError(result, "capabilities"))
+    _capability_report(evidence.generation, evidence.version)
 end

@@ -438,7 +438,7 @@ $ julia \
     --compile=min \
     -O0 \
     --project="$matrix_stage/environment" \
-    dev/check-readme-commands.jl static
+    dev/check-readme-commands.jl links
 ```
 
 ## External package imports
