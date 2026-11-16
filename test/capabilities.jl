@@ -5,16 +5,14 @@ using FileWatching
 @testset "pending discovery yields and cancellation joins its client" begin
     mktempdir(; prefix="ltj-cap-") do directory
         executable = joinpath(directory, "client")
-        write(
+        Main.StandIns.install(
             executable,
-            """#!/bin/sh
-printf '%s\\n' "\$\$" > "\$0.pid.new"
-mv "\$0.pid.new" "\$0.pid"
-exec /bin/cat "\$0.block"
-""",
+            """
+            write(PROGRAM_FILE * ".pid.new", string(getpid()))
+            mv(PROGRAM_FILE * ".pid.new", PROGRAM_FILE * ".pid")
+            wait(Condition())
+            """,
         )
-        chmod(executable, 0o700)
-        run(`mkfifo $(executable * ".block")`)
         monitor = FolderMonitor(directory)
         timer = Timer(_ -> close(monitor), 0.9)
         token = CancellationToken()
