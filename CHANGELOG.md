@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+#### Inspect feature support on the responding daemon
+
+`capabilities(server)` returns immutable feature requirements, support
+decisions and active workarounds from the library registry. `supports`,
+`capability` and `workaround` look up stable names and reject unknown ones.
+Reports retain the observed generation and release without starting a daemon,
+running hooks or changing the version cache. The control-connection overload
+validates its original daemon through that connection. Reports remain readable
+after cleanup and grant no operation permission. (#92)
+
 #### `kill_server` ends a server on request
 
 `kill_server(server; confirm=true)` ends the tmux daemon at `server` with every
