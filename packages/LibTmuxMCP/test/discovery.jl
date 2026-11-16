@@ -186,21 +186,16 @@ if isempty(ARGS) || any(arg -> arg in ("integration", "discovery", "all"), ARGS)
             directory[] = fixture.directory
             session = new_session(fixture.server; name="scoped", command=["/bin/cat"])
             wrapper = joinpath(fixture.directory, "targeted-tmux")
-            write(
+            Main.StandIns.install(
                 wrapper,
-                raw"""#!/bin/sh
-for argument in "$@"; do
-    if [ "$argument" = list-clients ]; then
-        printf '%s\n' 'global graph acquisition refused by scoped probe' >&2
-        exit 1
-    fi
-done
-""" *
-                "exec " *
-                LibTmuxMCP._launcher_word(fixture.tmux) *
-                " \"\$@\"\n",
+                """
+                if "list-clients" in ARGS
+                    println(stderr, "global graph acquisition refused by scoped probe")
+                    exit(1)
+                end
+                StandIns.forward($(repr(fixture.tmux)))
+                """,
             )
-            chmod(wrapper, 0o755)
             endpoint = Server(socket_name=fixture.server.socket_name, tmux=wrapper)
             app = Application(endpoint; allowed_tools=("list_panes",))
             try

@@ -306,15 +306,18 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
             env=environment,
         ) do server
             signal = "mcp-tools-ready"
-            command = [
-                "/bin/sh",
-                "-c",
-                "IFS= read -r line; printf '%s\\n' \"\$line\"; \"\$1\" -N -S \"\$2\" wait-for -S \"\$3\"; exec /bin/cat",
-                "sh",
+            # Echoes the first line it is sent, then signals.
+            command = Main.StandIns.julia_argv(
+                """
+                println(readline(stdin))
+                flush(stdout)
+                run(`\$(ARGS[1]) -N -S \$(ARGS[2]) wait-for -S \$(ARGS[3])`)
+                StandIns.exec("cat")
+                """,
                 server.tmux,
                 server.socket_path,
                 signal,
-            ]
+            )
             session = new_session(server; name="caller", command)
             caller = only(panes(snapshot(server))).ref
             other = split_window(server, caller; command=["/bin/cat"])
@@ -350,7 +353,7 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
                       denied.structured_content["error"]["code"] == "target_denied"
                 sent = tool_result(app, "send_keys", Dict("keys"=>["hello λ", "Enter"]))
                 @test !sent.is_error && sent.structured_content["completed"]
-                run_command(server, "wait-for", signal; timeout=0.9)
+                run_command(server, "wait-for", signal; timeout=30)
                 captured = tool_result(app, "capture_pane")
                 @test !captured.is_error &&
                       occursin("hello λ", captured.structured_content["text"])
@@ -386,21 +389,13 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "integration", "all"), ARGS)
                 # A daemon below the floor is refused by every tool before it acts.
                 mktempdir(; prefix="ltj-mcp-adm-") do directory
                     script = joinpath(directory, "tmux")
-                    write(
+                    Main.StandIns.install(
                         script,
-                        raw"""#!/bin/sh
-previous=
-for argument in "$@"; do
-    if [ "$previous" = -C ]; then
-        printf 'unknown command: %s3.2a\n' "${argument%\#\{version\}}" >&2
-        exit 1
-    fi
-    previous=$argument
-done
-exit 99
-""",
+                        """
+                        StandIns.answer_probe("3.2a")
+                        exit(99)
+                        """,
                     )
-                    chmod(script, 0o700)
                     refused = Server(socket_path=server.socket_path, tmux=script)
                     old_app = Application(
                         refused;
@@ -738,11 +733,12 @@ if any(arg -> arg in ("observation", "all"), ARGS)
             tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"),
             env=environment,
         ) do server
-            command = [
-                "/bin/sh",
-                "-c",
-                "while IFS= read -r line; do printf 'reply:%s\\n' \"\$line\"; done",
-            ]
+            command = Main.StandIns.julia_argv("""
+                                               for line in eachline(stdin)
+                                                   println("reply:", line)
+                                                   flush(stdout)
+                                               end
+                                               """)
             new_session(server; name="observed", command)
             caller = only(panes(snapshot(server))).ref
             app = Application(
@@ -843,7 +839,10 @@ if any(arg -> arg in ("observation", "all"), ARGS)
         ) do server
             # Wider than the 80-column pane, so tmux soft-wraps it.
             printed = repeat("0123456789", 12) * "end"
-            command = ["/bin/sh", "-c", "printf '%s\\n' $printed; exec cat"]
+            command = Main.StandIns.julia_argv(
+                "println(ARGS[1]); StandIns.exec(\"cat\")",
+                printed,
+            )
             new_session(server; name="wrapped", command)
             caller = only(panes(snapshot(server))).ref
             app = Application(
@@ -903,7 +902,10 @@ if any(arg -> arg in ("observation", "all"), ARGS)
                     )
                     stop!(holder)
                 end
-                command = ["/bin/sh", "-c", "printf 'before-end\\n'; sleep 30"]
+                # The pane shows a line and holds still.
+                shown = joinpath(dirname(server.socket_path), "before-end")
+                write(shown, "before-end\n")
+                command = ["tail", "-n", "+1", "-f", shown]
                 fresh_pane(name) = begin
                     new_session(server; name, command)
                     only(filter(pane -> pane.ref != anchor, panes(snapshot(server)))).ref

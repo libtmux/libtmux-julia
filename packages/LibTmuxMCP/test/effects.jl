@@ -144,36 +144,32 @@ control_supported = LibTmux._version_at_least(
 
         wrapper = joinpath(directory[], "creation-probe")
         trigger = joinpath(directory[], "creation-seen")
-        quote_sh(value) = "'" * replace(value, "'"=>"'\\''") * "'"
-        real_tmux = quote_sh(something(Sys.which(server.tmux)))
-        write(
+        real_tmux = something(Sys.which(server.tmux))
+        # After a successful new-session, the next list-sessions answers a row that
+        # cannot be parsed.
+        Main.StandIns.install(
             wrapper,
             """
-            #!/bin/sh
-            for argument do
-                if [ "\$argument" = new-session ]; then
-                    $real_tmux "\$@"
-                    status=\$?
-                    if [ "\$status" = 0 ]; then
-                        : > $(quote_sh(trigger))
-                    fi
-                    exit "\$status"
-                fi
-                if [ "\$argument" = list-sessions ] && [ -f $(quote_sh(trigger)) ]; then
-                    rm -- $(quote_sh(trigger))
-                    printf 'invalid-format-row\\n'
-                    exit 0
-                fi
-            done
-            exec $real_tmux "\$@"
+            for argument in ARGS
+                if argument == "new-session"
+                    status = run(ignorestatus(Cmd([$(repr(real_tmux)); ARGS]))).exitcode
+                    status == 0 && touch($(repr(trigger)))
+                    exit(status)
+                end
+                if argument == "list-sessions" && isfile($(repr(trigger)))
+                    rm($(repr(trigger)))
+                    println("invalid-format-row")
+                    exit(0)
+                end
+            end
+            StandIns.forward($(repr(real_tmux)))
             """,
         )
-        chmod(wrapper, 0o700)
         creating = Application(
             Server(; socket_path=server.socket_path, tmux=wrapper);
             allowed_tools=("create_session",),
             allow_create=true,
-            timeout=0.9,
+            timeout=30,
         )
         try
             failed = LibTmuxMCP._invoke_tool(
