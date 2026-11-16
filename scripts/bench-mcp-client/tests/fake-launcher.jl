@@ -2,8 +2,9 @@
 # requests the benchmark client sends and ignores the launcher's command line.
 #
 # LTJ_FAKE_LAUNCHER selects a variant: `small-catalog` makes the tool catalog fit any
-# pipe, `two-panes` lists a pane the client does not own and `silent-exit` leaves with
-# status 3 once its stdin closes.
+# pipe, `two-panes` lists a pane the client does not own, `silent-exit` leaves with
+# status 3 once its stdin closes, `late-reply` writes a reply nobody asked for on start
+# and `diagnostics` writes a line to stderr on start.
 #
 # It parses requests with regular expressions, so it needs no JSON package. Replies go
 # through `write(2)` on a pool thread. A reply that fills the pipe blocks only its own
@@ -88,6 +89,9 @@ function answer(line)
         nothing
     end
 end
+
+VARIANT == "late-reply" && emit("{\"id\":\"late\"}\n")
+VARIANT == "diagnostics" && println(stderr, "diagnostics")
 
 for line in eachline(stdin)
     text = answer(line)

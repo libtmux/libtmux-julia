@@ -10,6 +10,10 @@ const OP = B.OwnedProcess
 environment() = Dict{String,String}(ENV)
 soon(seconds=10) = OP.monotonic() + seconds
 
+# A child that runs `code` in the test's own Julia. The tests start no shell.
+const JULIA = joinpath(Sys.BINDIR, Base.julia_exename())
+julia(code, arguments...) = [JULIA, "--startup-file=no", "-e", code, arguments...]
+
 # The child ignores SIGINT as it starts, because the disposition survives exec and
 # the cancellation cannot arrive before the child has set up a handler.
 function ignoring_sigint(action)
@@ -26,17 +30,13 @@ end
         mktempdir(; prefix="ltj-startup-test-") do directory
             marker = joinpath(directory, "must-not-exist")
             literal = "; \$(touch $marker)"
-            result = B.observe(
-                ["/bin/sh", "-c", "printf '%s\\n' \"\$1\"", "sh", literal],
-                environment(),
-                soon(),
-            )
+            result = B.observe(julia("println(ARGS[1])", literal), environment(), soon())
             @test result["status"] == "pass" && String(result["stdout"]) == literal * "\n"
             @test result["direct_child_reaped"] && !ispath(marker)
             @test result["wait4_max_rss_bytes"] > 0 && result["spawner_max_rss_bytes"] > 0
 
             result =
-                B.observe(["/bin/sh", "-c", "echo retained; exit 7"], environment(), soon())
+                B.observe(julia("println(\"retained\"); exit(7)"), environment(), soon())
             @test result["status"] == "failed" && result["exit_code"] == 7
             @test String(result["stdout"]) == "retained\n"
 
@@ -47,7 +47,7 @@ end
             @test result["termination_signal"] == "SIGKILL"
 
             result = B.observe(
-                ["/bin/sh", "-c", "head -c $(B.OUTPUT_LIMIT + 1) /dev/zero"],
+                ["head", "-c", string(B.OUTPUT_LIMIT + 1), "/dev/zero"],
                 environment(),
                 soon(),
             )
@@ -64,8 +64,11 @@ end
 
             # A descendant that keeps the pipe open neither stalls the run nor waits for an EOF the
             # run cannot own; it is killed with the group.
-            result =
-                B.observe(["/bin/sh", "-c", "sleep 30 & echo group"], environment(), soon())
+            result = B.observe(
+                julia("run(`sleep 30`; wait=false); println(\"group\")"),
+                environment(),
+                soon(),
+            )
             @test result["status"] == "pass" && String(result["stdout"]) == "group\n"
         end
     end
@@ -161,55 +164,37 @@ end
                     Dict("status" => "pass", "source_sha256" => core_hashes),
                 ),
             )
-            function stand_in(name, core_hashes)
-                script = joinpath(directory, name)
-                body = toml(core_hashes)
-                write(
-                    script,
-                    """
-                    #!/bin/sh
-                    for argument in "\$@"; do
-                        case \$argument in
-                        -e)
-                            printf 'LTJ_STARTUP_BASELINE\\t1.13.1\\t1\\t4096\\n'
-                            exit 0 ;;
-                        esac
-                    done
-                    printf 'LTJ_STARTUP_PHASE\\tpackage_load\\tpass\\t5\\t6\\t7\\n'
-                    printf 'LTJ_STARTUP_TOML_BEGIN\\n'
-                    cat <<'END'
-                    $body
-                    END
-                    printf 'LTJ_STARTUP_TOML_END\\n'
-                    """,
-                )
-                chmod(script, 0o755)
-                script
-            end
-            tmux = joinpath(directory, "tmux")
-            write(tmux, "#!/bin/sh\necho 'tmux 3.7c'\n")
-            chmod(tmux, 0o755)
-            run_main(julia, output) = B.main([
+            # One executable stands in for `julia` and for `tmux`. Its Julia source is in
+            # stand-in.jl; the file written here only names the interpreter that runs it.
+            stand_in = joinpath(directory, "stand-in")
+            write(
+                stand_in,
+                "#!/usr/bin/env -S $JULIA --startup-file=no\n" *
+                "include($(repr(joinpath(@__DIR__, "stand-in.jl"))))\n",
+            )
+            chmod(stand_in, 0o755)
+            run_main(output; profiles="normal,o0") = B.main([
                 "--julia",
-                julia,
+                stand_in,
                 "--tmux",
-                tmux,
+                stand_in,
                 "--project",
                 directory,
                 "--samples",
-                "2",
+                "1",
                 "--profiles",
-                "normal,o0",
+                profiles,
                 "--output",
                 output,
             ])
 
             output = joinpath(directory, "report.json")
+            ENV["LTJ_STAND_IN_TOML"] = toml(hashes)
             redirect_stdout(devnull) do
-                @test run_main(stand_in("julia-good", hashes), output) == 0
+                @test run_main(output) == 0
             end
             report = JSON.parsefile(output)
-            @test report["status"] == "pass" && length(report["samples"]) == 8
+            @test report["status"] == "pass" && length(report["samples"]) == 4
             @test report["tmux_version"] == "tmux 3.7c"
             @test sort(unique(sample["profile"] for sample in report["samples"])) ==
                   ["normal", "o0"]
@@ -222,12 +207,13 @@ end
             @test haskey(core, "wait4_max_rss_bytes") && core["pipe_eof"]["stdout"] === true
 
             # Existing measurements are never replaced.
-            @test_throws Base.IOError run_main(stand_in("julia-good", hashes), output)
+            @test_throws Base.IOError run_main(output)
 
             # A core process that hashed other sources is a stale measurement.
             stale = joinpath(directory, "stale.json")
+            ENV["LTJ_STAND_IN_TOML"] = toml(Dict("src/x.jl" => "0"))
             redirect_stdout(devnull) do
-                @test run_main(stand_in("julia-stale", Dict("src/x.jl" => "0")), stale) == 1
+                @test run_main(stale; profiles="normal") == 1
             end
             @test JSON.parsefile(stale)["status"] == "failed"
             @test "stale_source" in

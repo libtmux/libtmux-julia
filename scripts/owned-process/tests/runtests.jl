@@ -5,6 +5,9 @@ const O = OwnedProcess
 
 environment() = Dict{String,String}(ENV)
 
+# A child that runs `code` in the test's own Julia. The tests start no shell.
+julia(code) = [joinpath(Sys.BINDIR, Base.julia_exename()), "--startup-file=no", "-e", code]
+
 "Read a descriptor until EOF, waiting in `poll!`, and give up after `seconds`."
 function read_until_eof(fd; seconds=10.0)
     collected = UInt8[]
@@ -37,7 +40,7 @@ open_descriptors() = Sys.islinux() ? length(readdir("/proc/self/fd")) : 0
 @testset "owned process" begin
     @testset "a child's output, exit code and accounting" begin
         child = spawn_child(
-            ["/bin/sh", "-c", "echo out; echo err >&2; exit 3"];
+            julia("println(\"out\"); println(stderr, \"err\"); exit(3)");
             env=environment(),
         )
         done = finish(child)
@@ -48,12 +51,12 @@ open_descriptors() = Sys.islinux() ? length(readdir("/proc/self/fd")) : 0
     end
 
     @testset "a signal is reported as a negative code" begin
-        child = spawn_child(["/bin/sh", "-c", "kill -KILL \$\$"]; env=environment())
+        child = spawn_child(julia("ccall(:raise, Cint, (Cint,), 9)"); env=environment())
         @test finish(child).code == -9
     end
 
     @testset "the wait4 watcher reaps and keeps the accounting" begin
-        child = spawn_child(["/bin/sh", "-c", "exit 4"]; env=environment(), reap=true)
+        child = spawn_child(julia("exit(4)"); env=environment(), reap=true)
         wait_exit(child, 10)
         wait(child.watcher)
         @test child.status !== nothing && O.exit_code(child.status) == 4
@@ -69,17 +72,14 @@ open_descriptors() = Sys.islinux() ? length(readdir("/proc/self/fd")) : 0
         env["LTJ_OWNED_PROCESS_PROBE"] = "kept"
         only_these = Dict(name => ENV[name] for name in ("PATH",))
         only_these["LTJ_OWNED_PROCESS_PROBE"] = "kept"
-        child = spawn_child(
-            ["/bin/sh", "-c", "echo \"\$LTJ_OWNED_PROCESS_PROBE \${HOME-unset}\""];
-            env=only_these,
-        )
-        @test finish(child).out == "kept unset\n"
+        child = spawn_child(["env"]; env=only_these)
+        @test Set(split(finish(child).out, '\n'; keepempty=false)) ==
+              Set(["$name=$value" for (name, value) in only_these])
         if Sys.islinux()
-            # Julia ignores SIGPIPE and blocks signals; a child starts with neither.
-            child = spawn_child(
-                ["/bin/sh", "-c", "grep -E '^Sig(Ign|Blk)' /proc/\$\$/status"];
-                env=env,
-            )
+            # Julia ignores SIGPIPE and blocks signals; a child starts with neither. A
+            # child that is not Julia reports its own masks.
+            child =
+                spawn_child(["grep", "-E", "^Sig(Ign|Blk)", "/proc/self/status"]; env=env)
             masks = Dict(
                 split(line, r":\s+")[1] =>
                     parse(UInt64, split(line, r":\s+")[2]; base=16) for
@@ -103,7 +103,9 @@ open_descriptors() = Sys.islinux() ? length(readdir("/proc/self/fd")) : 0
     @testset "the child leads a group that one signal retires" begin
         # `sleep` inherits the output pipe, so the pipe stays open until it is killed.
         child = spawn_child(
-            ["/bin/sh", "-c", "sleep 30 & echo started; wait"];
+            julia(
+                "run(`sleep 30`; wait=false); println(\"started\"); flush(stdout); sleep(30)",
+            );
             env=environment(),
         )
         poll!([PollFD(child.stdout, POLLIN, 0)], 10)
@@ -121,7 +123,7 @@ open_descriptors() = Sys.islinux() ? length(readdir("/proc/self/fd")) : 0
     @testset "a collection does not wait for a call that blocks on the child" begin
         # Base's @threadcall leaves its thread GC unsafe, so GC.gc() would wait for the exit.
         child = spawn_child(
-            ["/bin/sh", "-c", "echo ready; exec sleep 5"];
+            julia("println(\"ready\"); flush(stdout); sleep(5)");
             env=environment(),
             reap=true,
         )

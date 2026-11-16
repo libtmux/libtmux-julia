@@ -73,20 +73,23 @@ end
     )
     environment =
         merge(Dict{String,String}(string(k) => string(v) for (k, v) in ENV), decoys)
-    probe = join(
-        [
-            "test -z \"\${$name+x}\"" for
-            name in ("TMUX", "TMUX_PANE", "LIBTMUX_SOCKET", "LIBTMUX_SOCKET_PATH")
-        ],
-        " && ",
-    )
-    script = "$probe && test -z \"\${LIBTMUX_SOCKET_FUTURE+x}\" && test \"\$TMUX_TMPDIR\" = \"\$TMPDIR\""
+    probe = """
+        selectors = (
+            "TMUX",
+            "TMUX_PANE",
+            "LIBTMUX_SOCKET",
+            "LIBTMUX_SOCKET_PATH",
+            "LIBTMUX_SOCKET_FUTURE",
+        )
+        exit(any(in(keys(ENV)), selectors) || ENV["TMUX_TMPDIR"] != ENV["TMPDIR"] ? 1 : 0)
+        """
+    example = `$(Base.julia_cmd()) --startup-file=no -e $probe`
     begin
         mktempdir(ENV["TMUX_TMPDIR"]; prefix="c-") do directory
             # The probe fails in the decoy environment, so a pass means the checker removed them.
             control = run(
                 pipeline(
-                    ignorestatus(setenv(`/bin/sh -c $script`, environment));
+                    ignorestatus(setenv(example, environment));
                     stdout=devnull,
                     stderr=devnull,
                 ),
@@ -97,7 +100,7 @@ end
                 pipeline(
                     ignorestatus(
                         setenv(
-                            `$(Base.julia_cmd()) --startup-file=no $checker --pure --tmux $tmux --cwd $directory -- /bin/sh -c $script`,
+                            `$(Base.julia_cmd()) --startup-file=no $checker --pure --tmux $tmux --cwd $directory -- $(example.exec)`,
                             environment,
                         ),
                     );

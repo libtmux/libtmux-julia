@@ -18,8 +18,15 @@ function fails(action, fragment)
     error isa M.MatrixError && occursin(fragment, error.message)
 end
 
-# The shell stands in for a check: what it prints, and how it ends, are all a phase sees.
-shell(script) = ["/bin/sh", "-c", script]
+# A Julia program stands in for a check: what it prints, and how it ends, are all a
+# phase sees.
+julia(code, arguments...) = [
+    joinpath(Sys.BINDIR, Base.julia_exename()),
+    "--startup-file=no",
+    "-e",
+    code,
+    arguments...,
+]
 
 @testset "owned preparation" begin
     mktempdir(; prefix="libtmux-julia-matrix-test-") do base
@@ -126,16 +133,16 @@ end
         @test ok["status"] == "PASS" &&
               strip(read(joinpath(base, "literal.log"), String)) == literal
         @test !ispath(joinpath(base, "must-not-exist"))
-        failed = run(shell("exit 7"); name="failure")
+        failed = run(julia("exit(7)"); name="failure")
         @test failed["status"] == "FAIL" && failed["exit_code"] == 7
         @test run([joinpath(base, "missing")]; name="missing")["status"] == "NOT RUN"
         timed = run(["/bin/sleep", "30"]; budget=0.2, name="deadline")
         @test timed["status"] == "TIMEOUT" && timed["direct_child_reaped"]
-        incomplete = run(shell("true"); completion=true, name="incomplete")
+        incomplete = run(julia("nothing"); completion=true, name="incomplete")
         @test incomplete["status"] == "INCOMPLETE"
         for content in ("invocation = \"stale\"\n", "invocation = \"truncated")
             bad = run(
-                shell("printf '%s' '$content' > \"\$LIBTMUX_TEST_COMPLETION\"");
+                julia("write(ENV[\"LIBTMUX_TEST_COMPLETION\"], ARGS[1])", content);
                 completion=true,
                 name="bad-receipt",
             )

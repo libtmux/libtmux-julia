@@ -13,20 +13,20 @@ const CHECKER = joinpath(@__DIR__, "..", "check-example-cleanup.jl")
 
     mktempdir("/tmp"; prefix="ltj-cleanup-test-") do cwd
         @testset "a pure example starts no tmux and a failing one is reported" begin
-            ok = C.run_example(`/bin/sh -c true`; tmux=TMUX, env=ENV, cwd)
+            ok = C.run_example(`true`; tmux=TMUX, env=ENV, cwd)
             @test ok.daemons == 0 && ok.clients == 0 && ok.exit == 0
             failed = try
-                C.run_example(`/bin/sh -c "exit 3"`; tmux=TMUX, env=ENV, cwd, diagnostics=false)
+                C.run_example(`false`; tmux=TMUX, env=ENV, cwd, diagnostics=false)
                 nothing
             catch error
                 error
             end
-            @test failed isa ErrorException && occursin("example exited 3", failed.msg)
+            @test failed isa ErrorException && occursin("example exited 1", failed.msg)
             declared = IOBuffer()
             @test run(
                 pipeline(
                     ignorestatus(
-                        `$(Base.julia_cmd()) --startup-file=no $CHECKER --tmux $TMUX --cwd $cwd -- /bin/sh -c true`,
+                        `$(Base.julia_cmd()) --startup-file=no $CHECKER --tmux $TMUX --cwd $cwd -- true`,
                     );
                     stdout=declared,
                     stderr=devnull,
@@ -42,10 +42,13 @@ const CHECKER = joinpath(@__DIR__, "..", "check-example-cleanup.jl")
                 "LIBTMUX_SOCKET_PATH" => "/decoy-secret",
                 "TMUX_TMPDIR" => "/decoy-secret",
             )
-            probe = "test -z \"\${TMUX+x}\" && test -z \"\${TMUX_PANE+x}\" && test -z \"\${LIBTMUX_SOCKET+x}\" && test -z \"\${LIBTMUX_SOCKET_PATH+x}\" && test \"\$TMUX_TMPDIR\" = \"\$TMPDIR\""
+            probe = """
+                selectors = ("TMUX", "TMUX_PANE", "LIBTMUX_SOCKET", "LIBTMUX_SOCKET_PATH")
+                exit(any(in(keys(ENV)), selectors) || ENV["TMUX_TMPDIR"] != ENV["TMPDIR"] ? 1 : 0)
+                """
             environment = merge(Dict{String,String}(ENV), decoys)
-            @test C.run_example(`/bin/sh -c $probe`; tmux=TMUX, env=environment, cwd).exit ==
-                  0
+            command = `$(Base.julia_cmd()) --startup-file=no -e $probe`
+            @test C.run_example(command; tmux=TMUX, env=environment, cwd).exit == 0
         end
 
         @testset "the audit notices a daemon that nobody closed" begin

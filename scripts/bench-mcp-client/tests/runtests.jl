@@ -5,15 +5,16 @@ using .BenchMCPClient
 const M = BenchMCPClient
 const OP = M.OwnedProcess
 
-# The launcher is a stand-in that answers the benchmark's requests. A wrapper puts the
-# test's own Julia in front of it; the wrapper is written here, not kept in the tree.
+# The launcher is a stand-in that answers the benchmark's requests. The client runs one
+# executable, so the file written here only names the test's own Julia, which runs
+# fake-launcher.jl.
 function stand_in_launcher(directory)
-    wrapper = joinpath(directory, "launcher")
+    launcher = joinpath(directory, "launcher")
     julia = joinpath(Sys.BINDIR, Base.julia_exename())
     fake = joinpath(@__DIR__, "fake-launcher.jl")
-    write(wrapper, "#!/bin/sh\nexec '$julia' --startup-file=no '$fake' \"\$@\"\n")
-    chmod(wrapper, 0o755)
-    wrapper
+    write(launcher, "#!/usr/bin/env -S $julia --startup-file=no\ninclude($(repr(fake)))\n")
+    chmod(launcher, 0o755)
+    launcher
 end
 
 function with_variant(action, variant)
@@ -37,10 +38,8 @@ function refusal(action)
     nothing
 end
 
-# A child that reads requests and answers with whatever `script` prints.
-function shell_client(script; timeout=10)
-    M.Client(["/bin/sh", "-c", script], OP.monotonic() + timeout)
-end
+# A child that never reads or answers.
+idle_client(timeout=10) = M.Client(["sleep", "30"], OP.monotonic() + timeout)
 
 options(launcher; warm=2) = (;
     launcher,
@@ -85,7 +84,7 @@ options(launcher; warm=2) = (;
     end
 
     @testset "frames that arrive in pieces" begin
-        client = shell_client("cat >/dev/null")
+        client = idle_client()
         try
             raw = Vector{UInt8}("{\"id\":1,\"result\":{\"text\":\"λ\"}}\n")
             M.accept_stdout!(client, raw[1:(end-2)])
@@ -103,7 +102,7 @@ options(launcher; warm=2) = (;
         finally
             close(client)
         end
-        client = shell_client("cat >/dev/null")
+        client = idle_client()
         try
             @test refusal(
                 () -> M.accept_stdout!(client, zeros(UInt8, M.FRAME_LIMIT + 1)),
@@ -113,48 +112,56 @@ options(launcher; warm=2) = (;
         end
     end
 
-    @testset "requests against a process that stays silent or fails" begin
-        # A paused stdout stays unread while the client writes, and is drained only after the exit.
-        client = shell_client("echo '{\"id\":\"late\"}'; cat >/dev/null")
-        try
-            OP.poll!([OP.PollFD(client.child.stdout, OP.POLLIN, 0)], 10)
-            M.pause_stdout!(client)
-            M.send!(client, "x", "ping")
-            @test client.stdout_bytes == 0 && isempty(client.messages)
-            M.eof_and_join!(client)
-            @test client.stdout_bytes == length("{\"id\":\"late\"}\n") &&
-                  isempty(client.messages)
-        finally
-            close(client)
-        end
-
-        client = shell_client("cat >/dev/null")
-        try
-            @test refusal(() -> M.request!(client, "silent", "ping"; timeout=0.2)) ==
-                  "event deadline exceeded"
-        finally
-            close(client)
-        end
-
-        client = shell_client("cat >/dev/null; exit 3")
-        try
-            @test refusal(() -> M.eof_and_join!(client)) == "launcher exit was not clean"
-        finally
-            close(client)
-        end
-
-        client = shell_client("echo diagnostics >&2; cat >/dev/null")
-        try
-            M.eof_and_join!(client)
-            @test client.stderr_bytes == length("diagnostics\n")
-        finally
-            close(client)
-        end
-    end
-
     mktempdir(; prefix="ltj-mcp-client-") do directory
         launcher = stand_in_launcher(directory)
         command(opts) = M.launcher_command(opts)
+
+        @testset "requests against a process that stays silent or fails" begin
+            # A paused stdout stays unread while the client writes, and is drained only
+            # after the exit.
+            client = with_variant("late-reply") do
+                M.Client([launcher], OP.monotonic() + 30)
+            end
+            try
+                OP.poll!([OP.PollFD(client.child.stdout, OP.POLLIN, 0)], 30)
+                M.pause_stdout!(client)
+                M.send!(client, "x", "ping")
+                @test client.stdout_bytes == 0 && isempty(client.messages)
+                M.eof_and_join!(client)
+                @test client.stdout_bytes == length("{\"id\":\"late\"}\n") &&
+                      isempty(client.messages)
+            finally
+                close(client)
+            end
+
+            client = idle_client()
+            try
+                @test refusal(() -> M.request!(client, "silent", "ping"; timeout=0.2)) ==
+                      "event deadline exceeded"
+            finally
+                close(client)
+            end
+
+            client = with_variant("silent-exit") do
+                M.Client([launcher], OP.monotonic() + 30)
+            end
+            try
+                @test refusal(() -> M.eof_and_join!(client)) ==
+                      "launcher exit was not clean"
+            finally
+                close(client)
+            end
+
+            client = with_variant("diagnostics") do
+                M.Client([launcher], OP.monotonic() + 30)
+            end
+            try
+                M.eof_and_join!(client)
+                @test client.stderr_bytes == length("diagnostics\n")
+            finally
+                close(client)
+            end
+        end
 
         @testset "a request is answered and the exit is clean" begin
             client = M.Client([launcher], OP.monotonic() + 60)
