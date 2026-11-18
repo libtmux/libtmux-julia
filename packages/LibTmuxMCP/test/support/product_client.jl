@@ -24,6 +24,7 @@ function control_supported(tmux)
 end
 
 const TOOLS = [
+    "get_capabilities",
     "list_panes",
     "capture_pane",
     "send_keys",
@@ -96,6 +97,7 @@ function product_client(launcher, socket_option, socket, tmux, pane, profile)
         vcat,
         (
             ["--tool", name] for name in (
+                "get_capabilities",
                 "list_panes",
                 "capture_pane",
                 "send_keys",
@@ -184,6 +186,33 @@ function product_client(launcher, socket_option, socket, tmux, pane, profile)
         run_operations_schema = only(
             tool["outputSchema"] for tool in listed if tool["name"] == "run_operations"
         )
+        capability_result = call(90, "get_capabilities")
+        check(ok(capability_result), "daemon capability query: ", capability_result)
+        capabilities = capability_result["structuredContent"]
+        check(
+            Set(capabilities["enabledTools"]) == Set(TOOLS),
+            "capability policy matches catalog",
+        )
+        check(!isempty(capabilities["features"]), "capability feature decisions")
+        capability_schema = only(
+            tool["outputSchema"] for tool in listed if tool["name"] == "get_capabilities"
+        )
+        capability_fields = only(
+            branch["properties"] for branch in capability_schema["anyOf"] if
+            haskey(branch["properties"], "features")
+        )
+        check(
+            Set(keys(capabilities)) == Set(keys(capability_fields)),
+            "complete capability output schema",
+        )
+        for feature in capabilities["features"]
+            check(feature["supported"] isa Bool, "native feature decision")
+            check(
+                Set(keys(feature)) ==
+                Set(capability_fields["features"]["items"]["required"]),
+                "feature metadata matches schema",
+            )
+        end
         listing = call(3, "list_panes")
         check(ok(listing), listing)
         panes = listing["structuredContent"]["panes"]

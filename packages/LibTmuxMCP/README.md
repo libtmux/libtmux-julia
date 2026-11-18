@@ -66,7 +66,8 @@ The server borrows a tmux server. `--start-session work` creates the session
 
 Add the launcher to Claude Code. Use an absolute launcher path, so it resolves
 from the client's working directory. Until you enable more tools, the client
-sees [`list_panes`][tool_list_panes], [`capture_pane`][tool_capture_pane]
+sees [`get_capabilities`][tool_get_capabilities],
+[`list_panes`][tool_list_panes], [`capture_pane`][tool_capture_pane]
 and [`send_keys`][tool_send_keys]:
 
 ```console
@@ -130,12 +131,14 @@ This is the common `mcpServers` shape:
 
 ## Choose the tools
 
-The default catalog is [`list_panes`][tool_list_panes],
+The default catalog is [`get_capabilities`][tool_get_capabilities],
+[`list_panes`][tool_list_panes],
 [`capture_pane`][tool_capture_pane] and [`send_keys`][tool_send_keys]. Each
 tool name below links to its page with the full input and output contract.
 
 | Tool | Effect |
 | --- | --- |
+| [`get_capabilities`][tool_get_capabilities] | Daemon release, supported features, workarounds and enabled tools |
 | [`list_panes`][tool_list_panes] | Fresh bounded graph listing with context and pagination |
 | [`capture_pane`][tool_capture_pane] | Bounded UTF-8 screen text with truncation metadata |
 | [`send_keys`][tool_send_keys] | Explicit key tokens or literal text; no implicit Enter |
@@ -300,7 +303,8 @@ julia> using LibTmux, LibTmuxMCP
 julia> app = Application(Server(socket_name="agent"));
 
 julia> [tool.name for tool in tools(app)]
-3-element Vector{String}:
+4-element Vector{String}:
+ "get_capabilities"
  "list_panes"
  "capture_pane"
  "send_keys"
@@ -308,6 +312,27 @@ julia> [tool.name for tool in tools(app)]
 
 [`serve`][serve] runs the stdio loop. It owns and closes both streams and the
 application.
+
+### Inspect daemon support
+
+Call [`get_capabilities`][tool_get_capabilities] with `{}` before an optional
+operation. It returns the daemon's `generation` and `version` without starting
+a daemon or running hooks.
+
+Keep tmux's native `list-commands` bootstrap spelling unaliased; overriding
+it, including during discovery, can execute server-defined code.
+
+`features` gives release requirements and `supported` decisions.
+`workarounds` gives `active` decisions. Each row names affected Julia APIs
+and tmux commands.
+
+`enabledTools` is application policy; support does not grant permission.
+Saved reports are historical observations, so operations retain their own
+checks.
+
+Discovery uses the normal call deadline, cancellation and result limit. A
+result too large for the configured limit returns `result_limit` without a
+partial capability map.
 
 ### [`main`][main]: the launcher from Julia
 
@@ -390,3 +415,5 @@ ownership.
 [mcp-docs-contracts-md-batches]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/docs/contracts.md#batches
 [mcp-license]: https://github.com/libtmux/libtmux-julia/blob/master/packages/LibTmuxMCP/LICENSE
 [mcp-discovery]: https://github.com/libtmux/libtmux-julia/blob/589c726499610ce5e96844f6c9a49a41368da5ec/packages/LibTmuxMCP/docs/discovery.md
+
+[tool_get_capabilities]: https://libtmux.org/en/julia/latest/mcp/tools/get_capabilities/

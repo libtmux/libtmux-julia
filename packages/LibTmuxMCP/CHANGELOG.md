@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+#### Discover daemon capabilities before choosing an operation
+
+The default catalog now includes read-only `get_capabilities`. It returns the
+daemon's observed generation and version, feature requirements and support
+decisions, active workarounds, and the application's `enabledTools` policy.
+Support does not enable a tool. The call accepts no arguments, runs no hooks
+and retains the normal deadline, cancellation and result limits. An oversized
+report returns `result_limit` without a partial capability map. Keep tmux's
+native `list-commands` spelling unaliased for discovery. (#92)
+
 ## 0.1.1 - 2026-11-01
 
 #### Take the server from a variable or tmux

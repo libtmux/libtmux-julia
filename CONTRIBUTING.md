@@ -194,6 +194,11 @@ Julia compilation across every public feature. Minimal compilation does not
 replace those normal checks or establish performance. The runner accepts `unit`, `integration`, `all`, or a test-file stem;
 omitting the argument selects `all`.
 
+The sandbox suite belongs to the outer integration loop: it launches child
+Julia processes and scans source files for unsafe replacement environments.
+The normal `all` run still includes those checks. Every runner enters and
+verifies its private sandbox regardless of the selected suite.
+
 The forced-cleanup case belongs to the outer loop because it deliberately
 stops its owned daemon and waits for the 900 ms shutdown deadline:
 

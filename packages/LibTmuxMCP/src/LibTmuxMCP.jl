@@ -19,6 +19,7 @@ include("adapter.jl")
 include("stdio.jl")
 include("tools.jl")
 include("discovery.jl")
+include("capabilities.jl")
 include("cli.jl")
 include("precompile.jl")
 

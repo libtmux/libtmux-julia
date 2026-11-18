@@ -76,6 +76,7 @@ end
             server = Server(socket_path=fixture.socket, tmux=fixture.tmux)
             session = new_session(server; name="original", command=["/bin/cat"])
             original_snapshot = snapshot(server)
+            original_report = capabilities(server)
             pane = only(panes(original_snapshot)).ref
             window = only(windows(original_snapshot)).ref
             connection = open_control(server, session)
@@ -116,6 +117,11 @@ end
                         command=["/bin/cat"],
                     )
                     fresh_pane = only(panes(snapshot(fresh_server))).ref
+                    before_report = copy(LibTmux._VERSION_CACHE)
+                    fresh_report = capabilities(server)
+                    @test fresh_report.generation == fresh_pane.server.generation
+                    @test fresh_report.generation != original_report.generation
+                    @test LibTmux._VERSION_CACHE == before_report
                     @test session.id == fresh_session.id && pane.id == fresh_pane.id
                     @test session.server.socket_path == fresh_session.server.socket_path
                     @test session.server.generation != fresh_session.server.generation
@@ -127,6 +133,7 @@ end
                           queued_failure.sent
                     wait(connection.supervisor)
                     @test !isopen(connection)
+                    @test_throws ControlConnectionError capabilities(connection)
                     retirement = try
                         close(connection)
                     catch error

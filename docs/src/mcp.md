@@ -65,7 +65,14 @@ These guarantees concern discovery facets and do not make capture atomic.
 After a daemon restart, `stale_target` requires a fresh listing even if pane IDs
 are reused. Calls never replay mutations automatically.
 
-The default catalog contains those three tools. Repeat `--tool` to choose
+The default catalog also includes `get_capabilities`. Call it with no arguments
+to inspect the daemon's release, supported features and active workarounds.
+Its `enabledTools` field reports policy separately from native support. The
+read runs no hooks, starts no daemon and retains the normal call bounds.
+The daemon must preserve the native `list-commands` bootstrap spelling;
+overriding it with a command alias, including during discovery, is outside
+that guarantee. Other command aliases are not invoked by this query.
+Repeat `--tool` to choose
 an explicit catalog. [`wait_for_text`][wait_for_text] waits for bounded literal text;
 [`send_keys_and_wait`][send_keys_and_wait] subscribes before sending input on the
 control path. Below tmux 3.7 it compares screen occurrence counts before and

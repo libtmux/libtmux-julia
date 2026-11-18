@@ -99,6 +99,20 @@ pane's UTF-8 text, and the panes run `cat`, so their screens start blank.
 [`examples/owned_capture.jl`][repo-examples-owned_capture-jl] runs the same
 flow and checks that the server is gone afterwards.
 
+## Inspect daemon support
+
+### [`capabilities`][capabilities]: choose supported operations
+
+Read the daemon's feature requirements and active workarounds. Inspect a
+decision with [`supports`][supports], [`capability`][capability] or
+[`workaround`][workaround]; unknown names raise `KeyError`.
+Keep tmux's native `list-commands` spelling unaliased for discovery.
+
+[The example](https://github.com/libtmux/libtmux-julia/blob/master/examples/capabilities.jl) compares subprocess and control
+reports, then reads the immutable result after server cleanup.
+
+More: [server and capability reference](https://github.com/libtmux/libtmux-julia/blob/master/docs/src/api-server.md#inspect-daemon-support).
+
 ## Find sessions, windows, and panes
 
 ### [`snapshot`][snapshot]: what tmux has now
@@ -673,6 +687,10 @@ Core, MCP and workspace packages use the [MIT license][repo-license].
 [run_group]: https://libtmux.org/en/julia/latest/reference/libtmux-run_group/
 [run_batch]: https://libtmux.org/en/julia/latest/reference/libtmux-run_batch/
 [tmuxcommand]: https://libtmux.org/en/julia/latest/reference/libtmux-tmuxcommand/
+[capabilities]: https://libtmux.org/en/julia/latest/reference/libtmux-capabilities/
+[supports]: https://libtmux.org/en/julia/latest/reference/libtmux-supports/
+[capability]: https://libtmux.org/en/julia/latest/reference/libtmux-capability/
+[workaround]: https://libtmux.org/en/julia/latest/reference/libtmux-workaround/
 [wait_for_text]: https://libtmux.org/en/julia/latest/reference/libtmux-wait_for_text/
 [watch_screen]: https://libtmux.org/en/julia/latest/reference/libtmux-watch_screen/
 [ScreenWaitEnded]: https://libtmux.org/en/julia/latest/reference/libtmux-screenwaitended/

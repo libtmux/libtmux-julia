@@ -13,6 +13,48 @@ using LibTmux
         @test endswith(LibTmux._capabilities_manifest(), "}\n")
     end
 
+    @testset "public reports preserve patch and prerelease boundaries" begin
+        for (version, control, layout, workaround_active) in (
+            ("3.3a", false, false, false),
+            ("3.6a", false, false, false),
+            ("next-3.7", false, false, true),
+            ("3.7-rc2", false, false, true),
+            ("3.7", true, false, true),
+            ("3.7a", true, false, false),
+            ("3.8-rc", true, false, false),
+            ("3.8", true, true, false),
+        )
+            report = LibTmux._capability_report("1:1", version)
+            @test supports(report, "control-mode") == control
+            @test supports(report, "layout-json") == layout
+            @test workaround(report, "name-separators-rejected").active == workaround_active
+        end
+        @test_throws UnsupportedTmuxVersion LibTmux._capability_report("1:1", "3.3")
+        @test_throws UnsupportedTmuxVersion LibTmux._capability_report("1:1", "unknown")
+    end
+
+    @testset "native reports reject ambiguous or malformed evidence" begin
+        marker = "libtmux-capabilities-123-"
+        frame = marker * "123,456,3.8\n"
+        reply(text; code=0, signal=0, diagnostics=UInt8[]) =
+            CommandResult(collect(codeunits(text)), diagnostics, code, signal)
+        @test LibTmux._capability_probe_report(reply(frame), marker).generation == "123:456"
+        for result in (
+            reply(frame * frame),
+            reply("diagnostic\n" * frame),
+            reply(chomp(frame)),
+            reply(replace(frame, "123,456"=>"0,456")),
+            reply(replace(frame, "123,456"=>"123,99999999999999999999999999999")),
+            reply(replace(frame, marker=>"other-")),
+            reply(frame; code=1),
+            reply(frame; signal=15),
+            reply(frame; diagnostics=UInt8[1]),
+            CommandResult(UInt8[0xff], UInt8[], 0, 0),
+        )
+            @test_throws CommandError LibTmux._capability_probe_report(result, marker)
+        end
+    end
+
     @testset "entries obey the manifest schema" begin
         @test length(unique(ids)) == length(ids)
         @test all(id -> occursin(kebab, id), ids)
