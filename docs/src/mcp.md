@@ -86,6 +86,16 @@ Configured tmux hooks and aliases can change state during every tool, including
 listing and capture. Control attachment and detachment can also trigger hooks
 or unattached-session policies. All tools advertise conservative hints:
 `readOnlyHint: false`, `destructiveHint: true` and `idempotentHint: false`.
+
+To tell a read from a change, read the capability row each tool lists under
+`_meta["com.git-pull.libtmux-mcp/capability"]`. It states the `toolset`
+(`inspect`, `manage`, `execute` or `teardown`), the `processReach` of the
+tool's input (`none`, `pane-input` or `pane-program`) and the `tmuxEffects`
+(`observe`, `change` or `delete`). `create_session` is `pane-program` because
+it starts the program and arguments you give it, without a shell.
+`run_operations` states the widest toolset and reach, and every effect, of the
+tools enabled beside it.
+
 `error.effects: none` identifies rejection before potentially effectful I/O
 admission, including the initial hook-free version check. Once any stage admits
 potentially effectful I/O, errors report `possible`, including after an earlier

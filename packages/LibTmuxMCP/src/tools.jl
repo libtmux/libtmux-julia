@@ -29,6 +29,77 @@ const _TOOL_ARGUMENTS = Dict(
     "teardown_session"=>(("sessionId", "generation"), ("sessionId", "generation")),
 )
 
+# The capability row `tools/list` carries for each tool, under the key the
+# sibling servers use. libtmux.org shows these fields and guesses none. Each
+# vocabulary runs from least to most consequential; batches rely on the order.
+const _CAPABILITY_KEY = "com.git-pull.libtmux-mcp/capability"
+const _TOOLSETS = ("inspect", "manage", "execute", "teardown")
+const _PROCESS_REACHES = ("none", "pane-input", "pane-program")
+const _TMUX_EFFECTS = ("observe", "change", "delete")
+
+_capability(toolset, reach, effects...) =
+    (; toolset, processReach=reach, tmuxEffects=effects)
+
+# Every tool that addresses a target first reads the server's identity, so its
+# effects include `observe`. `create_session` takes a program and its argv from
+# the caller and starts it without a shell, which is `pane-program`.
+# `run_operations` has no row here: `_batch_capability` derives it.
+const _TOOL_CAPABILITIES = Dict(
+    "list_panes"=>_capability("inspect", "none", "observe"),
+    "capture_pane"=>_capability("inspect", "none", "observe"),
+    "wait_for_text"=>_capability("inspect", "none", "observe"),
+    "send_keys"=>_capability("execute", "pane-input", "observe", "change"),
+    "send_keys_and_wait"=>_capability("execute", "pane-input", "observe", "change"),
+    "paste_text"=>_capability("execute", "pane-input", "observe", "change"),
+    "resize_pane"=>_capability("manage", "none", "observe", "change"),
+    "kill_pane"=>_capability("teardown", "none", "observe", "delete"),
+    "create_session"=>_capability("execute", "pane-program", "observe", "change"),
+    "teardown_session"=>_capability("teardown", "none", "observe", "delete"),
+)
+
+function _check_capabilities(table, names)
+    for name in names
+        name == "run_operations" && continue
+        row = get(table, name, nothing)
+        row === nothing && throw(ArgumentError("tool $name states no capability"))
+        row.toolset in _TOOLSETS &&
+        row.processReach in _PROCESS_REACHES &&
+        !isempty(row.tmuxEffects) &&
+        all(in(_TMUX_EFFECTS), row.tmuxEffects) ||
+            throw(ArgumentError("tool $name states an unknown capability"))
+    end
+end
+_check_capabilities(_TOOL_CAPABILITIES, _TOOL_NAMES)
+
+_widest(order, values) = order[maximum(findfirst(==(value), order) for value in values)]
+
+"The widest toolset and reach and the union of effects among a batch's enabled items."
+function _batch_capability(table, items)
+    rows = [table[item] for item in items]
+    effects = filter(effect -> any(row -> effect in row.tmuxEffects, rows), _TMUX_EFFECTS)
+    _capability(
+        _widest(_TOOLSETS, (row.toolset for row in rows)),
+        _widest(_PROCESS_REACHES, (row.processReach for row in rows)),
+        effects...,
+    )
+end
+
+function _capability_meta(app, name)
+    row =
+        name == "run_operations" ?
+        _batch_capability(
+            _TOOL_CAPABILITIES,
+            (item for item in app.allowed_tools if item != name),
+        ) : _TOOL_CAPABILITIES[name]
+    Dict{String,Any}(
+        _CAPABILITY_KEY=>Dict{String,Any}(
+            "toolset"=>row.toolset,
+            "processReach"=>row.processReach,
+            "tmuxEffects"=>collect(String, row.tmuxEffects),
+        ),
+    )
+end
+
 struct _ToolFailure <: Exception
     code::String
     message::String
@@ -1248,6 +1319,7 @@ function tools(app::Application)
                 "idempotentHint"=>false,
                 "openWorldHint"=>true,
             ),
+            _meta=_capability_meta(app, name),
             handler=(args, context) -> begin
                 sequence = Ref(0)
                 _invoke_tool(

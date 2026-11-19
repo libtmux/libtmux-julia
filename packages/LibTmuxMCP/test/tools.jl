@@ -249,6 +249,83 @@ if isempty(ARGS) || any(arg -> arg in ("baseline", "unit", "all"), ARGS)
         @test close(app) === nothing
     end
 
+    # The expected rows are written out here, apart from the source table, so a
+    # wrong or missing classification fails instead of agreeing with itself.
+    @testset "MCP tools state their toolset, process reach and tmux effects" begin
+        key = "com.git-pull.libtmux-mcp/capability"
+        observe = ["observe"]
+        input = ("execute", "pane-input", ["observe", "change"])
+        expected = Dict(
+            "list_panes"=>("inspect", "none", observe),
+            "capture_pane"=>("inspect", "none", observe),
+            "wait_for_text"=>("inspect", "none", observe),
+            "send_keys"=>input,
+            "send_keys_and_wait"=>input,
+            "paste_text"=>input,
+            "resize_pane"=>("manage", "none", ["observe", "change"]),
+            "kill_pane"=>("teardown", "none", ["observe", "delete"]),
+            "create_session"=>("execute", "pane-program", ["observe", "change"]),
+            "teardown_session"=>("teardown", "none", ["observe", "delete"]),
+            "run_operations"=>("teardown", "pane-program", ["observe", "change", "delete"]),
+        )
+        @test Set(keys(expected)) == Set(LibTmuxMCP._TOOL_NAMES)
+        endpoint = Server(socket_path="/tmp/libtmux-julia-uncontacted/s")
+        function stated(tool)
+            meta = tool._meta
+            meta isa AbstractDict && Set(keys(meta)) == Set([key]) || return nothing
+            (meta[key]["toolset"], meta[key]["processReach"], meta[key]["tmuxEffects"])
+        end
+
+        app = Application(endpoint; allowed_tools=LibTmuxMCP._TOOL_NAMES)
+        try
+            for tool in LibTmuxMCP.tools(app)
+                @test stated(tool) == expected[tool.name]
+            end
+        finally
+            close(app)
+        end
+
+        # A batch can do what its enabled items do, and no more.
+        for (items, want) in (
+            (("list_panes", "capture_pane"), ("inspect", "none", observe)),
+            (("list_panes", "send_keys"), input),
+            (("list_panes", "kill_pane"), ("teardown", "none", ["observe", "delete"])),
+        )
+            app = Application(endpoint; allowed_tools=(items..., "run_operations"))
+            try
+                batch = only(filter(tool -> tool.name == "run_operations", tools(app)))
+                @test stated(batch) == want
+            finally
+                close(app)
+            end
+        end
+    end
+
+    @testset "MCP capability check refuses a tool with no or invalid classification" begin
+        table = LibTmuxMCP._TOOL_CAPABILITIES
+        names = LibTmuxMCP._TOOL_NAMES
+        @test LibTmuxMCP._check_capabilities(table, names) === nothing
+        for name in names
+            name == "run_operations" && continue
+            @test_throws ArgumentError LibTmuxMCP._check_capabilities(
+                delete!(copy(table), name),
+                names,
+            )
+        end
+        good = table["send_keys"]
+        for bad in (
+            merge(good, (; toolset="admin")),
+            merge(good, (; processReach="host-command")),
+            merge(good, (; tmuxEffects=())),
+            merge(good, (; tmuxEffects=("observe", "explode"))),
+        )
+            @test_throws ArgumentError LibTmuxMCP._check_capabilities(
+                merge(table, Dict("send_keys"=>bad)),
+                names,
+            )
+        end
+    end
+
 end
 
 if isempty(ARGS) || any(arg -> arg in ("effects", "integration", "all"), ARGS)
