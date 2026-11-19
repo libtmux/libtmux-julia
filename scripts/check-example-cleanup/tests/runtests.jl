@@ -61,7 +61,7 @@ const CHECKER = joinpath(@__DIR__, "..", "check-example-cleanup.jl")
             project = dirname(dirname(dirname(@__DIR__)))
             program = """
             using LibTmux
-            with_server(; tmux=ENV["LIBTMUX_TEST_TMUX"]) do server
+            with_server() do server
                 new_session(server; name="audited", command=["/bin/cat"])
                 snapshot(server)
             end
