@@ -181,6 +181,22 @@ function product_client(launcher, socket_option, socket, tmux, pane, profile)
             ),
             "tool schemas",
         )
+        for tool in listed
+            row = get(
+                get(tool, "_meta", Dict()),
+                "com.git-pull.libtmux-mcp/capability",
+                Dict(),
+            )
+            check(
+                get(row, "toolset", "") in ("inspect", "manage", "execute", "teardown") &&
+                    get(row, "processReach", nothing) isa AbstractString &&
+                    get(row, "tmuxEffects", nothing) isa AbstractVector,
+                "capability row of ",
+                tool["name"],
+                ": ",
+                row,
+            )
+        end
         run_operations_schema = only(
             tool["outputSchema"] for tool in listed if tool["name"] == "run_operations"
         )

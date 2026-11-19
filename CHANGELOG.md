@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+#### `libtmux-mcp` states each tool's capability
+
+Each tool in the `tools/list` reply carries
+`_meta["com.git-pull.libtmux-mcp/capability"]`, the row the Go, TypeScript and
+Swift servers state. It names the tool's `toolset` (`inspect`, `manage`,
+`execute` or `teardown`), the `processReach` of its input (`none`, `pane-input`
+or `pane-program`) and its `tmuxEffects` (`observe`, `change`, `delete`), so a
+client can tell a read from a change and libtmux.org can show a tier. The
+annotations are unchanged: they stay the conservative hints. `create_session`
+is `pane-program` because it starts the program and arguments the caller gives
+it, without a shell. `run_operations` states the widest toolset and reach, and
+every effect, of the tools enabled beside it. (#109)
+
 #### The shipped examples start the default `tmux`
 
 The programs in `examples/` and `packages/LibTmuxWorkspace/examples/` call

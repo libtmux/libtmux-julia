@@ -1,4 +1,5 @@
 using Test, LibTmuxMCP, ModelContextProtocol, Logging
+import LibTmux
 import JSON as Codec
 const SDK = ModelContextProtocol
 
@@ -455,6 +456,44 @@ end
     finally
         SDK.close(transport)
         fetch(task)
+    end
+end
+
+@testset "tools/list carries each tool's capability row on the wire" begin
+    key = "com.git-pull.libtmux-mcp/capability"
+    app = LibTmuxMCP.Application(
+        LibTmux.Server(socket_path="/tmp/libtmux-julia-uncontacted/s");
+        allowed_tools=LibTmuxMCP._TOOL_NAMES,
+    )
+    transport = MemoryProtocol()
+    task = Threads.@spawn LibTmuxMCP._serve_transport(
+        transport,
+        LibTmuxMCP.tools(app);
+        workers=1,
+        capacity=1,
+    )
+    try
+        put!(transport.input, protocol_request("list", "tools/list"))
+        listed = protocol_response(transport)["result"]["tools"]
+        @test Set(tool["name"] for tool in listed) == Set(LibTmuxMCP._TOOL_NAMES)
+        for tool in listed
+            row = get(get(tool, "_meta", Dict()), key, Dict())
+            @test get(row, "toolset", "") in ("inspect", "manage", "execute", "teardown")
+            @test get(row, "processReach", nothing) isa String
+            @test get(row, "tmuxEffects", nothing) isa Vector{Any}
+        end
+        create = only(filter(tool -> tool["name"] == "create_session", listed))
+        @test create["_meta"][key] == Dict(
+            "toolset"=>"execute",
+            "processReach"=>"pane-program",
+            "tmuxEffects"=>["observe", "change"],
+        )
+        put!(transport.input, nothing)
+        @test fetch(task).remaining == 0
+    finally
+        SDK.close(transport)
+        fetch(task)
+        close(app)
     end
 end
 
