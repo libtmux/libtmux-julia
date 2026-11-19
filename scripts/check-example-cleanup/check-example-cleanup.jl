@@ -7,12 +7,12 @@
 #       --negative-control --tmux TMUX --cwd DIR -- JULIA [FLAGS]
 #   julia scripts/check-example-cleanup/check-example-cleanup.jl --identity-self-test
 #
-# The example gets a private tmux wrapper as LIBTMUX_TEST_TMUX. The wrapper records
-# each tmux process the example starts, refuses a socket outside the owned
-# directory, and can fail one command after the first session exists. Afterwards
-# the checker verifies, independently of the example, that every recorded process is
-# gone and that no daemon left its socket directory. Pass --pure for an example
-# that must start no tmux. The tests are in tests/runtests.jl.
+# The example finds a private tmux wrapper first on PATH, as it would find any
+# tmux. The wrapper records each tmux process the example starts, refuses a socket
+# outside the owned directory, and can fail one command after the first session
+# exists. Afterwards the checker verifies, independently of the example, that every
+# recorded process is gone and that no daemon left its socket directory. Pass --pure
+# for an example that must start no tmux. The tests are in tests/runtests.jl.
 
 module CheckExampleCleanup
 
@@ -167,13 +167,14 @@ function run_example(command::Cmd; tmux, env, cwd, fault=false, diagnostics=true
         # A client that names no socket must reach neither the caller's server nor the
         # default socket: the wrapper refuses it, and TMUX_TMPDIR is ours.
         for name in collect(keys(child))
-            (name in ("TMUX", "TMUX_PANE") || startswith(name, "LIBTMUX_SOCKET")) &&
-                delete!(child, name)
+            (
+                name in ("TMUX", "TMUX_PANE", "LIBTMUX_TEST_TMUX") ||
+                startswith(name, "LIBTMUX_SOCKET")
+            ) && delete!(child, name)
         end
-        merge!(
-            child,
-            Dict("LIBTMUX_TEST_TMUX" => wrapper, "TMPDIR" => root, "TMUX_TMPDIR" => root),
-        )
+        # The wrapper is named tmux, so the library's default executable reaches it.
+        path = join(filter(!isempty, [root, get(child, "PATH", "")]), ":")
+        merge!(child, Dict("PATH" => path, "TMPDIR" => root, "TMUX_TMPDIR" => root))
         out, err = IOBuffer(), IOBuffer()
         try
             process = run(
@@ -233,7 +234,7 @@ end
 
 const NEGATIVE_PROGRAM = """
 using LibTmux
-owned = open_server(; tmux=ENV["LIBTMUX_TEST_TMUX"])
+owned = open_server()
 new_session(owned.server; name="missing-close", command=["/bin/cat"])
 """
 

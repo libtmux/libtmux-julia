@@ -15,7 +15,7 @@ end
 
 function main()
     endpoint = Ref{Server}()
-    result = with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) do server
+    result = with_server() do server
         endpoint[] = server
         new_session(server; name="example", command=["/bin/cat"])
         snap = snapshot(server)

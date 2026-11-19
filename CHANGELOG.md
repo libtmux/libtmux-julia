@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+#### The shipped examples start the default `tmux`
+
+The programs in `examples/` and `packages/LibTmuxWorkspace/examples/` call
+`with_server()` and no longer read `LIBTMUX_TEST_TMUX`, a variable for this
+repository's tests. They run the `tmux` on `PATH`; pass `tmux="/path/to/tmux"`
+to `with_server` to run another executable. The check that runs each example
+through an audited tmux now puts that executable first on `PATH`.
+
 #### `kill_server` ends a server on request
 
 `kill_server(server; confirm=true)` ends the tmux daemon at `server` with every

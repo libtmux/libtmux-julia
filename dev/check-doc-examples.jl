@@ -423,6 +423,13 @@ function shipped_programs(root)
     return sort!(files)
 end
 
+"Programs that read a variable meant for this repository's tests, not for a reader."
+function test_variable_programs(root, programs)
+    return filter(programs) do program
+        occursin("LIBTMUX_TEST_", read(joinpath(root, program), String))
+    end
+end
+
 function derived_source(entry, root)
     matched = match(r"(?s)read\(joinpath\(@__DIR__,\s*(.*?)\),\s*String\)", entry.code)
     matched === nothing &&
@@ -492,6 +499,9 @@ function doc_example_check(; root=DOC_EXAMPLE_ROOT)
     programs = shipped_programs(root)
     programs == sort!(collect(keys(DOC_PROGRAMS))) ||
         error("Executable example inventory changed")
+    readers = test_variable_programs(root, programs)
+    isempty(readers) ||
+        error("Shipped programs read a test-only variable: $(join(readers, ", "))")
     links = linked_programs(documents, root)
     all(program -> program in links, programs) ||
         error("Every shipped Julia program needs a documentation link")
@@ -865,7 +875,17 @@ function doc_example_self_test()
         differs = output_difference(shown, expected, "1\n3\n")
         @assert differs !== nothing && occursin("not the documented", differs)
     end
-    return println("PASS documented output is found, compared and reported when it differs")
+    println("PASS documented output is found, compared and reported when it differs")
+    mktempdir() do directory
+        write(joinpath(directory, "clean.jl"), "with_server() do server\nend\n")
+        write(
+            joinpath(directory, "reads.jl"),
+            "with_server(; tmux=get(ENV, \"LIBTMUX_TEST_TMUX\", \"tmux\")) do server\nend\n",
+        )
+        found = test_variable_programs(directory, ["clean.jl", "reads.jl"])
+        @assert found == ["reads.jl"]
+    end
+    return println("PASS a shipped program that reads a test-only variable is reported")
 end
 
 function doc_examples_main(arguments)

@@ -8,7 +8,7 @@ environment = Dict(
     "TMUX_TMPDIR"=>get(ENV, "TMUX_TMPDIR", "/tmp"),
 )
 
-with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do server
+with_server(; env=environment) do server
     marker = "completion-" * string(uuid4())
     command = [
         "/bin/sh",
