@@ -2,7 +2,7 @@ using LibTmux
 import LibTmux.Filters as F
 
 function main()
-    snap = with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) do server
+    snap = with_server() do server
         dev = new_session(server; name="dev", command=["/bin/cat"])
         initial = snapshot(server)
         api = only(windows(initial)).ref
@@ -32,7 +32,7 @@ function main()
     @assert snap[reference].ref == reference
     @assert snapshotof(get(snap, reference, nothing)) === snap
 
-    # Captured relations remain usable after the owned daemon has stopped.
+    # The captured snapshot stays readable after the private server stops.
     has_api = SessionWhere(windows=F.AnyRelated(WindowWhere(name="api")))
     @assert count(has_api, sessions(snap)) == 2
     selected = filter(PaneWhere(active=true, window=WindowWhere(name="api")), panes(snap))

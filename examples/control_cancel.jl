@@ -1,7 +1,7 @@
 using LibTmux
 
 function main()
-    with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) do server
+    with_server() do server
         session = new_session(server; name="control", command=["/bin/cat"])
         open_control(server, session) do connection
             signal = control_signal(connection)

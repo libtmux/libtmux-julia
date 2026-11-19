@@ -8,7 +8,7 @@ environment = Dict(
     "TMUX_TMPDIR" => get(ENV, "TMUX_TMPDIR", "/tmp"),
 )
 
-with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux"), env=environment) do server
+with_server(; env=environment) do server
     created = new_session(server; name="stream", command=["/bin/cat"])
     pane = only(panes(snapshot(server))).ref
     open_control(server, created) do connection

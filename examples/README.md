@@ -2,7 +2,8 @@
 
 Run these programs from an environment with LibTmux and a local tmux. Each
 starts a private server and removes it. None touches your default server.
-`LIBTMUX_TEST_TMUX` selects another tmux executable.
+They run the `tmux` on your `PATH`; pass `tmux="/path/to/tmux"` to
+`with_server` to run another executable.
 
 `control_cancel.jl`, `output_stream.jl` and `command_completion.jl` need
 tmux 3.7 or newer. The others run on the core's tmux 3.3a floor.

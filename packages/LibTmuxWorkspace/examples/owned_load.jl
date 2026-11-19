@@ -2,7 +2,7 @@ using LibTmux, LibTmuxWorkspace
 
 function main()
     endpoint = Ref{Server}()
-    frozen = with_server(; tmux=get(ENV, "LIBTMUX_TEST_TMUX", "tmux")) do server
+    frozen = with_server() do server
         endpoint[] = server
         config = validate(
             Dict(
