@@ -351,6 +351,46 @@ end
     end
     @test length(partitions) == length(unique(partitions)) == length(names) &&
           Set(partitions) == Set(names)
+    @test [
+        item[1] for
+        item in M.selected_commands(commands; suite="runtime", tier="unit-quality")
+    ] == [
+        "core-unit",
+        "workspace-unit",
+        "mcp-unit",
+        "quality",
+        "format",
+        "generated",
+        "generated-options",
+        "consumer-diagnostics",
+        "test-progress",
+        "example-inventory",
+        "readme-links",
+    ]
+    for result in (P.plan("push"), P.plan("workflow_dispatch"; scope="full"))
+        @test allunique(cell["job_label"] for cell in result["cells"])
+        for (tmux, threads) in
+            unique((cell["tmux"], cell["threads"]) for cell in result["cells"])
+            jobs = [
+                cell for cell in result["cells"] if
+                cell["tmux"] == tmux && cell["threads"] == threads
+            ]
+            runtime = filter(cell -> cell["suite"] == "runtime", jobs)
+            @test [get(cell, "tier", "all") for cell in runtime] == ["unit-quality", "outer"]
+            covered = [
+                item[1] for cell in jobs for item in M.selected_commands(
+                    commands;
+                    suite=cell["suite"],
+                    tier=get(cell, "tier", "all"),
+                )
+            ]
+            expected =
+                tmux in ("3.3a", "3.7c", "3.8") ? names :
+                [item[1] for item in M.selected_commands(commands; suite="runtime")]
+            @test length(covered) == length(unique(covered)) == length(expected) &&
+                  Set(covered) == Set(expected)
+        end
+    end
     @test issubset(M.DELIVERY_PHASES, Set(names))
     for item in commands
         @test item[2][1] == "julia" && item[4] in ("unit", "quality", "outer")
@@ -429,6 +469,23 @@ end
         passed = first(r for r in results("results-all-t1-") if r["status"] == "PASS")
         @test passed["phases"][1]["over_target"] && length(passed["phases"]) == 2
         @test passed["sandbox_leaks"] == [] && passed["sandbox_kept"] == []
+
+        @test run_with(
+            [
+                ("core-unit", String[], 30.0, "unit"),
+                ("format", String[], 30.0, "quality"),
+                ("core-normal", String[], 300.0, "outer"),
+            ],
+            one_after_another([
+                phase_result("core-unit", "PASS"),
+                phase_result("format", "PASS"),
+            ]);
+            suite="runtime",
+            tier="unit-quality",
+        ) == 0
+        grouped = only(results("results-unit-quality-runtime-t1-"))
+        @test grouped["planned_phases"] == ["core-unit", "format"] &&
+              grouped["not_run"] == []
 
         # A socket a phase leaves in the sandbox fails the cell, whatever the phase says.
         leaking(name, argv; env, kwargs...) = begin

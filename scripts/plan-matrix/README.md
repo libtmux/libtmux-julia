@@ -12,6 +12,11 @@ versions, tags, branches and commits the dispatch names. `gate` runs in the
 `required` job and passes only when the planning job and every planned job passed
 and a lane the plan left out stayed skipped.
 
+Each runtime configuration runs one `unit-quality` job and one `outer` job.
+Delivery runs its whole suite in one job. Each job prepares its own stage
+and has a separate work window. Together the jobs run every applicable check.
+An explicit debug dispatch keeps the combined runtime suite in one job.
+
 Print the plan for an event, as the workflow does:
 
 ```console
