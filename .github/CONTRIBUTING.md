@@ -4,12 +4,12 @@ This repository contains the Julia core, captured queries, typed operations,
 optional data adapters, and isolated tmux tests. MCP protocol/tool integration
 and workspace application behavior are being verified in separate packages.
 
-Read [AGENTS.md](AGENTS.md) for change discipline and
+Read [AGENTS.md](../AGENTS.md) for change discipline and
 [WRITING.md](WRITING.md) for prose and commit conventions.
 
 ## Setup
 
-The Julia development version is pinned in [.tool-versions](.tool-versions).
+The Julia development version is pinned in [.tool-versions](../.tool-versions).
 With mise installed, install that version from the repository root:
 
 ```console
@@ -18,7 +18,7 @@ $ mise install
 
 Make the pinned version available as `julia` in your shell. The development
 pin and package compatibility declarations do not prove a supported version
-matrix. Track support separately in [the capability manifest](capabilities.json).
+matrix. Track support separately in [the capability manifest](../capabilities.json).
 
 Core runtime and direct tests use Julia standard libraries. Optional JSON
 and Tables integrations have separate prepared test environments. Unit
@@ -26,16 +26,16 @@ tests also require POSIX utilities such as `cat`, `sleep`, and `yes`.
 Integration tests require tmux on `PATH` and also use `dd`, `stty`, and `tail`;
 `LIBTMUX_TEST_TMUX` selects another executable. Tests start no shell program,
 apart from the scripted tmux clients that
-[SCRIPTS.md](.github/SCRIPTS.md#exceptions) records. A child that no utility
-can stand in for, such as a stand-in `tmux`, is a Julia program from
-[`dev/test-stand-ins.jl`](dev/test-stand-ins.jl). Each start is a Julia start,
-so a test that waits on one sets a deadline that allows for it.
+[SCRIPTS.md](SCRIPTS.md#exceptions) records. A child that no utility can stand
+in for, such as a stand-in `tmux`, is a Julia program from
+[`dev/test-stand-ins.jl`](../dev/test-stand-ins.jl). Each start is a Julia
+start, so a test that waits on one sets a deadline that allows for it.
 Keep temporary paths short enough for a Unix socket. Fixtures clear inherited
 tmux variables, own a unique socket, and never use the default server.
 
 To clear build output and caches, `just clean` removes ignored files and keeps
 `.env`, `just clean-dry` previews that, and `just nuke` also removes untracked
-files after a confirmation. The [justfile](justfile) holds the three recipes.
+files after a confirmation. The [justfile](../justfile) holds the three recipes.
 
 ## Test sandbox
 
@@ -46,7 +46,7 @@ its caller is inside, and otherwise connects to the default socket under
 `TMUX_TMPDIR` at a private directory under `TMPDIR`, or under `/tmp` when
 `TMPDIR` is too long. Only its owner can open the directory.
 
-[`dev/test-sandbox.jl`](dev/test-sandbox.jl) makes the sandbox. The core,
+[`dev/test-sandbox.jl`](../dev/test-sandbox.jl) makes the sandbox. The core,
 workspace and MCP runners reach it through `dev/test-diagnostics.jl`, which
 each includes on its first line. The doc-example checker, the benchmark
 drivers and `packages/LibTmuxWorkspace/dev/cli_latency.jl` include
@@ -309,7 +309,7 @@ provenance.
 
 ## Website publication
 
-The [docs workflow](.github/workflows/docs.yml) builds the selected source with the
+The [docs workflow](workflows/docs.yml) builds the selected source with the
 shared libtmux.org workflow. Keep its build and publisher references pinned
 to the same full commit in `libtmux/docs`. The native exporter comes from the
 calling workflow's tested commit; its provenance stays separate from the
@@ -367,7 +367,7 @@ $ julia \
     dev/check-doc-examples.jl check
 ```
 
-The [example inventory](docs/example-inventory.md) distinguishes exact pure
+The [example inventory](../docs/example-inventory.md) distinguishes exact pure
 doctests, snippets derived from executable programs, and contextual examples.
 After the matrix preparation below, run the contextual examples with its
 resolved project and depot. The runner supplies an owned server, captured rows
@@ -703,9 +703,10 @@ unchanged sources establish a passed cell. WSL counts as Linux; no local
 Linux run establishes macOS support. The workflow is prepared in
 `.github/workflows/julia.yml`; remote CI results require an actual run.
 
-Run performance work separately using [the benchmark guide](benchmark/README.md).
-It covers execution modes, local criteria, output pressure and installed
-MCP/workspace processes. Keep raw results and compiler flags with any claim.
+Run performance work separately using
+[the benchmark guide](../benchmark/README.md). It covers execution modes, local
+criteria, output pressure and installed MCP/workspace processes. Keep raw
+results and compiler flags with any claim.
 
 ## Diagnostic timing targets
 
@@ -749,7 +750,7 @@ focused regression coverage and prove it fails for the intended reason.
 
 ## Repository metadata
 
-[.github/repository.json](.github/repository.json) records the description,
+[.github/repository.json](repository.json) records the description,
 visibility, default branch, topics, and labels for the upstream GitHub
 repository. Apply changes to those settings manually; Git does not synchronize
 them. Manage fork settings separately.

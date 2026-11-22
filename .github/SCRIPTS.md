@@ -8,7 +8,7 @@ decision in [libtmux/docs#323](https://github.com/libtmux/docs/pull/323).
 
 A script stays when this project runs it today: a CI job, a release step, a
 code generator, a documentation check, or a maintainer task named in
-[CONTRIBUTING.md](../CONTRIBUTING.md).
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 - Parity with Python libtmux or tmuxp is not a use. Delete comparison
   harnesses, oracles, ledgers and generated fixtures, and the CI steps that
@@ -34,7 +34,7 @@ for the library. Do not add shell or Python script files.
   library, in CI.
 - Use current language and tool idioms; no shims below the project's floor.
 - Before a new or rewritten script merges, a reviewer who did not write it
-  checks it against [WRITING.md](../WRITING.md) and
+  checks it against [WRITING.md](WRITING.md) and
   [no-ai-slop](https://github.com/petergyang/no-ai-slop).
 
 ## What stays

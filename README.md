@@ -9,13 +9,14 @@
 
 <div align="center">
 
-# LibTmux.jl
+# libtmux for Julia
 
 [![Julia](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml/badge.svg)](https://github.com/libtmux/libtmux-julia/actions/workflows/julia.yml)
 [![libtmux.org](https://img.shields.io/badge/docs-libtmux.org-0b7285)](https://libtmux.org/en/julia/)
 [![license](https://img.shields.io/badge/license-MIT-blue)](https://github.com/libtmux/libtmux-julia/blob/master/LICENSE)
 
-Create tmux sessions, split panes, send input and capture terminal output from
+[`LibTmux.jl`](https://libtmux.org/en/julia/latest/reference/libtmux/) creates
+tmux sessions, splits panes, sends input and captures terminal output from
 Julia.
 
 </div>
@@ -28,19 +29,6 @@ functions. You can also [type into a pane][send_keys] and
 
 It suits scripts that drive a terminal program, tests that need a real tmux,
 and, through the MCP package, agents that share a terminal.
-
-**Contents** — [Quick start](#quick-start) ·
-[Find things](#find-sessions-windows-and-panes) ·
-[Choose a server](#choose-which-server-to-use) ·
-[Split and resize](#split-and-resize-panes) ·
-[Type and read](#type-into-a-pane-and-read-what-it-prints) ·
-[Batch](#send-several-commands-at-once) ·
-[Control connection](#reuse-a-control-connection) ·
-[Examples](#run-the-example-programs) · [Packages](#packages) ·
-[Leaves out](#what-it-leaves-out) · [Support](#support-and-status) ·
-[Documentation](#documentation) ·
-[API reference](https://libtmux.org/en/julia/latest/reference/) ·
-[Field reference][repo-docs-generated-criteria-md]
 
 The core uses only Julia standard libraries. Add an experimental companion
 for MCP or workspace configuration:
@@ -59,7 +47,9 @@ core at the `v0.1.1` tag:
 ```console
 $ julia \
     --startup-file=no \
-    -e 'using Pkg; Pkg.activate("."); repo="https://github.com/libtmux/libtmux-julia.git"; revision = "v0.1.1"; Pkg.add(Pkg.PackageSpec(url=repo, rev=revision))'
+    -e 'using Pkg; Pkg.activate(".")' \
+    -e 'repo = "https://github.com/libtmux/libtmux-julia.git"' \
+    -e 'Pkg.add(Pkg.PackageSpec(url=repo, rev="v0.1.1"))'
 ```
 
 It needs Julia 1.13.1 or newer, and tmux 3.3a or newer on your `PATH`. Open
@@ -84,7 +74,12 @@ snap, screen = with_server() do server
 end
 
 @assert isempty(strip(screen))
-println(only(sessions(snap)).name, ": ", length(panes(snap)), " panes; blank capture verified")
+println(
+    only(sessions(snap)).name,
+    ": ",
+    length(panes(snap)),
+    " panes; blank capture verified",
+)
 ```
 
 ```text
@@ -234,7 +229,7 @@ it names. [`open_server`][open_server] starts a private daemon that you close.
 
 ## Split and resize panes
 
-### [`split_window`][split_window] and [`resize_pane`][resize_pane]: lay out a window
+### [`split_window`][split_window]: lay out a window
 
 [`split_window`][split_window] returns the new pane, [`resize_pane`][resize_pane]
 sets a pane's size in cells and [`resize_window`][resize_window] a window's.
@@ -347,8 +342,16 @@ with_server() do server
         TmuxCommand("new-window", "-d", "-n", "logs"),
         TmuxCommand("new-window", "-d", "-n", "build"),
     ])
-    named = filter(window -> window.name in ("logs", "build"), windows(snapshot(server)))
-    println(length(group), " commands in one request; ", length(named), " new windows")
+    named = filter(
+        window -> window.name in ("logs", "build"),
+        windows(snapshot(server)),
+    )
+    println(
+        length(group),
+        " commands in one request; ",
+        length(named),
+        " new windows",
+    )
 end
 ```
 
@@ -375,7 +378,12 @@ with_server() do server
         TmuxCommand("new-window", "-t", "missing:", "-n", "lost"),
         TmuxCommand("new-window", "-d", "-n", "build"),
     ])
-    println(count(operation -> operation.acknowledged, batch), " of ", length(batch), " acknowledged")
+    println(
+        count(operation -> operation.acknowledged, batch),
+        " of ",
+        length(batch),
+        " acknowledged",
+    )
 end
 ```
 
@@ -507,7 +515,8 @@ julia> using LibTmux, JSON
 
 julia> text = write_where_json(PaneWhere(active=true));
 
-julia> encode_where(read_where_json(text)) == encode_where(PaneWhere(active=true))
+julia> encode_where(read_where_json(text)) ==
+       encode_where(PaneWhere(active=true))
 true
 ```
 
@@ -540,7 +549,8 @@ From a checkout, after [`install_cli`][workspace_install_cli] creates
 configuration without contacting tmux:
 
 ```console
-$ bin/libtmux-workspace validate packages/LibTmuxWorkspace/examples/workspace.yaml
+$ bin/libtmux-workspace validate \
+    packages/LibTmuxWorkspace/examples/workspace.yaml
 ```
 
 ```text
@@ -567,7 +577,10 @@ Claude Code. Until you enable more tools, the client sees
 [`send_keys`][tool_send_keys]:
 
 ```console
-$ claude mcp add tmux -- "$PWD/bin/libtmux-mcp" --socket-name agent --start-session work
+$ claude mcp add tmux -- \
+    "$PWD/bin/libtmux-mcp" \
+    --socket-name agent \
+    --start-session work
 ```
 
 The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
@@ -600,45 +613,23 @@ The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
 - **Features by release.** [`capabilities.json`][repo-capabilities-json] lists
   each optional feature and the tmux release it needs.
 
-## Documentation
+[Reference][julia-reference] · [Guides][julia-guides] ·
+[Installation][repo-docs-src-installation-md] ·
+[Troubleshooting][repo-docs-src-troubleshooting-md] ·
+[Benchmarks][repo-benchmark-readme-md]
 
-| | |
-| --- | --- |
-| [Reference](https://libtmux.org/en/julia/latest/reference/) | Every public binding, one page each |
-| [Installation guide](https://github.com/libtmux/libtmux-julia/blob/master/docs/src/installation.md) | Add the MCP or workspace companion with the matching core |
-| [Contributing and checks](https://github.com/libtmux/libtmux-julia/blob/master/CONTRIBUTING.md) | The checks a change must pass |
-| [Troubleshooting](https://github.com/libtmux/libtmux-julia/blob/master/docs/src/troubleshooting.md) | Symptoms and next steps |
-| [Benchmarks](https://github.com/libtmux/libtmux-julia/blob/master/benchmark/README.md) | What each execution mode costs |
-| [Changelog](https://github.com/libtmux/libtmux-julia/blob/master/CHANGELOG.md) | What each release changed |
+[Changelog][repo-changelog-md] · [Contributing][repo-contributing-md] ·
+[AI policy][ai-policy] · [Citation][repo-citation-cff] ·
+[MIT License][repo-license]
 
-## AI policy
+Part of the [libtmux.org](https://libtmux.org/) family alongside Python
+[libtmux](https://github.com/tmux-python/libtmux), sibling
+[language ports](https://github.com/libtmux), and
+[tmux](https://github.com/tmux/tmux).
 
-Use these packages with AI tools as you like. When contributing, check what you
-submit and wait for a maintainer's invitation before preparing a pull request.
-See the [AI policy](https://libtmux.org/en/meta/ai-policy/), also kept as
-[AI_POLICY.md](https://github.com/libtmux/.github/blob/HEAD/AI_POLICY.md).
-
-## Attribution
-
-Developed out of curiosity and a desire to learn and master Julia by the
-maintainer of Python libtmux, with AI assistance for code, tests, and
-documentation. Python libtmux is the behavioural reference.
-
-Please use the following BibTeX template to cite libtmux-julia in scientific discourse:
-
-```bibtex
-@misc{libtmux-julia,
-   author = {Tony Narlock},
-   year = {2026},
-   note = {https://libtmux.org},
-   title = {libtmux-julia: Julia wrapper for tmux}
-}
-```
-
-## License
-
-Core, MCP and workspace packages use the [MIT license][repo-license].
-
+[ai-policy]: https://libtmux.org/en/meta/ai-policy/
+[julia-guides]: https://libtmux.org/en/julia/latest/guides/
+[julia-reference]: https://libtmux.org/en/julia/latest/reference/
 [with_server]: https://libtmux.org/en/julia/latest/reference/libtmux-with_server/
 [new_session]: https://libtmux.org/en/julia/latest/reference/libtmux-new_session/
 [split_window]: https://libtmux.org/en/julia/latest/reference/libtmux-split_window/
@@ -688,14 +679,20 @@ Core, MCP and workspace packages use the [MIT license][repo-license].
 [tool_list_panes]: https://libtmux.org/en/julia/latest/mcp/tools/list_panes/
 [tool_capture_pane]: https://libtmux.org/en/julia/latest/mcp/tools/capture_pane/
 [tool_send_keys]: https://libtmux.org/en/julia/latest/mcp/tools/send_keys/
+[repo-benchmark-readme-md]: https://github.com/libtmux/libtmux-julia/blob/master/benchmark/README.md
 [repo-capabilities-json]: https://github.com/libtmux/libtmux-julia/blob/master/capabilities.json
+[repo-changelog-md]: https://github.com/libtmux/libtmux-julia/blob/master/CHANGELOG.md
+[repo-citation-cff]: https://github.com/libtmux/libtmux-julia/blob/master/CITATION.cff
+[repo-contributing-md]: https://github.com/libtmux/libtmux-julia/blob/master/.github/CONTRIBUTING.md
 [repo-docs-criteria-wire-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/criteria-wire.md
 [repo-docs-generated-criteria-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/generated/criteria.md
 [repo-docs-projections-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/projections.md
 [repo-docs-src-compatibility-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/src/compatibility.md
+[repo-docs-src-installation-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/src/installation.md
 [repo-docs-src-observations-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/src/observations.md
 [repo-docs-src-ownership-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/src/ownership.md
 [repo-docs-src-queries-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/src/queries.md
+[repo-docs-src-troubleshooting-md]: https://github.com/libtmux/libtmux-julia/blob/master/docs/src/troubleshooting.md
 [repo-examples-output_stream-jl]: https://github.com/libtmux/libtmux-julia/blob/master/examples/output_stream.jl
 [repo-examples-owned_capture-jl]: https://github.com/libtmux/libtmux-julia/blob/master/examples/owned_capture.jl
 [repo-examples-shared_windows-jl]: https://github.com/libtmux/libtmux-julia/blob/master/examples/shared_windows.jl

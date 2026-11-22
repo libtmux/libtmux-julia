@@ -206,7 +206,7 @@ end
     @test Set(c["tmux"] for c in P.qa_cells("edges")) ==
           Set([P.MINIMUM_TMUX, P.NEWEST_TMUX])
     @test [c["tmux"] for c in cells if c["docs_artifact"] == "true"] == [P.NEWEST_TMUX]
-    for name in ("docs/src/compatibility.md", "CONTRIBUTING.md")
+    for name in ("docs/src/compatibility.md", ".github/CONTRIBUTING.md")
         text = read(joinpath(M.ROOT, name), String)
         unnamed = [
             tmux for tmux in (P.SUPPORTED_TMUX..., P.REJECTED_TMUX...) if !occursin(
