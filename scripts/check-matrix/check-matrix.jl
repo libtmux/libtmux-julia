@@ -3,7 +3,7 @@
 # usage:
 #   julia --project=. scripts/check-matrix/check-matrix.jl prepare STAGE [--julia JULIA] [--threads 1|4]
 #   julia --project=. scripts/check-matrix/check-matrix.jl run STAGE [--julia JULIA] [--tmux TMUX]
-#       [--threads 1|4] [--tier unit|quality|outer|all] [--suite all|runtime|delivery]
+#       [--threads 1|4] [--tier unit|quality|unit-quality|outer|all] [--suite all|runtime|delivery]
 #       [--expected-julia V] [--expected-tmux V] [--expected-os V] [--expected-arch V]
 #   julia --project=. scripts/check-matrix/check-matrix.jl artifacts STAGE
 #
@@ -821,8 +821,11 @@ end
 
 function selected_commands(commands; tier="all", suite="all")
     [
-        item for item in commands if (tier == "all" || item[4] == tier) &&
-            (suite == "all" || (item[1] in DELIVERY_PHASES) == (suite == "delivery"))
+        item for item in commands if (
+            tier == "all" ||
+            item[4] == tier ||
+            (tier == "unit-quality" && item[4] in ("unit", "quality"))
+        ) && (suite == "all" || (item[1] in DELIVERY_PHASES) == (suite == "delivery"))
     ]
 end
 
@@ -1176,7 +1179,7 @@ end
 const USAGE = """
 usage: check-matrix.jl prepare STAGE [--julia JULIA] [--threads 1|4]
        check-matrix.jl run STAGE [--julia JULIA] [--tmux TMUX] [--threads 1|4]
-           [--tier unit|quality|outer|all] [--suite all|runtime|delivery]
+           [--tier unit|quality|unit-quality|outer|all] [--suite all|runtime|delivery]
            [--expected-julia V] [--expected-tmux V] [--expected-os V] [--expected-arch V]
        check-matrix.jl artifacts STAGE"""
 
@@ -1202,8 +1205,8 @@ function main(arguments=ARGS)
         else
             tier = get(options, "--tier", "all")
             suite = get(options, "--suite", "all")
-            tier in ("unit", "quality", "outer", "all") ||
-                fail("--tier must be unit, quality, outer or all")
+            tier in ("unit", "quality", "unit-quality", "outer", "all") ||
+                fail("--tier must be unit, quality, unit-quality, outer or all")
             suite in ("all", PlanMatrix.SUITES...) ||
                 fail("--suite must be all, runtime or delivery")
             expected = Dict(

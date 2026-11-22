@@ -279,6 +279,7 @@ jobs:
         env:
           THREADS: ${{ matrix.threads }}
           SUITE: ${{ matrix.suite }}
+          TIER: ${{ matrix.tier }}
           EXPECTED_JULIA: ${{ matrix.expected_julia }}
           EXPECTED_TMUX: ${{ matrix.expected_tmux }}
           EXPECTED_OS: ${{ matrix.os }}
@@ -288,6 +289,7 @@ jobs:
           --tmux "$TMUX_BINARY"
           --threads "$THREADS"
           --suite "$SUITE"
+          --tier "$TIER"
           --expected-julia "$EXPECTED_JULIA"
           --expected-tmux "$EXPECTED_TMUX"
           --expected-os "$EXPECTED_OS"

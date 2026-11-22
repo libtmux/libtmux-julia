@@ -592,20 +592,18 @@ suites. Runtime covers units, quality and library/application tests. Delivery
 covers extensions, documentation, external imports, examples and launchers.
 Both must pass at the same source revision to complete a split cell. Use
 `--suite runtime` or `--suite delivery` to run one partition locally; omitting
-the option runs both.
+the option runs both. CI runs `--tier unit-quality` and `--tier outer` in
+jobs with independent preparation and work windows. Each job has a
+900-second work cap and reserves 180 seconds for cleanup.
 
 Pull requests run Linux checks on Julia 1.13.1 with the oldest and the newest
 tmux release in `scripts/plan-matrix/plan-matrix.jl`, 3.3a and 3.8, at one
 thread, and 3.8 at four threads. A `v*` tag and a manual run with `scope=full` check tmux 3.3a,
 3.4, 3.5a, 3.6b, 3.7, 3.7a, 3.7b and 3.7c at one thread, 3.7c at four threads
 and 3.8 at one thread. The floor, 3.7c and 3.8 configurations run required
-runtime and delivery jobs; the others run the runtime job, because the
-delivery suite does not depend on the release. Each job has independent
-preparation and unchanged hard limits. Both partitions must pass for a
-configuration that runs both; their union runs every verification phase once.
-This repeats dependency setup to keep cold preparation from exhausting the final
-checks' allowance. The `required` job passes only when the planning job and
-every planned check passed.
+runtime and delivery jobs. The others run runtime jobs because delivery
+checks do not vary with tmux. The plan runs each applicable phase once.
+The `required` job passes after the planner and every planned check pass.
 
 ### Running CI against any tmux
 
@@ -648,6 +646,7 @@ applies to every scope. With `scope=custom`, `threads` takes `1` or `4` and
 To look at the runner, add `tmate`. The session opens for the person who
 started the run, who needs an SSH key on their GitHub profile, and it needs
 exactly one job, so give `tmux-ref` one ref and leave `suite` at its default.
+An explicit debug session runs the combined runtime suite in that job.
 `before-tests` opens it before the checks and `on-failure` opens it only after
 a failure. The connection command is in the step log, and the step ends after
 30 minutes.

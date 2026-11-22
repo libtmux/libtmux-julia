@@ -278,11 +278,20 @@ function _qa_cells(scope="full"; tmux_ref="", julia="", threads="", suite="")
     cells
 end
 
-"Emit one job for each suite of every cell."
-split_cells(cells) = [
-    merge(cell, Dict("suite" => suite, "job_label" => "$(cell["label"])-$suite")) for
-    cell in cells for suite in cell["suites"]
-]
+"Split runtime work into bounded jobs; an explicit debug session keeps one job."
+function split_cells(cells; debug=false)
+    [
+        merge(
+            cell,
+            Dict(
+                "suite" => suite,
+                "tier" => tier,
+                "job_label" => "$(cell["label"])-$suite" * (tier == "all" ? "" : "-$tier"),
+            ),
+        ) for cell in cells for suite in cell["suites"] for
+        tier in (suite == "runtime" && !debug ? ("unit-quality", "outer") : ("all",))
+    ]
+end
 
 "Plan the refusal lanes, which only the whole table runs."
 rejection_cells(scope="full") = hook(:rejection_cells, _rejection_cells)(scope)
@@ -331,7 +340,10 @@ function plan(
 )
     chosen = resolve_scope(event, ref, scope)
     check_scope_inputs(chosen; tmux_ref, threads, suite)
-    jobs = split_cells(qa_cells(chosen; tmux_ref, julia, threads, suite))
+    jobs = split_cells(
+        qa_cells(chosen; tmux_ref, julia, threads, suite);
+        debug=tmate ∉ ("", "off"),
+    )
     require_jobs(jobs)
     rejected = rejection_cells(chosen)
     assign_tmate(event, isempty(tmate) ? "off" : tmate, jobs, rejected)
@@ -387,7 +399,7 @@ function summary(result)
     for each in result["cells"]
         push!(
             lines,
-            "- Julia $(each["julia"]) with tmux $(each["tmux"]), $(each["threads"]) thread(s), $(each["suite"]) suite ($(each["kind"]))",
+            "- Julia $(each["julia"]) with tmux $(each["tmux"]), $(each["threads"]) thread(s), $(each["suite"]) suite, $(each["tier"]) tier ($(each["kind"]))",
         )
     end
     for each in result["rejected"]
@@ -473,6 +485,10 @@ function _workflow_problems(text)
     need(
         has("check", "matrix: \${{ fromJSON(needs.matrix.outputs.cells) }}"),
         "check: the cells must come from the plan",
+    )
+    need(
+        has("check", "TIER: \${{ matrix.tier }}") && has("check", "--tier \"\$TIER\""),
+        "check: the tier must come from the plan",
     )
     need(
         has("reject", "matrix: \${{ fromJSON(needs.matrix.outputs.rejected) }}"),

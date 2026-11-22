@@ -18,7 +18,7 @@ end
 refused(match; kwargs...) =
     (message=refusal(; kwargs...); message !== nothing && occursin(Regex(match), message))
 
-labels(result) = [(c["tmux"], c["threads"], c["suite"]) for c in result["cells"]]
+labels(result) = unique((c["tmux"], c["threads"], c["suite"]) for c in result["cells"])
 versions(jobs) = unique(c["tmux"] for c in jobs)
 
 # The full scope, which a release rests on, pinned cell by cell.
@@ -75,6 +75,8 @@ const BREAKS = [
         "matrix: {tmux: ['3.2a']}",
         "the lanes must come from the plan",
     ),
+    ("          TIER: \${{ matrix.tier }}\n", "", "the tier must come from the plan"),
+    ("          --tier \"\$TIER\"\n", "", "the tier must come from the plan"),
     (
         "if: needs.matrix.outputs.run_rejected == 'true'",
         "if: always()",
@@ -242,9 +244,11 @@ jobs:
             @test result["scope"] == "full"
             @test labels(result) == FULL_SCOPE
             @test [c["job_label"] for c in result["cells"]] == [
-                "Linux-x86_64-julia1.13.1-tmux$tmux-t$threads-$suite" for
-                (tmux, threads, suite) in FULL_SCOPE
+                "Linux-x86_64-julia1.13.1-tmux$tmux-t$threads-$suite$suffix" for
+                (tmux, threads, suite) in FULL_SCOPE for
+                suffix in (suite == "runtime" ? ("-unit-quality", "-outer") : ("",))
             ]
+            @test length(unique(c["job_label"] for c in result["cells"])) == 24
             @test Set((c["os"], c["runner"], c["arch"]) for c in result["cells"]) ==
                   Set([("Linux", "ubuntu-24.04", "x86_64")])
             @test [c["tmux"] for c in result["rejected"]] == collect(P.REJECTED_TMUX)
@@ -254,8 +258,9 @@ jobs:
     @testset "the documentation artifact comes from one edge job" begin
         for result in (P.plan("push"), P.plan("workflow_dispatch"; scope="full"))
             chosen = [c for c in result["cells"] if c["docs_artifact"] == "true"]
-            @test [(c["tmux"], c["threads"]) for c in chosen] == fill((P.NEWEST_TMUX, 1), 2)
+            @test [(c["tmux"], c["threads"]) for c in chosen] == fill((P.NEWEST_TMUX, 1), 3)
             @test Set(c["suite"] for c in chosen) == Set(["runtime", "delivery"])
+            @test only(c for c in chosen if c["suite"] == "delivery")["tier"] == "all"
         end
         custom = P.plan("workflow_dispatch"; scope="custom", tmux_ref=P.NEWEST_TMUX)
         @test Set(c["docs_artifact"] for c in custom["cells"]) == Set(["true"])
@@ -304,7 +309,7 @@ jobs:
         eight = join(("v$n" for n = 0:7), ",")
         @test length(
             P.plan("workflow_dispatch"; scope="custom", tmux_ref=eight)["cells"],
-        ) == 8
+        ) == 16
         @test refused("fit one run"; scope="custom", tmux_ref=eight * ",v8")
     end
     @testset "julia, threads and suites follow the inputs" begin
@@ -327,7 +332,11 @@ jobs:
             threads="4",
             suite="both",
         )
-        @test [(c["threads"], c["suite"]) for c in both["cells"]] == [(4, "runtime"), (4, "delivery")]
+        @test [(c["threads"], c["suite"], c["tier"]) for c in both["cells"]] == [
+            (4, "runtime", "unit-quality"),
+            (4, "runtime", "outer"),
+            (4, "delivery", "all"),
+        ]
         @test [
             c["suite"] for c in P.plan(
                 "workflow_dispatch";
@@ -352,10 +361,11 @@ jobs:
             tmate="on-failure",
         )
         @test [c["tmate"] for c in result["cells"]] == ["on-failure"]
+        @test only(result["cells"])["tier"] == "all"
         @test [
             c["tmate"] for
             c in P.plan("workflow_dispatch"; scope="custom", tmux_ref="master")["cells"]
-        ] == ["off"]
+        ] == ["off", "off"]
         @test refused("exactly one job"; tmate="before-tests")
         @test refused("exactly one job"; scope="full", tmate="before-tests")
         @test refused(
@@ -386,15 +396,14 @@ jobs:
         )
     end
     @testset "the job count adds up and the matrix is never empty" begin
-        @test P.plan("push")["expected_jobs"] == 2 + 6
-        @test P.plan("workflow_dispatch"; scope="full")["expected_jobs"] ==
-              2 + length(FULL_SCOPE) + length(P.REJECTED_TMUX)
+        @test P.plan("push")["expected_jobs"] == 11
+        @test P.plan("workflow_dispatch"; scope="full")["expected_jobs"] == 30
         @test_throws P.PlanError P.require_jobs([])
     end
     @testset "the plan writes one line for each workflow output" begin
         outputs = P.outputs(P.plan("push"))
         @test !occursin('\n', outputs["cells"]) && !occursin('\n', outputs["rejected"])
-        @test outputs["run_rejected"] == "false" && outputs["expected_jobs"] == "8"
+        @test outputs["run_rejected"] == "false" && outputs["expected_jobs"] == "11"
         @test P.outputs(P.plan("workflow_dispatch"; scope="full"))["run_rejected"] == "true"
     end
 end
@@ -520,7 +529,7 @@ gate_accepting_unplanned_runs(needs) =
         [
             (c["tmux"], c["threads"]) for
             c in P.plan("push")["cells"] if c["docs_artifact"] == "true"
-        ] == fill((P.NEWEST_TMUX, 1), 2)
+        ] == fill((P.NEWEST_TMUX, 1), 3)
     custom_kinds() =
         Dict(
             c["tmux"] => c["kind"] for
@@ -545,7 +554,7 @@ gate_accepting_unplanned_runs(needs) =
     suites_input() =
         length(
             P.plan("workflow_dispatch"; scope="custom", tmux_ref="master", suite="both")["cells"],
-        ) == 2
+        ) == 3
     suites_known() =
         refused("suite must be"; scope="custom", tmux_ref="master", suite="all")
     debug_one() =
@@ -567,7 +576,7 @@ gate_accepting_unplanned_runs(needs) =
     )
     debug_known() =
         refused("tmate must be one of"; scope="custom", tmux_ref="master", tmate="always")
-    job_count() = P.plan("push")["expected_jobs"] == 8
+    job_count() = P.plan("push")["expected_jobs"] == 11
     never_empty() =
         try
             P.require_jobs([])
