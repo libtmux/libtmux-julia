@@ -72,7 +72,7 @@ const DOC_SNIPPETS = Dict(
     ("README.md", 1) => (
         kind=:executable,
         gate=:context,
-        fingerprint="2865ecf6edfbc339066e8bcf889af438c96d7eb36d61a0d971a5a1a095708d45",
+        fingerprint="ec9c3387f02563b029bf5b91d70b73d4a0eeef712218347867895746aaf4cfec",
         source="",
         note="Private server, captured screen and retained snapshot",
     ),
@@ -128,14 +128,14 @@ const DOC_SNIPPETS = Dict(
     ("README.md", 9) => (
         kind=:executable,
         gate=:context,
-        fingerprint="8b1a84b7b5e9459841bc882181a1e9daefdb15b7bbdd79f6d5f5c85d00c24625",
+        fingerprint="e48ae00903a38bde2663d8e6117c0a0ade1aacefa63eaa29f4f8372882bc3407",
         source="",
         note="Several commands sent as one group",
     ),
     ("README.md", 10) => (
         kind=:executable,
         gate=:context,
-        fingerprint="b32683a0ac70350ed0aa9e4be86fac8decc228901ff487246ecf62f94f6c91b5",
+        fingerprint="d849a32d6900a1647168b688cf6e8879ee4840c22c59428bb2b1cdd575cfd5f0",
         source="",
         note="Independent commands where one fails",
     ),
@@ -156,7 +156,7 @@ const DOC_SNIPPETS = Dict(
     ("README.md", 13) => (
         kind=:executable,
         gate=:doctest,
-        fingerprint="f2df9f11edd575824c8619e63e96bfdf40d8f0d1f160d367ddd3fd9e8cbcdf99",
+        fingerprint="9c1dd133435a47a3e4e77817ee34650eb15cd36c410b064ed9d35acb84dda619",
         source="",
         note="JSON 1.9 criteria codec round trip",
     ),
