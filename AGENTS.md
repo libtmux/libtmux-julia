@@ -5,9 +5,10 @@ requested work.
 
 ## Which policy applies
 
-- Setup, checks, and pull requests: [CONTRIBUTING.md](CONTRIBUTING.md).
+- Setup, checks, and pull requests:
+  [CONTRIBUTING.md](.github/CONTRIBUTING.md).
 - Documentation, user-facing text, comments, and commit messages:
-  [WRITING.md](WRITING.md).
+  [WRITING.md](.github/WRITING.md).
 - Support scripts: what may stay, their language, layout and checks:
   [SCRIPTS.md](.github/SCRIPTS.md).
 
@@ -37,5 +38,6 @@ Give each tmux test or probe a unique, owned socket in a directory scoped to
 this port. Clear inherited `TMUX` and `TMUX_PANE` values. Never use the default
 tmux server for tests, and only stop servers or remove files owned by the run.
 Test runners enter a private tmux sandbox, described in
-[CONTRIBUTING.md](CONTRIBUTING.md#test-sandbox). A new runner includes it, and
-a replaced child environment that can start tmux carries its `TMUX_TMPDIR`.
+[CONTRIBUTING.md](.github/CONTRIBUTING.md#test-sandbox). A new runner includes
+it, and a replaced child environment that can start tmux carries its
+`TMUX_TMPDIR`.

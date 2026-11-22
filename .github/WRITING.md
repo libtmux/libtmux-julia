@@ -1,7 +1,9 @@
 # Writing
 
 This guide governs documentation, user-facing text, comments, and commit
-messages. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow.
+messages alongside the shared organization rules in
+[`libtmux/.github/WRITING.md`](https://github.com/libtmux/.github/blob/main/WRITING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow.
 
 ## Voice
 

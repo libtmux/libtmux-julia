@@ -606,7 +606,7 @@ The [MCP README][repo-packages-libtmuxmcp] covers other clients and every tool.
 | --- | --- |
 | [Reference](https://libtmux.org/en/julia/latest/reference/) | Every public binding, one page each |
 | [Installation guide](https://github.com/libtmux/libtmux-julia/blob/master/docs/src/installation.md) | Add the MCP or workspace companion with the matching core |
-| [Contributing and checks](https://github.com/libtmux/libtmux-julia/blob/master/CONTRIBUTING.md) | The checks a change must pass |
+| [Contributing and checks](https://github.com/libtmux/libtmux-julia/blob/master/.github/CONTRIBUTING.md) | The checks a change must pass |
 | [Troubleshooting](https://github.com/libtmux/libtmux-julia/blob/master/docs/src/troubleshooting.md) | Symptoms and next steps |
 | [Benchmarks](https://github.com/libtmux/libtmux-julia/blob/master/benchmark/README.md) | What each execution mode costs |
 | [Changelog](https://github.com/libtmux/libtmux-julia/blob/master/CHANGELOG.md) | What each release changed |

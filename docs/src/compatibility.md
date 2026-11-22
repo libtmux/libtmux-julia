@@ -136,7 +136,7 @@ reply bound. Larger replies are unsupported at those stages. A discovery scope
 narrows a listing; it cannot bypass startup or wait setup.
 
 ```@raw html
-<p>See <a href="../source/CONTRIBUTING.md.html">the contributor guide</a> and
+<p>See <a href="../source/.github/CONTRIBUTING.md.html">the contributor guide</a> and
 <a href="../source/docs/capabilities.toml.html">the support facts</a>
 for scope and evidence.</p>
 ```
